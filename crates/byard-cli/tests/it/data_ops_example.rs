@@ -105,6 +105,7 @@ fn derived_readouts_are_correct_and_reactive() {
     let mut t = 100;
     for _ in 0..3 {
         interp.dispatch_events(&[InputEvent {
+            surface: byard_core::SurfaceId::MAIN,
             kind: EventKind::PointerDown,
             pos: np,
             delta: (0.0, 0.0),
@@ -115,6 +116,7 @@ fn derived_readouts_are_correct_and_reactive() {
         interp.tick();
         let _ = texts(&mut interp, &tree);
         interp.dispatch_events(&[InputEvent {
+            surface: byard_core::SurfaceId::MAIN,
             kind: EventKind::PointerUp,
             pos: np,
             delta: (0.0, 0.0),

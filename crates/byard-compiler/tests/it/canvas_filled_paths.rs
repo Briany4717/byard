@@ -107,6 +107,7 @@ fn a_path_whose_numbers_changed_is_tessellated_again() {
 
     // Now move a coordinate, and the mesh is rebuilt.
     interp.dispatch_events(&[byard_core::InputEvent {
+        surface: byard_core::SurfaceId::MAIN,
         kind: byard_core::platform::EventKind::Tap,
         pos: (30.0, 130.0),
         delta: (0.0, 0.0),

@@ -40,10 +40,11 @@ use std::thread::JoinHandle;
 use crate::ByardError;
 use crate::InputEvent;
 use crate::atlas::{LayoutAtlas, LeafSize};
-use crate::encoder::EncoderSubsystem;
+use crate::encoder::{EncoderSubsystem, TargetKey};
 use crate::evaluator::{EvaluatorTick, Signal, ViewArena};
 use crate::frame::{BoxInstance, TargetId, TargetKind, TextLine, Viewport};
 use crate::relay::Relay;
+use crate::surface::SurfaceId;
 
 /// The limits Byard asks a GPU device for.
 ///
@@ -91,33 +92,234 @@ pub struct Census {
     pub vectors: usize,
 }
 
-/// The Byard rendering engine for a single window surface.
+/// What every surface of a program shares on the GPU (RFC-0068 §5): the device
+/// and queue, every pipeline and shader module, the samplers, the glyph atlas,
+/// the image cache and the MSDF atlas.
 ///
-/// Owns the GPU device, queue, compiled pipelines, the `wgpu` surface, and the
-/// [`Relay`] that connects the logic and render threads. Construction is
-/// two-phase:
+/// A program has one. What belongs to a single surface (its `wgpu::Surface`, its
+/// persistent target, what it drew last frame) lives in a [`SurfaceTarget`], and
+/// any number of those draw through the one `Gpu`, so a second window or a
+/// second bar costs its swapchain and its incremental-redraw target and not
+/// another copy of the pipelines or the glyph atlas.
+///
+/// A `Gpu` always has at least one target, made with it. The first is the one
+/// [`Gpu::new`] was given a size for; [`add_target`](Self::add_target) makes
+/// others and [`drop_target`](Self::drop_target) removes them.
+///
+/// Frames are encoded one surface at a time and each is submitted before the
+/// next is encoded: the scratch the encode path reuses (the instance arena, the
+/// clip table, the viewport uniform) is shared, and the submission is what
+/// orders its writes. A *round* ([`begin_round`](Self::begin_round)) is the
+/// frames of every surface that draws between two points; the housekeeping that
+/// frees what a frame did not use runs once, at the end of it.
+pub struct Gpu {
+    encoder: EncoderSubsystem,
+}
+
+impl Gpu {
+    /// Builds the shared GPU state on an already-created device and queue and
+    /// the first surface's target, `phys_w` by `phys_h` physical pixels at
+    /// `scale`. `target_format` is the format every surface of this program
+    /// draws in (what a surface negotiates: the `Unorm` twin of an sRGB one).
+    /// `blur_capable` picks the 0.5× tier of the `auto` backdrop blur
+    /// (RFC-0023).
+    ///
+    /// # Errors
+    ///
+    /// [`ByardError::PipelineCompilation`] if a shader or pipeline fails
+    /// validation.
+    pub async fn new(
+        device: Arc<wgpu::Device>,
+        queue: Arc<wgpu::Queue>,
+        target_format: wgpu::TextureFormat,
+        (phys_w, phys_h, scale): (u32, u32, f64),
+        blur_capable: bool,
+    ) -> Result<Self, ByardError> {
+        #[allow(clippy::cast_possible_truncation)]
+        let scale_f32 = scale as f32;
+        let mut encoder =
+            EncoderSubsystem::init(device, queue, target_format, scale_f32, phys_w, phys_h).await?;
+        encoder.set_blur_auto_capable(blur_capable);
+        // Viewport uniform uses LOGICAL pixels so all instance coordinates can
+        // be authored in density-independent units. cast precision loss is
+        // acceptable: logical pixel counts fit well within f32's 24-bit mantissa.
+        #[allow(clippy::cast_precision_loss)]
+        encoder.update_viewport(
+            logical_viewport(phys_w, phys_h, scale),
+            phys_w,
+            phys_h,
+            scale_f32,
+        );
+        Ok(Self { encoder })
+    }
+
+    /// The target made with the `Gpu`.
+    #[must_use]
+    pub fn first_target(&self) -> TargetKey {
+        // The first target is the one the encoder was initialised with, and it
+        // is the bound one until another is drawn.
+        self.encoder.first_target()
+    }
+
+    /// Adds a surface's state, `phys_w` by `phys_h` physical pixels at `scale`.
+    pub fn add_target(&mut self, phys_w: u32, phys_h: u32, scale: f64) -> TargetKey {
+        #[allow(clippy::cast_possible_truncation)]
+        self.encoder.add_target(phys_w, phys_h, scale as f32)
+    }
+
+    /// Resizes a target (or changes its scale). Sizes of zero are ignored, as
+    /// [`Engine::on_resize`] ignores them: a minimised window reports one.
+    /// Returns `false` for a target that is not there.
+    pub fn resize_target(&mut self, key: TargetKey, phys_w: u32, phys_h: u32, scale: f64) -> bool {
+        if phys_w == 0 || phys_h == 0 {
+            return self.encoder.has_target(key);
+        }
+        if !self.encoder.bind_target(key) {
+            return false;
+        }
+        #[allow(clippy::cast_possible_truncation)]
+        self.encoder.update_viewport(
+            logical_viewport(phys_w, phys_h, scale),
+            phys_w,
+            phys_h,
+            scale as f32,
+        );
+        true
+    }
+
+    /// Drops a target and the GPU memory it held. The others keep drawing.
+    /// `false` if it is unknown or the last one.
+    pub fn drop_target(&mut self, key: TargetKey) -> bool {
+        self.encoder.remove_target(key)
+    }
+
+    /// How many targets are alive.
+    #[must_use]
+    pub fn target_count(&self) -> usize {
+        self.encoder.target_count()
+    }
+
+    /// Opens a round (see the type's docs).
+    pub fn begin_round(&mut self) {
+        self.encoder.begin_round();
+    }
+
+    /// Closes the round: the glyph atlas is trimmed once, and the image cache
+    /// evicts once, after every surface that drew in it.
+    pub fn end_round(&mut self) {
+        self.encoder.end_round();
+    }
+
+    /// Encodes `frame` for `key` into `texture` (the surface's current texture,
+    /// or any texture of the target's size and format) and submits it.
+    ///
+    /// # Errors
+    ///
+    /// [`ByardError::RenderSurface`] for a target that is not there, and
+    /// whatever [`EncoderSubsystem::encode_frame_from_relay`] returns.
+    pub fn render_target(
+        &mut self,
+        key: TargetKey,
+        texture: &wgpu::Texture,
+        frame: &crate::frame::RenderFrame,
+    ) -> Result<(), ByardError> {
+        if !self.encoder.bind_target(key) {
+            return Err(ByardError::RenderSurface(
+                "this surface was already dropped".to_string(),
+            ));
+        }
+        let cmd = self.encoder.encode_frame_from_relay(texture, frame)?;
+        self.encoder.submit(cmd);
+        Ok(())
+    }
+
+    /// The encoder, for what a test or a tool asks of it.
+    #[must_use]
+    pub const fn encoder(&self) -> &EncoderSubsystem {
+        &self.encoder
+    }
+
+    /// The encoder, mutably.
+    pub fn encoder_mut(&mut self) -> &mut EncoderSubsystem {
+        &mut self.encoder
+    }
+}
+
+/// One surface of the program: the platform's `wgpu::Surface`, its
+/// configuration, its scale factor and the [`TargetKey`] of its persistent
+/// target inside the [`Gpu`] (RFC-0068 §5).
+///
+/// Today's single window is one of these, made by [`Engine::init`].
+pub struct SurfaceTarget {
+    id: SurfaceId,
+    surface: wgpu::Surface<'static>,
+    /// Cached surface configuration (physical pixels), updated on every resize
+    /// so that surface-loss recovery can reconfigure without external input.
+    config: wgpu::SurfaceConfiguration,
+    /// Cached scale factor so surface-loss recovery can recompute the logical
+    /// viewport without additional platform input.
+    scale_factor: f64,
+    /// The persistent target and incremental-redraw state in the [`Gpu`].
+    key: TargetKey,
+}
+
+impl SurfaceTarget {
+    /// The surface this is the target of.
+    #[must_use]
+    pub const fn id(&self) -> SurfaceId {
+        self.id
+    }
+
+    /// The key of its state in the [`Gpu`].
+    #[must_use]
+    pub const fn key(&self) -> TargetKey {
+        self.key
+    }
+
+    /// Its size in physical pixels.
+    #[must_use]
+    pub const fn size(&self) -> (u32, u32) {
+        (self.config.width, self.config.height)
+    }
+
+    /// Its scale factor.
+    #[must_use]
+    pub const fn scale_factor(&self) -> f64 {
+        self.scale_factor
+    }
+}
+
+/// The Byard rendering engine.
+///
+/// Owns the [`Gpu`] every surface shares, the surfaces themselves
+/// ([`SurfaceTarget`]s, one for a single-window program, which is every
+/// program today), and the [`Relay`] that connects the logic and render
+/// threads. Construction is two-phase:
 ///
 /// 1. [`Engine::init`], selects the GPU adapter, compiles pipelines, and
-///    creates the `Relay`. Synchronous startup, no threads yet.
+///    creates the `Relay`. Synchronous startup, no threads yet. The surface it
+///    is given becomes [`SurfaceId::MAIN`].
 /// 2. [`Engine::start_logic`], spawns the logic thread (Evaluator + Atlas),
 ///    publishes the first frame synchronously so `render_latest` has content
 ///    on the very first redraw.
 ///
 /// Thereafter the platform calls [`on_resize`](Engine::on_resize) on resize
 /// events and [`render_latest`](Engine::render_latest) on every
-/// `RedrawRequested` event.
+/// `RedrawRequested` event. More surfaces are
+/// [`add_surface`](Engine::add_surface)d, resized and dropped on the same `Gpu`.
 ///
 /// Dropping `Engine` signals the logic thread to shut down and joins it
 /// before returning, no orphan threads after the window closes.
 pub struct Engine {
-    encoder: EncoderSubsystem,
-    surface: wgpu::Surface<'static>,
-    /// Cached surface configuration (physical pixels), updated on every resize
-    /// so that surface-loss recovery can reconfigure without external input.
-    surface_config: wgpu::SurfaceConfiguration,
-    /// Cached scale factor so surface-loss recovery can recompute the logical
-    /// viewport without additional platform input.
-    scale_factor: f64,
+    gpu: Gpu,
+    /// The adapter, kept to configure the surfaces added later.
+    adapter: wgpu::Adapter,
+    /// [`SurfaceId::MAIN`], inline: a single-surface program has this and
+    /// nothing else (RFC-0068 §10).
+    main: SurfaceTarget,
+    /// Every other surface. Empty, and unallocated, for a single-surface
+    /// program.
+    others: Vec<SurfaceTarget>,
     /// Lock-free frame swap connecting the logic and render threads.
     relay: Arc<Relay>,
     /// Sender half of the label-text channel. `set_label_text` sends here;
@@ -282,6 +484,69 @@ fn negotiate_formats(
     (surface, surface.remove_srgb_suffix())
 }
 
+/// Negotiates a surface's format and composite alpha, and configures it at
+/// `width` by `height` physical pixels. Returns the configuration; its
+/// `view_formats` holds the format the engine draws in when that is not the
+/// surface's own (RFC-0060), and is empty when they are the same.
+fn configure_surface(
+    surface: &wgpu::Surface<'static>,
+    adapter: &wgpu::Adapter,
+    device: &wgpu::Device,
+    width: u32,
+    height: u32,
+) -> wgpu::SurfaceConfiguration {
+    // --- Surface format negotiation ---
+    let caps = surface.get_capabilities(adapter);
+    let (surface_format, target_format) = negotiate_formats(&caps.formats);
+    let view_formats = if target_format == surface_format {
+        vec![]
+    } else {
+        vec![target_format]
+    };
+
+    // --- Composite alpha negotiation ---
+    // The UI clears its target to `Color::TRANSPARENT` (an incremental
+    // frame needs a genuinely empty background to blend onto), so the
+    // presented image carries a zero alpha in its cleared regions. Under a
+    // *non-opaque* composite mode the window manager then blends the whole
+    // window against the desktop and the app looks fully transparent, a
+    // frozen, see-through window on X11, and on Wayland a toplevel the
+    // compositor may not visibly map at all. macOS/Metal and Windows/DX12
+    // happen to report `Opaque` first so `alpha_modes[0]` was invisibly
+    // "correct" there; most Linux drivers report a transparent mode first,
+    // which is the real cause of the "window never appears" report. Pick
+    // `Opaque` explicitly whenever the surface offers it, so the alpha
+    // channel is ignored at composite time and the cleared background reads
+    // as solid on every platform.
+    let alpha_mode = if caps.alpha_modes.contains(&wgpu::CompositeAlphaMode::Opaque) {
+        wgpu::CompositeAlphaMode::Opaque
+    } else {
+        caps.alpha_modes[0]
+    };
+
+    // --- Surface configuration (physical pixels, wgpu requirement) ---
+    //
+    // COPY_DST is required in addition to RENDER_ATTACHMENT: per RFC §3.3's
+    // scissor-clipping implementation, `EncoderSubsystem::encode_frame`
+    // never draws directly onto the swapchain image, it draws onto a
+    // persistent off-screen target and `copy_texture_to_texture`s the
+    // result onto this surface's current texture every frame (the
+    // swapchain image's own previous contents are never assumed valid
+    // under multi-buffering). See `encoder::EncoderSubsystem::persistent_color`.
+    let config = wgpu::SurfaceConfiguration {
+        usage: wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::COPY_DST,
+        format: surface_format,
+        width,
+        height,
+        present_mode: wgpu::PresentMode::AutoVsync,
+        alpha_mode,
+        view_formats,
+        desired_maximum_frame_latency: 2,
+    };
+    surface.configure(device, &config);
+    config
+}
+
 impl Engine {
     /// Initialises the engine, selects a GPU adapter, and compiles all pipelines.
     ///
@@ -358,91 +623,36 @@ impl Engine {
             .await
             .map_err(|_| ByardError::UnsupportedBackend)?;
 
-        // --- Surface format negotiation ---
-        let caps = surface.get_capabilities(&adapter);
-        let (surface_format, target_format) = negotiate_formats(&caps.formats);
-        let view_formats = if target_format == surface_format {
-            vec![]
-        } else {
-            vec![target_format]
-        };
-
-        // --- Composite alpha negotiation ---
-        // The UI clears its target to `Color::TRANSPARENT` (an incremental
-        // frame needs a genuinely empty background to blend onto), so the
-        // presented image carries a zero alpha in its cleared regions. Under a
-        // *non-opaque* composite mode the window manager then blends the whole
-        // window against the desktop and the app looks fully transparent, a
-        // frozen, see-through window on X11, and on Wayland a toplevel the
-        // compositor may not visibly map at all. macOS/Metal and Windows/DX12
-        // happen to report `Opaque` first so `alpha_modes[0]` was invisibly
-        // "correct" there; most Linux drivers report a transparent mode first,
-        // which is the real cause of the "window never appears" report. Pick
-        // `Opaque` explicitly whenever the surface offers it, so the alpha
-        // channel is ignored at composite time and the cleared background reads
-        // as solid on every platform.
-        let alpha_mode = if caps.alpha_modes.contains(&wgpu::CompositeAlphaMode::Opaque) {
-            wgpu::CompositeAlphaMode::Opaque
-        } else {
-            caps.alpha_modes[0]
-        };
-
-        // --- Surface configuration (physical pixels, wgpu requirement) ---
-        //
-        // COPY_DST is required in addition to RENDER_ATTACHMENT: per RFC §3.3's
-        // scissor-clipping implementation, `EncoderSubsystem::encode_frame`
-        // never draws directly onto the swapchain image, it draws onto a
-        // persistent off-screen target and `copy_texture_to_texture`s the
-        // result onto this surface's current texture every frame (the
-        // swapchain image's own previous contents are never assumed valid
-        // under multi-buffering). See `encoder::EncoderSubsystem::persistent_color`.
-        let surface_config = wgpu::SurfaceConfiguration {
-            usage: wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::COPY_DST,
-            format: surface_format,
-            width,
-            height,
-            present_mode: wgpu::PresentMode::AutoVsync,
-            alpha_mode,
-            view_formats,
-            desired_maximum_frame_latency: 2,
-        };
-        surface.configure(&device, &surface_config);
-
-        // --- Encoder subsystem ---
+        // --- Surface format negotiation and configuration ---
         let device = Arc::new(device);
         let queue = Arc::new(queue);
-        #[allow(clippy::cast_precision_loss, clippy::cast_possible_truncation)]
-        let scale_f32 = scale_factor as f32;
-        let mut encoder = EncoderSubsystem::init(
-            Arc::clone(&device),
-            Arc::clone(&queue),
-            target_format,
-            scale_f32,
-            width,
-            height,
-        )
-        .await?;
+        let config = configure_surface(&surface, &adapter, &device, width, height);
+        let target_format = config
+            .view_formats
+            .first()
+            .copied()
+            .unwrap_or(config.format);
+
+        // --- The shared GPU state, and the first surface's target ---
         // RFC-0023 resolved question "blur quality tiers": the `auto` tier
         // runs the separable Gaussian at 0.5× base resolution on every real
         // GPU, `IntegratedGpu` includes Apple Silicon and modern mobile
         // parts, which handle it easily, and drops to the cheap 0.25× base
         // only on software/virtual adapters, where every fragment costs CPU.
         // A per-element `blur_quality: high | low` always overrides this.
-        encoder.set_blur_auto_capable(!matches!(
+        let blur_capable = !matches!(
             info.device_type,
             wgpu::DeviceType::Cpu | wgpu::DeviceType::VirtualGpu
-        ));
-
-        // Viewport uniform uses LOGICAL pixels so all instance coordinates can
-        // be authored in density-independent units. cast precision loss is
-        // acceptable: logical pixel counts fit well within f32's 24-bit mantissa.
-        #[allow(clippy::cast_precision_loss)]
-        encoder.update_viewport(
-            logical_viewport(width, height, scale_factor),
-            width,
-            height,
-            scale_f32,
         );
+        let gpu = Gpu::new(
+            device,
+            queue,
+            target_format,
+            (width, height, scale_factor),
+            blur_capable,
+        )
+        .await?;
+        let key = gpu.first_target();
 
         let relay = Arc::new(Relay::new()?);
         // Wire async image decode: the encoder spawns decodes on the relay's
@@ -450,7 +660,8 @@ impl Engine {
         // half of the split result channel (RFC-0028 §7), which
         // `render_latest` drains. Controller replies travel the other half and
         // are never seen here.
-        encoder.set_io_context(
+        let mut gpu = gpu;
+        gpu.encoder.set_io_context(
             relay.io_handle(),
             crate::encoder::texture_sampler::DecodeResultSender::new(
                 relay.decode_result_sender(),
@@ -463,15 +674,108 @@ impl Engine {
         Ok(Self {
             image_reload_tx,
             image_reload_rx,
-            encoder,
-            surface,
-            surface_config,
-            scale_factor,
+            gpu,
+            adapter,
+            main: SurfaceTarget {
+                id: SurfaceId::MAIN,
+                surface,
+                config,
+                scale_factor,
+                key,
+            },
+            others: Vec::new(),
             relay,
             label_tx,
             label_rx: Some(label_rx),
             logic_handle: None,
         })
+    }
+
+    /// The GPU state every surface shares.
+    #[must_use]
+    pub const fn gpu(&self) -> &Gpu {
+        &self.gpu
+    }
+
+    /// Adds a surface to the program: a second window, a panel (RFC-0068).
+    /// `width` and `height` are physical pixels. It draws through the same
+    /// [`Gpu`] as every other, so it shares the pipelines and the glyph atlas.
+    ///
+    /// # Errors
+    ///
+    /// - [`ByardError::RenderSurface`] if `id` is [`SurfaceId::MAIN`] or
+    ///   already has a surface, or if `surface` negotiates a different format
+    ///   from the one the pipelines were built for (every surface of a program
+    ///   shares them).
+    pub fn add_surface(
+        &mut self,
+        id: SurfaceId,
+        surface: wgpu::Surface<'static>,
+        width: u32,
+        height: u32,
+        scale_factor: f64,
+    ) -> Result<(), ByardError> {
+        if id.is_main() || self.target(id).is_some() {
+            return Err(ByardError::RenderSurface(format!(
+                "surface {} already exists",
+                id.index()
+            )));
+        }
+        let config = configure_surface(
+            &surface,
+            &self.adapter,
+            self.gpu.encoder.device(),
+            width,
+            height,
+        );
+        let format = config
+            .view_formats
+            .first()
+            .copied()
+            .unwrap_or(config.format);
+        if format != self.gpu.encoder.target_format() {
+            // Undo nothing: the surface was only configured, and drops here.
+            return Err(ByardError::RenderSurface(format!(
+                "surface {} draws in {format:?} but the program's pipelines are built for {:?}",
+                id.index(),
+                self.gpu.encoder.target_format()
+            )));
+        }
+        let key = self.gpu.add_target(width, height, scale_factor);
+        self.others.push(SurfaceTarget {
+            id,
+            surface,
+            config,
+            scale_factor,
+            key,
+        });
+        Ok(())
+    }
+
+    /// Drops a surface added with [`add_surface`](Self::add_surface), and its
+    /// frame slot in the relay. The others keep drawing. `false` if it is not
+    /// there, and for [`SurfaceId::MAIN`], which lives as long as the engine.
+    pub fn drop_surface(&mut self, id: SurfaceId) -> bool {
+        let Some(index) = self.others.iter().position(|t| t.id == id) else {
+            return false;
+        };
+        let target = self.others.swap_remove(index);
+        self.gpu.drop_target(target.key);
+        self.relay.remove_surface(id);
+        true
+    }
+
+    /// The surfaces the engine draws, [`SurfaceId::MAIN`] first.
+    pub fn surface_ids(&self) -> impl Iterator<Item = SurfaceId> + '_ {
+        std::iter::once(self.main.id).chain(self.others.iter().map(|t| t.id))
+    }
+
+    fn target(&self, id: SurfaceId) -> Option<&SurfaceTarget> {
+        if id.is_main() {
+            Some(&self.main)
+        } else {
+            self.others.iter().find(|t| t.id == id)
+        }
     }
 
     /// Replaces the engine's reactive label text.
@@ -520,7 +824,7 @@ impl Engine {
     /// ids through (RFC-0009 §2-C), see
     /// [`EncoderSubsystem::set_vector_ack_sender`](crate::encoder::EncoderSubsystem::set_vector_ack_sender).
     pub fn set_vector_ack_sender(&mut self, tx: crossbeam_channel::Sender<u64>) {
-        self.encoder.set_vector_ack_sender(tx);
+        self.gpu.encoder.set_vector_ack_sender(tx);
     }
 
     /// Notifies the engine that the window surface has been resized.
@@ -534,21 +838,43 @@ impl Engine {
     /// Calls with `width == 0` or `height == 0` are silently ignored, zero-size
     /// surfaces are invalid in wgpu (occurs on window minimise on some platforms).
     pub fn on_resize(&mut self, width: u32, height: u32, scale_factor: f64) {
+        self.resize_surface(SurfaceId::MAIN, width, height, scale_factor);
+    }
+
+    /// [`on_resize`](Self::on_resize) for the surface `id`. `false` if there is
+    /// no such surface.
+    pub fn resize_surface(
+        &mut self,
+        id: SurfaceId,
+        width: u32,
+        height: u32,
+        scale_factor: f64,
+    ) -> bool {
+        let Self {
+            gpu,
+            adapter: _,
+            main,
+            others,
+            ..
+        } = self;
+        let target = if id.is_main() {
+            Some(main)
+        } else {
+            others.iter_mut().find(|t| t.id == id)
+        };
+        let Some(target) = target else {
+            return false;
+        };
         if width == 0 || height == 0 {
-            return;
+            return true;
         }
-        self.scale_factor = scale_factor;
-        self.surface_config.width = width;
-        self.surface_config.height = height;
-        self.surface
-            .configure(self.encoder.device(), &self.surface_config);
-        #[allow(clippy::cast_precision_loss, clippy::cast_possible_truncation)]
-        self.encoder.update_viewport(
-            logical_viewport(width, height, scale_factor),
-            width,
-            height,
-            scale_factor as f32,
-        );
+        target.scale_factor = scale_factor;
+        target.config.width = width;
+        target.config.height = height;
+        target
+            .surface
+            .configure(gpu.encoder.device(), &target.config);
+        gpu.resize_target(target.key, width, height, scale_factor)
     }
 
     /// Bundles `registry` with this engine's I/O runtime and its logic-thread
@@ -702,19 +1028,51 @@ impl Engine {
         self.relay.current()
     }
 
+    /// [`latest_frame`](Self::latest_frame) for the surface `id`: each surface
+    /// has its own accessibility tree (RFC-0068 §5).
+    #[must_use]
+    pub fn latest_frame_for(&self, id: SurfaceId) -> Option<Arc<crate::frame::RenderFrame>> {
+        self.relay.current_for(id)
+    }
+
+    /// Takes the surface changes the logic thread queued, in order. The host
+    /// calls this when the frame waker woke it, and creates, reconfigures or
+    /// destroys platform surfaces to match; for each one it then calls
+    /// [`add_surface`](Self::add_surface), [`resize_surface`](Self::resize_surface)
+    /// or [`drop_surface`](Self::drop_surface). Empty for a single-surface
+    /// program.
+    pub fn drain_surface_changes(
+        &self,
+    ) -> impl Iterator<Item = crate::surface::SurfaceChange> + '_ {
+        self.relay.drain_surface_changes()
+    }
+
     /// Turns what an assistive technology asked into the input events a
     /// pointer or a keyboard would have sent, read against the tree of the
     /// latest frame, and queues them for the logic thread (RFC-0042 §5).
     ///
     /// A request for a node the latest tree no longer has queues nothing.
     pub fn push_access_request(&self, request: &crate::access::AccessRequest, time_ms: u64) {
-        let Some(frame) = self.relay.current() else {
+        self.push_access_request_for(SurfaceId::MAIN, request, time_ms);
+    }
+
+    /// [`push_access_request`](Self::push_access_request) for a request the
+    /// assistive technology made of the tree of surface `id`: it is read
+    /// against that surface's latest tree, and the events it becomes belong to
+    /// that surface.
+    pub fn push_access_request_for(
+        &self,
+        id: SurfaceId,
+        request: &crate::access::AccessRequest,
+        time_ms: u64,
+    ) {
+        let Some(frame) = self.relay.current_for(id) else {
             return;
         };
         let Some(tree) = frame.access() else {
             return;
         };
-        for event in request.to_events(tree, time_ms) {
+        for event in request.to_events_on(id, tree, time_ms) {
             self.relay.push_input(event);
         }
     }
@@ -746,13 +1104,73 @@ impl Engine {
     /// Returns [`ByardError::RenderSurface`] only on unrecoverable surface
     /// errors such as out-of-memory or GPU timeout.
     pub fn render_latest(&mut self) -> Result<(), ByardError> {
+        self.render_surfaces(&[SurfaceId::MAIN])
+    }
+
+    /// [`render_latest`](Self::render_latest) for the surface `id`: draws the
+    /// latest frame published for it and presents it. A round of one.
+    ///
+    /// # Errors
+    ///
+    /// [`ByardError::RenderSurface`] if there is no such surface, and as
+    /// [`render_latest`](Self::render_latest).
+    pub fn render_surface(&mut self, id: SurfaceId) -> Result<(), ByardError> {
+        self.render_surfaces(&[id])
+    }
+
+    /// Draws the surfaces `ids`, in order, as one round (RFC-0068 §5): each is
+    /// encoded and submitted before the next, and the glyph atlas is trimmed,
+    /// and the image cache evicts, once, after the last. A surface with no
+    /// frame published yet is skipped, as [`render_latest`](Self::render_latest)
+    /// skips.
+    ///
+    /// Every surface of the round is attempted even if one fails; the first
+    /// error is the one returned.
+    ///
+    /// # Errors
+    ///
+    /// [`ByardError::RenderSurface`] if an id has no surface, and as
+    /// [`render_latest`](Self::render_latest).
+    pub fn render_surfaces(&mut self, ids: &[SurfaceId]) -> Result<(), ByardError> {
+        self.gpu.begin_round();
+        let mut first_error = None;
+        for &id in ids {
+            let result = self.render_one(id);
+            if let Err(e) = result {
+                first_error.get_or_insert(e);
+            }
+        }
+        self.gpu.end_round();
+        first_error.map_or(Ok(()), Err)
+    }
+
+    fn render_one(&mut self, id: SurfaceId) -> Result<(), ByardError> {
+        let Self {
+            gpu,
+            main,
+            others,
+            relay,
+            image_reload_rx,
+            ..
+        } = self;
+        let target = if id.is_main() {
+            Some(main)
+        } else {
+            others.iter_mut().find(|t| t.id == id)
+        };
+        let Some(target) = target else {
+            return Err(ByardError::RenderSurface(format!(
+                "surface {} does not exist",
+                id.index()
+            )));
+        };
         // Nothing published yet (the logic thread hasn't produced its first
         // frame): skip *before* touching the surface. Acquiring a surface
         // texture and dropping it without `present()` is an anti-pattern, on
         // Wayland/FIFO it churns the swapchain acquire without ever committing a
         // buffer, so the window can sit unmapped ("loading", no error) until the
         // first real frame instead of drawing as soon as one lands.
-        let Some(relay_frame) = self.relay.current() else {
+        let Some(relay_frame) = relay.current_for(id) else {
             return Ok(());
         };
 
@@ -768,12 +1186,13 @@ impl Engine {
         // work it performs.
         let frame = {
             crate::profile_scope!("present.acquire");
-            match self.surface.get_current_texture() {
+            match target.surface.get_current_texture() {
                 wgpu::CurrentSurfaceTexture::Success(f)
                 | wgpu::CurrentSurfaceTexture::Suboptimal(f) => f,
                 wgpu::CurrentSurfaceTexture::Lost | wgpu::CurrentSurfaceTexture::Outdated => {
-                    self.surface
-                        .configure(self.encoder.device(), &self.surface_config);
+                    target
+                        .surface
+                        .configure(gpu.encoder.device(), &target.config);
                     return Ok(());
                 }
                 wgpu::CurrentSurfaceTexture::Timeout | wgpu::CurrentSurfaceTexture::Occluded => {
@@ -790,17 +1209,17 @@ impl Engine {
         // Image files changed on disk (dev hot reload): decode them again.
         // The previous picture keeps drawing meanwhile, and the new decode
         // wakes the loop again when it lands.
-        while let Ok(path) = self.image_reload_rx.try_recv() {
-            self.encoder.reload_image(&path);
+        while let Ok(path) = image_reload_rx.try_recv() {
+            gpu.encoder.reload_image(&path);
         }
 
         // Drain any completed async image decodes and upload them on this
         // (render) thread before encoding, so a freshly-decoded texture is
         // `Ready` for this frame. The decode itself already ran on the relay's
         // I/O pool, only the cheap GPU upload happens here.
-        while let Some(result) = self.relay.try_recv_decode_result() {
+        while let Some(result) = relay.try_recv_decode_result() {
             match result.downcast::<crate::encoder::DecodedImage>() {
-                Ok(decoded) => self.encoder.apply_decoded(*decoded),
+                Ok(decoded) => gpu.encoder.apply_decoded(*decoded),
                 // A result of some other type is not ours to handle here; drop
                 // it. Since RFC-0028 §7 split the channel by destination this
                 // is unreachable in practice, the logic thread's replies go to
@@ -809,16 +1228,13 @@ impl Engine {
             }
         }
 
-        let cmd = self
-            .encoder
-            .encode_frame_from_relay(&frame.texture, &relay_frame)?;
-        self.encoder.submit(cmd);
+        gpu.render_target(target.key, &frame.texture, &relay_frame)?;
         // *This* frame reached the GPU: its dirty bits have been acted on, so
         // the publish that replaces it need not carry them forward (RFC-0032
         // §R3 step 6). Named by version, because the logic thread has very
         // likely published a newer frame during the encode above, and this must
         // not be read as a claim about that one.
-        self.relay.mark_rendered(relay_frame.version());
+        relay.mark_rendered_for(id, relay_frame.version());
         {
             // RFC-0030 §I1: the swapchain commit. Cheap on a healthy frame and
             // the second place a compositor can charge the engine for pacing,
@@ -878,14 +1294,14 @@ impl Engine {
     /// [`crate::encoder::EncoderSubsystem::last_text_reshapes`].
     #[must_use]
     pub const fn last_text_reshapes(&self) -> usize {
-        self.encoder.last_text_reshapes()
+        self.gpu.encoder.last_text_reshapes()
     }
 
     /// Whether GPU pass timing is active for this engine (RFC-0013 **P5**),
     /// see [`crate::encoder::EncoderSubsystem::gpu_timing_available`].
     #[must_use]
     pub fn gpu_timing_available(&self) -> bool {
-        self.encoder.gpu_timing_available()
+        self.gpu.encoder.gpu_timing_available()
     }
 }
 

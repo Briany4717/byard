@@ -287,6 +287,7 @@ fn hover_state_block_recolours_after_pointer_enters() {
 
     // Move the pointer inside the box, then re-render.
     interp.dispatch_events(&[byard_core::platform::InputEvent {
+        surface: byard_core::SurfaceId::MAIN,
         kind: byard_core::platform::EventKind::PointerMove,
         pos: (10.0, 10.0),
         delta: (0.0, 0.0),

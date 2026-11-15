@@ -49,6 +49,7 @@ impl Run {
     /// Taps the point (20, 20), where the first button is.
     fn tap(&mut self, time: u64) {
         let at = |kind, time| InputEvent {
+            surface: byard_core::SurfaceId::MAIN,
             kind,
             pos: (20.0, 20.0),
             delta: (0.0, 0.0),

@@ -366,6 +366,7 @@ impl Fields {
         for kind in [EventKind::PointerDown, EventKind::PointerUp] {
             self.t += 50;
             let e = InputEvent {
+                surface: byard_core::SurfaceId::MAIN,
                 kind,
                 pos,
                 delta: (0.0, 0.0),

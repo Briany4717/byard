@@ -68,6 +68,7 @@ fn render_after(program: &ResolvedProgram, taps: usize) -> Vec<String> {
     interp.render(&tree, &mut frame, 400.0, 400.0);
     for t in 0..taps {
         let at = |kind, time| InputEvent {
+            surface: byard_core::SurfaceId::MAIN,
             kind,
             pos: (20.0, 20.0),
             delta: (0.0, 0.0),

@@ -40,6 +40,7 @@ fn wheel_over_a_scrollview_scrolls_and_clamps_the_offset() {
     };
     let wheel = |interp: &mut Interpreter, dy: f32| {
         interp.dispatch_events(&[byard_core::platform::InputEvent {
+            surface: byard_core::SurfaceId::MAIN,
             kind: byard_core::platform::EventKind::Wheel,
             pos: (100.0, 50.0), // inside the 200×100 viewport
             delta: (0.0, dy),
@@ -153,6 +154,7 @@ fn drag_on_scrollview_content_scrolls_and_clamps() {
         _ => panic!("offset must be numeric"),
     };
     let ev = |kind, x: f32, y: f32| byard_core::platform::InputEvent {
+        surface: byard_core::SurfaceId::MAIN,
         kind,
         pos: (x, y),
         delta: (0.0, 0.0),
@@ -221,6 +223,7 @@ fn page_snap_settles_to_nearest_page_on_release() {
         _ => 0.0,
     };
     let ev = |kind, x: f32, y: f32| byard_core::platform::InputEvent {
+        surface: byard_core::SurfaceId::MAIN,
         kind,
         pos: (x, y),
         delta: (0.0, 0.0),
@@ -267,6 +270,7 @@ fn on_end_reached_fires_once_past_threshold() {
 
     let loaded = interp.var_signal(&Symbol::intern("loaded")).unwrap();
     let ev = |kind, x: f32, y: f32| byard_core::platform::InputEvent {
+        surface: byard_core::SurfaceId::MAIN,
         kind,
         pos: (x, y),
         delta: (0.0, 0.0),
@@ -352,6 +356,7 @@ fn page_reflects_on_wheel_scroll_without_a_release() {
     let pg = interp.var_signal(&Symbol::intern("pg")).unwrap();
     // Scroll right ~120px (a `Scroll` delta is pixels): offX → 120, page → 1.
     interp.dispatch_events(&[byard_core::platform::InputEvent {
+        surface: byard_core::SurfaceId::MAIN,
         kind: K::Scroll,
         pos: (50.0, 50.0),
         delta: (-120.0, 0.0),
@@ -390,6 +395,7 @@ fn wheel_scroll_snaps_to_a_page_after_settling() {
 
     let off = interp.var_signal(&Symbol::intern("offX")).unwrap();
     interp.dispatch_events(&[byard_core::platform::InputEvent {
+        surface: byard_core::SurfaceId::MAIN,
         kind: K::Scroll,
         pos: (50.0, 50.0),
         delta: (-60.0, 0.0), // offX → 60 (not yet a page boundary)
@@ -437,6 +443,7 @@ fn wheel_scroll_does_not_snap_while_still_moving() {
 
     let off = interp.var_signal(&Symbol::intern("offX")).unwrap();
     let wheel = |dx: f32| byard_core::platform::InputEvent {
+        surface: byard_core::SurfaceId::MAIN,
         kind: K::Scroll,
         pos: (50.0, 50.0),
         delta: (dx, 0.0),
@@ -490,6 +497,7 @@ fn snap_page_keyword_is_not_shadowed_by_a_same_named_var() {
     // Wheel two-thirds of a page (past the snap midpoint) then hold still: the
     // stillness settle must snap forward to page 1, not stay put.
     interp.dispatch_events(&[byard_core::platform::InputEvent {
+        surface: byard_core::SurfaceId::MAIN,
         kind: K::Scroll,
         pos: (50.0, 50.0),
         delta: (-70.0, 0.0),
@@ -545,6 +553,7 @@ fn page_snap_glides_smoothly_when_a_clock_is_advancing() {
     // Wheel two-thirds of a page toward page 1, then let it settle: past the
     // quiet threshold it springs from 70 → 100.
     interp.dispatch_events(&[byard_core::platform::InputEvent {
+        surface: byard_core::SurfaceId::MAIN,
         kind: K::Scroll,
         pos: (50.0, 50.0),
         delta: (-70.0, 0.0),
@@ -593,6 +602,7 @@ fn momentum_scroll_does_not_snap_until_it_goes_quiet() {
         _ => 0.0,
     };
     let wheel = |dx: f32| byard_core::platform::InputEvent {
+        surface: byard_core::SurfaceId::MAIN,
         kind: K::Scroll,
         pos: (50.0, 50.0),
         delta: (dx, 0.0),
@@ -655,6 +665,7 @@ fn item_snap_settles_to_the_nearest_child_boundary() {
         _ => 0.0,
     };
     interp.dispatch_events(&[byard_core::platform::InputEvent {
+        surface: byard_core::SurfaceId::MAIN,
         kind: K::Scroll,
         pos: (50.0, 50.0),
         delta: (-60.0, 0.0),
@@ -699,6 +710,7 @@ fn fast_fling_projects_one_page_forward() {
         _ => 0.0,
     };
     let wheel = |dx: f32, t: u64| byard_core::platform::InputEvent {
+        surface: byard_core::SurfaceId::MAIN,
         kind: K::Scroll,
         pos: (50.0, 50.0),
         delta: (dx, 0.0),
@@ -979,6 +991,7 @@ fn item_snap_align_center_centres_the_item() {
         _ => 0.0,
     };
     interp.dispatch_events(&[byard_core::platform::InputEvent {
+        surface: byard_core::SurfaceId::MAIN,
         kind: K::Scroll,
         pos: (50.0, 50.0),
         delta: (-75.0, 0.0),
@@ -1023,6 +1036,7 @@ fn snap_spring_override_checks_and_snaps() {
     interp.render(&tree, &mut frame, 400.0, 300.0);
     let off = interp.var_signal(&Symbol::intern("offX")).unwrap();
     interp.dispatch_events(&[byard_core::platform::InputEvent {
+        surface: byard_core::SurfaceId::MAIN,
         kind: K::Scroll,
         pos: (50.0, 50.0),
         delta: (-70.0, 0.0),
@@ -1094,6 +1108,7 @@ fn pull_past_threshold_fires_refresh_and_retracts_when_cleared() {
     let refreshing = interp.var_signal(&Symbol::intern("refreshing")).unwrap();
     let refreshed = interp.var_signal(&Symbol::intern("refreshed")).unwrap();
     let ev = |kind, y: f32| byard_core::platform::InputEvent {
+        surface: byard_core::SurfaceId::MAIN,
         kind,
         pos: (100.0, y),
         delta: (0.0, 0.0),
@@ -1136,6 +1151,7 @@ fn short_pull_retracts_without_refreshing() {
     let refreshing = interp.var_signal(&Symbol::intern("refreshing")).unwrap();
     let refreshed = interp.var_signal(&Symbol::intern("refreshed")).unwrap();
     let ev = |kind, y: f32| byard_core::platform::InputEvent {
+        surface: byard_core::SurfaceId::MAIN,
         kind,
         pos: (100.0, y),
         delta: (0.0, 0.0),
@@ -1179,6 +1195,7 @@ fn drag_defers_to_interactive_children() {
 
     let off = interp.var_signal(&Symbol::intern("off")).unwrap();
     let ev = |kind, x: f32, y: f32| byard_core::platform::InputEvent {
+        surface: byard_core::SurfaceId::MAIN,
         kind,
         pos: (x, y),
         delta: (0.0, 0.0),
@@ -1245,6 +1262,7 @@ fn horizontal_scrollview_scrolls_offset_x_by_wheel() {
 
     let wheel_x = |interp: &mut Interpreter, dx: f32| {
         interp.dispatch_events(&[byard_core::platform::InputEvent {
+            surface: byard_core::SurfaceId::MAIN,
             kind: byard_core::platform::EventKind::Wheel,
             pos: (100.0, 40.0),
             delta: (dx, 0.0),
@@ -1308,6 +1326,7 @@ fn both_axis_scrollview_pans_in_two_dimensions_by_drag() {
         _ => panic!("numeric"),
     };
     let ev = |kind, x: f32, y: f32| byard_core::platform::InputEvent {
+        surface: byard_core::SurfaceId::MAIN,
         kind,
         pos: (x, y),
         delta: (0.0, 0.0),
@@ -1410,6 +1429,7 @@ fn windowed_scrollview_preserves_scroll_extent() {
     // A huge wheel must clamp to content − viewport = 9 900, proving the
     // elided rows still count toward the extent (spacers, not shrinkage).
     interp.dispatch_events(&[byard_core::platform::InputEvent {
+        surface: byard_core::SurfaceId::MAIN,
         kind: byard_core::platform::EventKind::Wheel,
         pos: (100.0, 50.0),
         delta: (0.0, -10_000.0),

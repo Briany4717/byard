@@ -59,6 +59,7 @@ fn pointer(
     t: u64,
 ) -> byard_core::platform::InputEvent {
     byard_core::platform::InputEvent {
+        surface: byard_core::SurfaceId::MAIN,
         kind,
         pos: (x, y),
         delta: (0.0, 0.0),

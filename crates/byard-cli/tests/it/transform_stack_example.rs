@@ -88,6 +88,7 @@ fn at_a_tilt_the_button_is_pressed_where_it_is_drawn() {
 
     let press = |interp: &mut Interpreter, pos: (f32, f32)| {
         let ev = |kind, t| InputEvent {
+            surface: byard_core::SurfaceId::MAIN,
             kind,
             pos,
             delta: (0.0, 0.0),

@@ -202,6 +202,7 @@ fn slider_drag_sets_float_value() {
 
     // PointerDown at ~50% of track (x=50 on a 100px track starting at x=0).
     interp.dispatch_events(&[byard_core::platform::InputEvent {
+        surface: byard_core::SurfaceId::MAIN,
         kind: byard_core::platform::EventKind::PointerDown,
         pos: (50.0, 5.0),
         delta: (0.0, 0.0),

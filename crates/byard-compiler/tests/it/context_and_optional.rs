@@ -53,6 +53,7 @@ impl App {
     fn event(&mut self, kind: EventKind, at: (f32, f32)) -> InputEvent {
         self.t += 10;
         InputEvent {
+            surface: byard_core::SurfaceId::MAIN,
             kind,
             pos: at,
             delta: (0.0, 0.0),

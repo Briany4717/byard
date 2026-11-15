@@ -179,6 +179,7 @@ impl PlatformHost for App {
                 PointerState::Released => byard_core::platform::EventKind::PointerUp,
             };
             engine.push_input(byard_core::platform::InputEvent {
+                surface: byard_core::SurfaceId::MAIN,
                 kind,
                 pos: (x, y),
                 delta: (0.0, 0.0),
@@ -192,6 +193,7 @@ impl PlatformHost for App {
     fn on_cursor_moved(&mut self, x: f32, y: f32) {
         if let Some(engine) = &self.engine {
             engine.push_input(byard_core::platform::InputEvent {
+                surface: byard_core::SurfaceId::MAIN,
                 kind: byard_core::platform::EventKind::PointerMove,
                 pos: (x, y),
                 delta: (0.0, 0.0),
@@ -210,6 +212,7 @@ impl PlatformHost for App {
                 byard_core::platform::EventKind::KeyUp
             };
             engine.push_input(byard_core::platform::InputEvent {
+                surface: byard_core::SurfaceId::MAIN,
                 kind,
                 pos: (0.0, 0.0),
                 delta: (0.0, 0.0),
@@ -223,6 +226,7 @@ impl PlatformHost for App {
     fn on_text(&mut self, text: &str) {
         if let Some(engine) = &self.engine {
             engine.push_input(byard_core::platform::InputEvent {
+                surface: byard_core::SurfaceId::MAIN,
                 kind: byard_core::platform::EventKind::TextInput,
                 pos: (0.0, 0.0),
                 delta: (0.0, 0.0),

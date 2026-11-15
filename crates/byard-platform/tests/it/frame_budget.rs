@@ -688,6 +688,7 @@ impl FieldApp {
     /// Puts the focus in the first field.
     fn focus(&mut self) {
         let at = |kind| byard_core::InputEvent {
+            surface: byard_core::SurfaceId::MAIN,
             kind,
             pos: (100.0, 40.0),
             delta: (0.0, 0.0),

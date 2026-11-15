@@ -34,6 +34,7 @@ fn run(src: &str, taps: usize) -> (Vec<String>, Vec<CompileError>) {
     interp.render(&tree, &mut frame, 400.0, 200.0);
     for t in 0..taps {
         let at = |kind, time| InputEvent {
+            surface: byard_core::SurfaceId::MAIN,
             kind,
             pos: (20.0, 20.0),
             delta: (0.0, 0.0),

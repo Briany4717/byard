@@ -114,6 +114,7 @@ impl Shot {
     #[must_use]
     pub fn drag(mut self, from: (f32, f32), to: (f32, f32), frames: u32) -> Self {
         let event = |kind, pos: (f32, f32), delta| InputEvent {
+            surface: byard_core::SurfaceId::MAIN,
             kind,
             pos,
             delta,
@@ -164,6 +165,7 @@ impl Shot {
     #[must_use]
     pub fn key_with(mut self, name: &str, mods: byard_core::KeyModifiers) -> Self {
         let at = |kind| InputEvent {
+            surface: byard_core::SurfaceId::MAIN,
             kind,
             pos: (0.0, 0.0),
             delta: (0.0, 0.0),
@@ -183,6 +185,7 @@ impl Shot {
         let events = text
             .chars()
             .map(|c| InputEvent {
+                surface: byard_core::SurfaceId::MAIN,
                 kind: EventKind::TextInput,
                 pos: (0.0, 0.0),
                 delta: (0.0, 0.0),
@@ -201,6 +204,7 @@ impl Shot {
     #[must_use]
     pub fn tap(mut self, x: f32, y: f32) -> Self {
         let at = |kind| InputEvent {
+            surface: byard_core::SurfaceId::MAIN,
             kind,
             pos: (x, y),
             delta: (0.0, 0.0),
@@ -307,6 +311,7 @@ impl App {
                     let events: Vec<InputEvent> = step
                         .iter()
                         .map(|e| InputEvent {
+                            surface: byard_core::SurfaceId::MAIN,
                             time_ms: u64::from(now),
                             ..e.clone()
                         })
@@ -353,6 +358,7 @@ impl App {
 /// Tells the app the system's scheme, as a window would at its start.
 fn announce_scheme(interp: &mut Interpreter, dark: bool) {
     interp.dispatch_events(&[InputEvent {
+        surface: byard_core::SurfaceId::MAIN,
         kind: EventKind::SystemScheme,
         pos: (0.0, 0.0),
         delta: (0.0, 0.0),

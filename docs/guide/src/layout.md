@@ -341,7 +341,9 @@ The scrim is the theme's `scrim` colour at 32%, which is black unless the theme 
 otherwise; `scrim: 0x80000000` gives the overlay another colour,
 and a fully transparent one draws none. A child that fills the whole window is
 taken for a scrim you wrote yourself, and then no other is drawn. A non-modal
-overlay has no scrim. `dismiss =>` runs when the scrim is tapped (a press outside
+overlay has no scrim. The scrim fades with the overlay's first element: when that element's
+`opacity` is animated (an `on enter { opacity: 0.0 }` and `on leave`), the scrim arrives
+and goes with it. `dismiss =>` runs when the scrim is tapped (a press outside
 the overlay's content, not on a panel, its padding or a field in it) or Escape is
 pressed. A child places
 itself with `anchor`: `center`, `top`, `bottom`, `start` or `end`.
@@ -460,7 +462,10 @@ View Main() {
 `it.w` and `it.h` are the element's width and height, and `it.x` and `it.y` its
 position in its parent, in points, as laid out (before `translate` and `scale`). A
 sliding tab indicator keeps the selected tab's `it.x` and `it.w` and moves to them with
-`translate.x: ix with …`. A change of position alone fires `on measure` too. The line is drawn to the
+`translate.x: ix with …`. A change of position alone fires `on measure` too. The first
+measurement of an element is not a change: a value it writes is drawn at once (an animation whose value reads it starts there; nothing else on that frame is affected), where an
+indicator would otherwise grow from 0 to its place on the first frame; every later one
+moves with its `with`. The line is drawn to the
 measured width and not to a number written in the file, so it stays right as the
 window resizes. Use the measurement downward: a parent measures, its children
 read the number. The other way round never settles: a parent that is as wide as its

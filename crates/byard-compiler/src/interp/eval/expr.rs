@@ -553,8 +553,11 @@ impl Interpreter {
                 cond, then, els, ..
             } => {
                 let mut cc = self.lower_expr(cond, payload_name);
-                let mut tc = self.lower_expr(then, payload_name);
-                let mut ec = self.lower_expr(els, payload_name);
+                // An arm that is the word `none` is nothing (RFC-0065), the way
+                // it is as a whole argument, so `c ? red : none` reaching a
+                // `Color?` is none and not the text "none".
+                let mut tc = self.lower_ternary_arm(then, payload_name);
+                let mut ec = self.lower_ternary_arm(els, payload_name);
                 Box::new(move |ctx| {
                     if cc(ctx).as_bool().unwrap_or(false) {
                         tc(ctx)
@@ -1097,6 +1100,19 @@ impl Interpreter {
             Value::Memo(_) | Value::Signal(_) => NoneTest::Read(other),
             value => NoneTest::Static(!matches!(value, Value::Unit)),
         })
+    }
+
+    /// One arm of a `?:`: the word `none` is nothing when the view binds no
+    /// name `none` of its own, anything else lowers as an expression.
+    fn lower_ternary_arm(&mut self, arm: &Expr, payload_name: Option<&Symbol>) -> Lowered {
+        if matches!(arm, Expr::Ident(n, _) if n.as_str() == "none")
+            && self.env.lookup(&Symbol::intern("none")).is_none()
+            && !self.lambda_params.contains(&Symbol::intern("none"))
+            && !self.consts.contains_key(&Symbol::intern("none"))
+        {
+            return Box::new(|_| Value::Unit);
+        }
+        self.lower_expr(arm, payload_name)
     }
 
     fn lower_ident(&self, name: &Symbol, payload_name: Option<&Symbol>) -> Lowered {

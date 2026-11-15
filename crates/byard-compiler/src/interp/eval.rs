@@ -254,6 +254,9 @@ pub enum RenderNode {
         /// Fixed at lowering and kept for as long as the node lives, which is
         /// what lets two calls of one view keep their own animations.
         inst: u32,
+        /// The identity the run's `as name` gave it (`a11y_described_by`,
+        /// `anchor_to`); `None` for a run that is not tagged.
+        uid: Option<u32>,
     },
     /// A flexible gap (layout-only, RFC-0005): absorbs its parent's free space
     /// along the main axis. `attrs` carries `grow`/`basis`, which is why this is
@@ -845,6 +848,26 @@ pub struct Interpreter {
     /// Whether an `on measure` ran during the last [`render`](Self::render).
     /// Its writes land after layout, so only the next frame shows them.
     measure_fired: bool,
+    /// The [`frame_seq`](Self::frame_seq) on which an `on measure` fired for
+    /// the first time for its element, `0` before any. What it wrote is drawn
+    /// on the next frame, where an animation that has not moved yet takes the
+    /// new target as its start: a first measurement is where the element is,
+    /// not a change to move to.
+    first_measure_seq: u64,
+    /// The signals those first measurements wrote: only an animation whose
+    /// target reads one of them starts from the new value.
+    first_measure_written: Vec<super::env::SignalId>,
+    /// Set by `eval_animated` for the animation it is about to move, to the
+    /// current frame when its target reads what a first measurement just
+    /// wrote, else `0`.
+    snap_seq: u64,
+    /// The [`frame_seq`](Self::frame_seq) of the last frame an element drew
+    /// its `on enter` values on, `0` before any.
+    entering_seq: u64,
+    /// Set by an overlay before it draws a child, to NaN: the effective
+    /// opacity of the first box drawn replaces it, and the modal scrim fades
+    /// with it. `None` when no overlay is looking.
+    root_opacity: Option<f32>,
     /// The program's top-level functions (RFC-0002), by canonical name, as
     /// entries of `fn_table`. Rebuilt by [`Self::load_views`].
     top_fns: std::collections::HashMap<Symbol, super::env::AstId>,
@@ -897,6 +920,11 @@ pub struct Interpreter {
     ///
     /// [`has_active_animations`]: Self::has_active_animations
     any_active: bool,
+    /// The [`frame_seq`](Self::frame_seq) a looping animation that never ends
+    /// was last sampled on. Kept apart from `any_active` because it asks for
+    /// frames for good but is a function of the clock alone: a shot that runs
+    /// to a time need not draw the frames in between.
+    endless_seq: u64,
     /// First-class style values (RFC-0016): `let name = style { … }` registers
     /// its base attributes and `on <state>` blocks here, and a `..name` spread
     /// on an element splices them in at lower time. Static and view-scoped, no
@@ -1421,7 +1449,17 @@ impl Interpreter {
     /// is true and lets the app idle (0 frames) once every animation settles.
     #[must_use]
     pub fn has_active_animations(&self) -> bool {
-        self.any_active || self.theme_transitioning()
+        self.any_active || self.endless_seq == self.frame_seq || self.theme_transitioning()
+    }
+
+    /// [`needs_another_frame`](Self::needs_another_frame) without the loops
+    /// that never end: whether something that has to be stepped through, a
+    /// spring, a measure, a scroll glide, is still going. A loop is a function
+    /// of the clock, so when only loops remain the frames up to a given time
+    /// can be skipped (`byard shot`).
+    #[must_use]
+    pub fn needs_another_frame_besides_loops(&self) -> bool {
+        self.any_active || self.theme_transitioning() || self.measure_fired
     }
 
     /// Whether the host should produce another frame without waiting for an

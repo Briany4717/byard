@@ -208,7 +208,8 @@ when the geometry follows data.
 
 ## Clip masks
 
-A `Clip` cuts what it holds to a shape. Its own box is the default. `rrect` rounds
+A `Clip` cuts what it holds to a shape, a `Canvas` path (filled or stroked) included:
+a wave 400 wide shows through a `Clip` 120 wide. Its own box is the default. `rrect` rounds
 the corners. A `path` child makes the mask any shape at all, and the path can read
 state, so the mask can move:
 

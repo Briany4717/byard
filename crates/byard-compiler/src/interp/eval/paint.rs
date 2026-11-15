@@ -686,6 +686,9 @@ impl Interpreter {
                         * self
                             .eval_float_prop(paint_attrs, "opacity")
                             .map_or(1.0, |v| v as f32);
+                    if let Some(probe) = self.root_opacity.as_mut().filter(|p| p.is_nan()) {
+                        *probe = opacity;
+                    }
                     // RFC-0011 T4: a translucent box with children is faded as
                     // one picture rather than by multiplying its alpha into
                     // every primitive it contains. The difference is overlap:

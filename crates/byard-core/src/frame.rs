@@ -1815,6 +1815,8 @@ pub struct RenderFrame {
     fills: Vec<CanvasFill>,
     /// Draw-order depths, parallel to `fills`.
     fill_depths: Vec<f32>,
+    /// The content clip each fill was drawn under, parallel to `fills`.
+    fill_clips: Vec<Option<u16>>,
 
     /// The per-frame shape-record pool every group head indexes into
     /// (RFC-0031 §S4). Cleared and refilled exactly like every other frame
@@ -2287,6 +2289,7 @@ impl RenderFrame {
         self.canvas_depths.clear();
         self.fills.clear();
         self.fill_depths.clear();
+        self.fill_clips.clear();
         self.clips.clear();
         self.clip_stack.clear();
         self.solid_clips.clear();
@@ -2425,6 +2428,15 @@ impl RenderFrame {
         self.instances_dirty.push(true);
         self.solid_depths.push(d);
         self.solid_clips.push(c);
+    }
+
+    /// Scales the alpha of the solid box at `index` by `factor`, for what is
+    /// pushed before the thing whose fade it follows is known (a modal's
+    /// scrim). Out of range does nothing.
+    pub fn scale_instance_alpha(&mut self, index: usize, factor: f32) {
+        if let Some(instance) = self.instances.get_mut(index) {
+            instance.color[3] *= factor;
+        }
     }
 
     /// Per-instance dirty state, parallel to [`instances`](Self::instances).
@@ -2604,8 +2616,10 @@ impl RenderFrame {
     pub fn push_fill(&mut self, mut fill: CanvasFill) {
         fill.transform = self.upright(fill.transform);
         let depth = self.next_depth();
+        let clip = self.active_clip();
         self.fills.push(fill);
         self.fill_depths.push(depth);
+        self.fill_clips.push(clip);
     }
 
     /// This frame's filled paths (RFC-0037).
@@ -2618,6 +2632,12 @@ impl RenderFrame {
     #[must_use]
     pub fn fill_depths(&self) -> &[f32] {
         &self.fill_depths
+    }
+
+    /// Per-fill clip index (parallel to [`fills`](Self::fills)).
+    #[must_use]
+    pub fn fill_clips(&self) -> &[Option<u16>] {
+        &self.fill_clips
     }
 
     /// Appends a [`CanvasShape`] (RFC-0020 Tier-1 shape command) to the frame.

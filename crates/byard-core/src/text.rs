@@ -968,8 +968,15 @@ mod tests {
                 b.shape_until_scroll(&mut self.fs, false);
                 if self.glyphs.is_variable_line(&mut self.fs, &b) {
                     let mut out = Vec::new();
-                    self.glyphs
-                        .build_text(&mut self.fs, &b, (0.0, 0.0), scale, 0, &mut out);
+                    self.glyphs.build_text(
+                        &mut self.fs,
+                        &b,
+                        (0.0, 0.0),
+                        scale,
+                        0,
+                        &mut out,
+                        &mut Vec::new(),
+                    );
                     let g = out[0];
                     #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
                     self.glyphs

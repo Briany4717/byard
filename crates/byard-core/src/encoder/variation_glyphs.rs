@@ -114,9 +114,53 @@ pub struct VariationGlyphs {
     context: ScaleContext,
     /// Whether each face has variation axes, asked once per face.
     variable: FxHashMap<glyphon::fontdb::ID, bool>,
+    /// Set when a glyph could not be interned because every id is taken.
+    exhausted: bool,
 }
 
+/// What it takes to move a text glyph straight up or down without looking it
+/// up again (see [`VariationGlyphs::shift_text`]).
+#[derive(Clone, Copy)]
+pub struct GlyphRow {
+    /// The glyph's own `y` less its vertical offset, in logical pixels.
+    y: f32,
+    /// The run's baseline, rounded to a physical pixel.
+    line_y: i32,
+    /// The cell's top edge above the origin.
+    top: i32,
+}
+
+/// How many interned glyphs make the pipeline start over at the next frame:
+/// three quarters of the ids, so a frame that adds a few thousand never hits
+/// the end.
+const FLUSH_AT: usize = 49_152;
+
 impl VariationGlyphs {
+    /// Whether the table should be emptied before the next draw: it is
+    /// three-quarters full, or a glyph found it full. Emptying it is only safe
+    /// together with glyphon's atlas (see [`clear`](Self::clear)).
+    #[must_use]
+    pub fn needs_flush(&self) -> bool {
+        self.exhausted || self.entries.len() >= FLUSH_AT
+    }
+
+    /// Forgets every interned glyph, so every id is free again.
+    ///
+    /// glyphon names a cached glyph image by this id (with the cell size and
+    /// the subpixel bins) and, when its atlas grows, draws every cached image
+    /// again by asking for the id. An id given to a different glyph while
+    /// glyphon still holds the old one would draw the old image, or, on
+    /// growth, the new glyph into the old one's slot. glyphon does not say
+    /// what it holds or let an entry be dropped, so ids are only reused all at
+    /// once, together with a fresh atlas, and the caller builds its custom
+    /// glyphs again.
+    pub fn clear(&mut self) {
+        self.sets.clear();
+        self.ids.clear();
+        self.entries.clear();
+        self.exhausted = false;
+    }
+
     /// The set equal to `axes` once quantised, interned.
     fn set_of(&mut self, axes: &[([u8; 4], f32)]) -> u32 {
         let quantised: Vec<([u8; 4], f32)> = axes
@@ -135,7 +179,8 @@ impl VariationGlyphs {
     }
 
     /// The id for one glyph at one setting, interning it on first sight.
-    /// `None` once 65 535 distinct glyphs are interned: that glyph is not drawn.
+    /// `None` once 65 536 distinct glyphs are interned: that glyph is not drawn
+    /// this frame, and the table is flushed before the next.
     fn id_of(
         &mut self,
         font: &Arc<Font>,
@@ -156,7 +201,10 @@ impl VariationGlyphs {
         if let Some(id) = self.ids.get(&key) {
             return Some(*id);
         }
-        let id = u16::try_from(self.entries.len()).ok()?;
+        let Ok(id) = u16::try_from(self.entries.len()) else {
+            self.exhausted = true;
+            return None;
+        };
         self.entries.push(Entry {
             font: Arc::clone(font),
             glyph,
@@ -245,6 +293,7 @@ impl VariationGlyphs {
     /// pixel position, subpixel bin, hinting and size are cosmic-text's, and
     /// only the rasteriser differs. A glyph is placed from `origin`, so the
     /// result has to be built again when the line moves.
+    #[allow(clippy::too_many_arguments)]
     pub fn build_text(
         &mut self,
         font_system: &mut glyphon::FontSystem,
@@ -253,6 +302,7 @@ impl VariationGlyphs {
         scale: f32,
         metadata: usize,
         out: &mut Vec<CustomGlyph>,
+        rows: &mut Vec<GlyphRow>,
     ) {
         for run in buffer.layout_runs() {
             // `glyphon` adds this to every glyph's own `y`.
@@ -286,6 +336,27 @@ impl VariationGlyphs {
                     snap_to_physical_pixel: false,
                     metadata,
                 });
+                rows.push(GlyphRow {
+                    y: glyph.y - glyph.font_size * glyph.y_offset,
+                    line_y,
+                    top: cell.top,
+                });
+            }
+        }
+    }
+
+    /// Moves glyphs built by [`build_text`](Self::build_text) to a text area
+    /// whose physical top is `top`, its left and scale unchanged: what a line
+    /// does when a page scrolls. A glyph's column, bin and cell do not depend
+    /// on `top`, only its row does, and that is arithmetic: no lookup, no
+    /// shaping, no rasterising. The result is what `build_text` would give.
+    pub fn shift_text(custom: &mut [CustomGlyph], rows: &[GlyphRow], top: f32, scale: f32) {
+        for (glyph, row) in custom.iter_mut().zip(rows) {
+            #[allow(clippy::cast_possible_truncation, clippy::cast_precision_loss)]
+            let y = row.line_y + row.y.mul_add(scale, top).trunc() as i32;
+            #[allow(clippy::cast_precision_loss)]
+            {
+                glyph.top = ((y - row.top) as f32 - top) / scale;
             }
         }
     }
@@ -311,7 +382,10 @@ impl VariationGlyphs {
             return Some(*id);
         }
         let font = font_system.get_font(glyph.font_id, glyph.font_weight)?;
-        let id = u16::try_from(self.entries.len()).ok()?;
+        let Ok(id) = u16::try_from(self.entries.len()) else {
+            self.exhausted = true;
+            return None;
+        };
         let mut entry = Entry {
             font,
             glyph: glyph.glyph_id,
@@ -672,7 +746,7 @@ mod tests {
 
             // What the custom glyphs draw, placed as glyphon places them.
             let mut custom = Vec::new();
-            glyphs.build_text(&mut fs, &b, origin, scale, 0, &mut custom);
+            glyphs.build_text(&mut fs, &b, origin, scale, 0, &mut custom, &mut Vec::new());
             let mut got = vec![0u8; W * H];
             for c in &custom {
                 let (x, x_bin) = glyphon::cosmic_text::SubpixelBin::new(origin.0 + c.left * scale);
@@ -761,5 +835,44 @@ mod tests {
              `build_text`) and crates/byard-core/src/encoder/text_glyph.rs (`text_custom`), \
              and this canary"
         );
+    }
+
+    /// A page that scrolls moves its glyphs by arithmetic and they land where a
+    /// build at the new place would have put them.
+    #[test]
+    fn shifting_text_vertically_matches_building_it_again() {
+        let mut fs = crate::text::new_font_system();
+        let family = crate::text::register_into(fs.db_mut(), &Arc::from(BODY)).expect("parses");
+        let mut glyphs = VariationGlyphs::default();
+        let mut b = Buffer::new(&mut fs, Metrics::new(14.0, 16.8));
+        b.set_text(
+            &mut fs,
+            "Row 12: the quick brown fox jumps over the lazy dog",
+            &Attrs::new().family(Family::Name(&family)),
+            Shaping::Advanced,
+            None,
+        );
+        b.shape_until_scroll(&mut fs, false);
+        for scale in [1.0_f32, 2.0] {
+            let (mut custom, mut rows) = (Vec::new(), Vec::new());
+            glyphs.build_text(&mut fs, &b, (8.0, 40.37), scale, 0, &mut custom, &mut rows);
+            for top in [40.37_f32, 39.0, 3.9, -0.4, -250.6, 1000.123] {
+                VariationGlyphs::shift_text(&mut custom, &rows, top, scale);
+                let mut want = Vec::new();
+                glyphs.build_text(
+                    &mut fs,
+                    &b,
+                    (8.0, top),
+                    scale,
+                    0,
+                    &mut want,
+                    &mut Vec::new(),
+                );
+                assert!(
+                    custom == want,
+                    "scale {scale}, top {top}: shifted != rebuilt"
+                );
+            }
+        }
     }
 }

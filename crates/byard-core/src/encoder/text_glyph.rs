@@ -121,6 +121,8 @@ struct CachedLine {
     /// again when the line moves.
     text_custom: bool,
     placed: [f32; 3],
+    /// How to move each of `custom` up or down, for a line that scrolls.
+    rows: Vec<super::variation_glyphs::GlyphRow>,
     /// The vertical extent of the line's runs in logical pixels from its top,
     /// for skipping a line a clip hides, as glyphon skips a buffer's runs.
     extent: (f32, f32),
@@ -487,6 +489,9 @@ pub struct TextGlyphPipeline {
     swash_cache: SwashCache,
     /// glyphon glyph atlas, GPU texture containing rasterised glyphs.
     atlas: TextAtlas,
+    /// What a new atlas is made from, for [`flush_glyphs`](Self::flush_glyphs).
+    glyph_cache: Cache,
+    format: wgpu::TextureFormat,
     /// glyphon viewport, maps logical → physical pixels for the render pass.
     viewport: Viewport,
     /// glyphon renderers, **one per z-layer** (RFC-0017 layered draw batches),
@@ -587,6 +592,8 @@ impl TextGlyphPipeline {
             font_system,
             swash_cache: SwashCache::new(),
             atlas,
+            glyph_cache,
+            format,
             viewport,
             renderers: vec![renderer],
             cache: Vec::new(),
@@ -696,7 +703,7 @@ impl TextGlyphPipeline {
     /// # Errors
     ///
     /// Returns [`ByardError::TextPrepare`] if glyphon's `prepare` fails.
-    #[allow(clippy::too_many_arguments)]
+    #[allow(clippy::too_many_arguments, clippy::too_many_lines)]
     pub fn prepare(
         &mut self,
         device: &wgpu::Device,
@@ -762,6 +769,7 @@ impl TextGlyphPipeline {
                 custom: Vec::new(),
                 text_custom: false,
                 placed: [0.0; 3],
+                rows: Vec::new(),
                 extent: (0.0, 0.0),
                 // No buffer has been shaped for this entry yet. The value is
                 // never compared, `is_new` forces the shape below, but it is
@@ -792,6 +800,8 @@ impl TextGlyphPipeline {
             crate::profile_scope!("encode.glyphs.dev");
             self.shape_range(text_lines, wraps, split..text_lines.len(), pass);
         }
+
+        self.flush_glyphs(device, queue, text_lines);
 
         // ── Grow/shrink the per-layer renderer pool ───────────────────────────
         //
@@ -888,7 +898,56 @@ impl TextGlyphPipeline {
                 )
                 .map_err(|e| ByardError::TextPrepare(e.to_string()))?;
         }
+        // This frame's glyphs stay; the atlas may drop the rest when short of
+        // room. Without this nothing was ever evictable.
+        self.atlas.trim();
         Ok(())
+    }
+
+    /// When the table of custom glyph ids is nearly full, empties it and glyphon's atlas together, and
+    /// builds every line's custom glyphs again from the glyphs it is drawing:
+    /// the only moment an id can be given to another glyph without glyphon
+    /// still holding an image under it. The cost is one cold atlas for what is
+    /// on screen, once per 49 152 glyph entries, and nothing is shaped again.
+    fn flush_glyphs(
+        &mut self,
+        device: &wgpu::Device,
+        queue: &wgpu::Queue,
+        text_lines: &[TextLine],
+    ) {
+        // Custom glyph ids are a `u16`; when most are taken they are all given
+        // back, with a new atlas (see `VariationGlyphs::clear`).
+        if !self.variation_glyphs.needs_flush() {
+            return;
+        }
+        self.variation_glyphs.clear();
+        self.atlas = TextAtlas::new(device, queue, &self.glyph_cache, self.format);
+        // The renderers were made from the old atlas; `prepare` makes more.
+        self.renderers.clear();
+        for (i, (entry, line)) in self.cache.iter_mut().zip(text_lines).enumerate() {
+            if let Some(axes) = &line.variations {
+                entry.custom.clear();
+                self.variation_glyphs.build(
+                    &mut self.font_system,
+                    &entry.buffer,
+                    axes,
+                    i,
+                    &mut entry.custom,
+                );
+            } else if entry.text_custom {
+                entry.custom.clear();
+                entry.rows.clear();
+                self.variation_glyphs.build_text(
+                    &mut self.font_system,
+                    &entry.buffer,
+                    (entry.placed[0], entry.placed[1]),
+                    entry.placed[2],
+                    i,
+                    &mut entry.custom,
+                    &mut entry.rows,
+                );
+            }
+        }
     }
 
     /// Pass 1 over one index range: re-shapes every line in it whose
@@ -948,16 +1007,31 @@ impl TextGlyphPipeline {
                 #[allow(clippy::float_cmp)]
                 let moved = entry.placed != placed;
                 if entry.text_custom && moved {
-                    entry.custom.clear();
+                    // Straight up or down, which is what a scroll does, is
+                    // arithmetic on the glyphs already built.
+                    #[allow(clippy::float_cmp)]
+                    let vertical = entry.placed[0] == placed[0] && entry.placed[2] == placed[2];
+                    if vertical {
+                        super::variation_glyphs::VariationGlyphs::shift_text(
+                            &mut entry.custom,
+                            &entry.rows,
+                            placed[1],
+                            placed[2],
+                        );
+                    } else {
+                        entry.custom.clear();
+                        entry.rows.clear();
+                        self.variation_glyphs.build_text(
+                            &mut self.font_system,
+                            &entry.buffer,
+                            (placed[0], placed[1]),
+                            placed[2],
+                            i,
+                            &mut entry.custom,
+                            &mut entry.rows,
+                        );
+                    }
                     entry.placed = placed;
-                    self.variation_glyphs.build_text(
-                        &mut self.font_system,
-                        &entry.buffer,
-                        (placed[0], placed[1]),
-                        placed[2],
-                        i,
-                        &mut entry.custom,
-                    );
                 }
                 continue; // byte-identical glyph run, the cached buffer stands
             }
@@ -966,6 +1040,7 @@ impl TextGlyphPipeline {
 
             shape_line(&mut self.font_system, &mut entry.buffer, line, wrap_w, i);
             entry.custom.clear();
+            entry.rows.clear();
             entry.text_custom = false;
             if let Some(axes) = &line.variations {
                 self.variation_glyphs.build(
@@ -1000,6 +1075,7 @@ impl TextGlyphPipeline {
                     placed[2],
                     i,
                     &mut entry.custom,
+                    &mut entry.rows,
                 );
             }
         }

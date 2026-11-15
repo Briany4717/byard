@@ -70,6 +70,7 @@ mod text_wrap_example;
 mod theme_transition_example;
 mod todo_example;
 mod transform_stack_example;
+mod two_windows_example;
 mod view_animations_example;
 mod window_and_roles_example;
 mod workspace_example;

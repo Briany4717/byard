@@ -1,0 +1,3 @@
+[project]
+name = "two_windows"
+entry = "src/main.byd"

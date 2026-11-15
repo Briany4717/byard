@@ -555,6 +555,7 @@ pub(crate) fn load_program(entry: &Path) -> Result<Program, ByardError> {
     if program.views.is_empty() {
         return Err(ByardError::compile(declares_no_view(program.source_map)));
     }
+    refuse_windows(&program.views, &program.source_map)?;
     let manifest_path = manifest.project_root.join("byard.toml");
     check_declared_views(&manifest.native_views, &manifest_path)?;
     let icon = match &manifest.icon {
@@ -584,6 +585,30 @@ pub(crate) fn load_program(entry: &Path) -> Result<Program, ByardError> {
         bundle_id: manifest.bundle.id,
         source_map: program.source_map,
     })
+}
+
+/// Stops a program that writes `Window`, with a diagnostic: the logic half of
+/// several windows is built (the interpreter keeps a surface for each, and the
+/// relay carries a frame for each), but the window host that opens them is not
+/// part of this build yet (RFC-0068 step 2b), and drawing nothing would say
+/// nothing.
+pub(crate) fn refuse_windows(
+    views: &[ViewDecl],
+    source_map: &byard_compiler::resolve::SourceMap,
+) -> Result<(), ByardError> {
+    if !byard_compiler::surfaces::surface_shape(views).is_multi() {
+        return Ok(());
+    }
+    Err(announced(ByardError::compile(CompileReport::new(
+        vec![byard_compiler::CompileError::Project {
+            span: byard_compiler::Span::new(0, 0),
+            message: "this program writes `Window`, and the host that opens more than one window \
+                      is not part of this build yet (RFC-0068 step 2b); `byard shot` and \
+                      `byard test` run it headlessly"
+                .to_string(),
+        }],
+        source_map.clone(),
+    ))))
 }
 
 /// A program with nothing to run, as a diagnostic: it is anchored to the start
@@ -668,6 +693,9 @@ impl PlatformHost for Host {
                 interp.set_theme(theme);
             }
             interp.load_views(&views);
+            if byard_compiler::surfaces::surface_shape(&views).is_multi() {
+                interp.enable_surfaces();
+            }
             let known: Vec<&str> = views.iter().map(|v| v.name.as_str()).collect();
             let root = byard_compiler::parser::ast::root_view(&views)
                 .expect("a program with no views is rejected before this");
@@ -940,6 +968,25 @@ impl LogicRuntime for AppRuntime {
 
     fn wants_another_frame(&self) -> bool {
         self.interp.needs_another_frame() || self.reloaded.take()
+    }
+
+    fn multi_surface(&self) -> bool {
+        self.interp.has_surfaces()
+    }
+
+    fn evaluate_surfaces(
+        &mut self,
+        relay: &byard_core::relay::Relay,
+        input_events: &[InputEvent],
+    ) -> byard_core::relay::SurfaceTick {
+        self.follow();
+        self.interp.dispatch_events(input_events);
+        self.interp.tick();
+        let elapsed = u32::try_from(self.start.elapsed().as_millis()).unwrap_or(u32::MAX);
+        self.interp.set_now_ms(elapsed);
+        let tick = self.interp.render_surfaces_to(&self.tree, relay);
+        self.tell_new_errors();
+        tick
     }
 }
 

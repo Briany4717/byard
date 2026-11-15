@@ -64,6 +64,16 @@ pub fn run(opts: Options<'_>) -> Result<(), String> {
     // window. This covers the whole module graph (RFC-0008), not just the
     // entry file.
     let (program, provider) = resolve_project(&manifest).map_err(|e| e.to_string())?;
+    // The logic half of several windows is built, the host that opens them is
+    // not (RFC-0068 step 2b): say so, rather than draw nothing.
+    if byard_compiler::surfaces::surface_shape(&program.views).is_multi() {
+        return Err(
+            "this program writes `Window`, and the host that opens more than one \
+                    window is not part of this build yet (RFC-0068 step 2b); `byard shot` \
+                    and `byard test` run it headlessly"
+                .to_string(),
+        );
+    }
 
     // The startup header is four facts, a rule, a result and a duration
     // (RFC-0030 §"Starting the dev runner"). Two of the facts, the adapter and

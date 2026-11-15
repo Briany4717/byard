@@ -1317,6 +1317,28 @@ pub enum CompileError {
         /// The name it holds.
         name: String,
     },
+    /// The `key` of a `for` has a type that cannot be compared for equality
+    /// (RFC-0068 §4b): a list, a function, or a record with one inside.
+    ForKeyNotComparable {
+        /// Source range of the key expression.
+        span: Span,
+        /// The type the key has, as written in Byld.
+        found: String,
+    },
+    /// A `key` on a `for` inside a `canvas` or a `path` (RFC-0068 §4b): shapes
+    /// keep no state, so there is nothing for a key to keep.
+    KeyInCanvasFor {
+        /// Source range of the key expression.
+        span: Span,
+    },
+    /// Two items of a keyed `for` have the same key (RFC-0068 §4b). Raised at
+    /// runtime, where the list arrives; the second item is not drawn.
+    DuplicateForKey {
+        /// Source range of the key expression.
+        span: Span,
+        /// The key, as text.
+        key: String,
+    },
     /// Two `on enter` (or two `on leave`) blocks on one element (RFC-0066 §3):
     /// an element has one way of arriving and one of going.
     DuplicateStateBlock {
@@ -1501,6 +1523,9 @@ impl CompileError {
             | Self::AttributeNeedsRole { span, .. }
             | Self::DuplicateStateBlock { span, .. }
             | Self::AnchorToText { span, .. }
+            | Self::ForKeyNotComparable { span, .. }
+            | Self::KeyInCanvasFor { span, .. }
+            | Self::DuplicateForKey { span, .. }
             | Self::EventHasNoValue { span, .. }
             | Self::WrongAttributeSeparator { span, .. }
             | Self::ArityMismatch { span, .. }
@@ -1643,6 +1668,9 @@ impl CompileError {
             | Self::AttributeNeedsRole { span, .. }
             | Self::DuplicateStateBlock { span, .. }
             | Self::AnchorToText { span, .. }
+            | Self::ForKeyNotComparable { span, .. }
+            | Self::KeyInCanvasFor { span, .. }
+            | Self::DuplicateForKey { span, .. }
             | Self::EventHasNoValue { span, .. }
             | Self::WrongAttributeSeparator { span, .. }
             | Self::ArityMismatch { span, .. }
@@ -1787,6 +1815,9 @@ impl CompileError {
             Self::AttributeNeedsRole { .. } => "AttributeNeedsRole",
             Self::DuplicateStateBlock { .. } => "DuplicateStateBlock",
             Self::AnchorToText { .. } => "AnchorToText",
+            Self::ForKeyNotComparable { .. } => "ForKeyNotComparable",
+            Self::DuplicateForKey { .. } => "DuplicateForKey",
+            Self::KeyInCanvasFor { .. } => "KeyInCanvasFor",
             Self::EventHasNoValue { .. } => "EventHasNoValue",
             Self::WrongAttributeSeparator { .. } => "WrongAttributeSeparator",
             Self::ArityMismatch { .. } => "ArityMismatch",
@@ -2029,6 +2060,20 @@ impl CompileError {
                 "`anchor_to: \"{name}\"` is looked up among every `as` in the window, so two \
                  copies of a view share one name; write `anchor_to: {name}` to point at the \
                  element tagged `as {name}` in this view"
+            ),
+            Self::ForKeyNotComparable { found, .. } => format!(
+                "a `for` key has to be something two values can be compared by, and `{found}` \
+                 is not: key by a `Str`, an `Int`, a `Bool`, an enum or a record of those, \
+                 for example `key item.id`"
+            ),
+            Self::KeyInCanvasFor { .. } => {
+                "a `key` keeps a row's state, and the shapes of a canvas or a path keep none, \
+                 so here it would change nothing: remove `key`"
+                    .to_string()
+            }
+            Self::DuplicateForKey { key, .. } => format!(
+                "two items of this `for` have the key `{key}`, so there is no telling which is \
+                 which: the second one is not drawn; make the key unique, for example `key item.id`"
             ),
             Self::DuplicateStateBlock { state, .. } => format!(
                 "an element has one `on {state}` block: write the values together in the \

@@ -1107,6 +1107,61 @@ impl Checker<'_> {
         self.leave(mark);
     }
 
+    /// Checks the `key` of a `for` (RFC-0068 §4b) in the scope of the loop
+    /// variable, and that its type has equality: two keys are told apart by
+    /// comparing them, which a list or a function cannot do.
+    fn check_for_key(&mut self, var: &Symbol, item: &Ty, element: &Ty, key: &Expr) {
+        let mark = self.undo.len();
+        // The item is typed whatever it is (the body only types a record),
+        // so `for n in numbers key n` and `for x in lists key x` are checked.
+        let bound = if is_concrete(item) {
+            item.clone()
+        } else {
+            element.clone()
+        };
+        self.bind(var.clone(), bound);
+        let ty = self.value(key);
+        self.leave(mark);
+        if is_concrete(&ty) && !self.has_equality(&ty, 0) {
+            self.errors.push(CompileError::ForKeyNotComparable {
+                span: key.span(),
+                found: ty_name(&ty),
+            });
+        }
+    }
+
+    /// Whether values of `ty` can be compared for equality: a scalar, an enum,
+    /// or a record of those. A type the checker does not model is given the
+    /// benefit of the doubt.
+    fn has_equality(&self, ty: &Ty, depth: u32) -> bool {
+        match ty {
+            Ty::List(_) | Ty::Fn(..) => false,
+            Ty::Optional(inner) => self.has_equality(inner, depth),
+            Ty::Named(name) => match self.records.get(name) {
+                Some(fields) if depth < 8 => fields
+                    .iter()
+                    .all(|(_, t)| self.type_has_equality(t, depth + 1)),
+                _ => true,
+            },
+            _ => true,
+        }
+    }
+
+    /// [`has_equality`](Self::has_equality) for a type as written.
+    fn type_has_equality(&self, ty: &Type, depth: u32) -> bool {
+        match ty {
+            Type::Function { .. } => false,
+            Type::Named { name, args, .. } => match name.as_str() {
+                "List" => false,
+                "Int" | "Color" | "Float" | "Str" | "Bool" => true,
+                _ => {
+                    args.iter().all(|a| self.type_has_equality(a, depth))
+                        && self.has_equality(&Ty::Named(name.clone()), depth)
+                }
+            },
+        }
+    }
+
     /// Checks `expr` with `names` bound to [`Ty::Unknown`] (an event payload,
     /// a callback parameter): they shadow any same-named `var`, so a payload
     /// called `xs` is never mistaken for the list of that name.
@@ -1589,17 +1644,23 @@ impl Checker<'_> {
                 var,
                 index,
                 iter,
+                key,
                 body,
                 ..
             } => {
                 // A list of records gives its loop variable the record's type,
                 // so a misspelt field inside the loop is told.
-                let element = match self.value(iter) {
-                    Ty::List(inner) if matches!(*inner, Ty::Named(ref n) if self.records.contains_key(n)) => {
-                        *inner
-                    }
+                let item = match self.value(iter) {
+                    Ty::List(inner) => *inner,
                     _ => Ty::Unknown,
                 };
+                let element = match &item {
+                    Ty::Named(n) if self.records.contains_key(n) => item.clone(),
+                    _ => Ty::Unknown,
+                };
+                if let Some(key) = key {
+                    self.check_for_key(var, &item, &element, key);
+                }
                 let mut shadow = vec![(var, element)];
                 shadow.extend(index.as_ref().map(|i| (i, Ty::Int)));
                 self.check_scoped(body, &shadow);
@@ -2728,6 +2789,81 @@ mod tests {
             let errs = errors_of(src);
             assert!(errs.is_empty(), "{src}\n→ {errs:?}");
         }
+    }
+
+    // ── RFC-0068 §4b: `for … key` ───────────────────────────────────
+
+    fn key_errors(src: &str) -> Vec<CompileError> {
+        errors_of(src)
+            .into_iter()
+            .filter(|e| matches!(e, CompileError::ForKeyNotComparable { .. }))
+            .collect()
+    }
+
+    #[test]
+    fn a_key_with_equality_is_accepted() {
+        for key in ["t.id", "t.name", "t.pos", "t.done", "t"] {
+            let errs = errors_of(&format!(
+                "type Pos = {{ x: Int, y: Int }}\n\
+                 type Task = {{ id: Int, name: Str, pos: Pos, done: Bool }}\n\
+                 View V() {{ var ts: List<Task> = []\n Column {{ for t in ts key {key} {{ Text(t.name) }} }} }}"
+            ));
+            assert!(errs.is_empty(), "key {key}: {errs:?}");
+        }
+        let errs =
+            errors_of("View V() { var ns = [1, 2]\n Column { for n in ns key n { Text(n) } } }");
+        assert!(errs.is_empty(), "{errs:?}");
+    }
+
+    #[test]
+    fn a_key_that_is_a_list_or_holds_one_is_an_error_with_a_hint() {
+        let errs = key_errors(
+            "type Task = { id: Int, tags: List<Str> }\n\
+             View V() { var ts: List<Task> = []\n Column { for t in ts key t.tags { Text(t.id) } } }",
+        );
+        assert_eq!(errs.len(), 1, "{errs:?}");
+        let CompileError::ForKeyNotComparable { found, .. } = &errs[0] else {
+            unreachable!()
+        };
+        assert_eq!(found, "List<Str>");
+        assert!(
+            errs[0].headline().contains("key item.id"),
+            "{}",
+            errs[0].headline()
+        );
+        // A record with a list inside is not comparable either.
+        let errs = key_errors(
+            "type Task = { id: Int, tags: List<Str> }\n\
+             View V() { var ts: List<Task> = []\n Column { for t in ts key t { Text(t.id) } } }",
+        );
+        assert_eq!(errs.len(), 1, "{errs:?}");
+        // A list of lists keyed by the item.
+        let errs = key_errors(
+            "View V() { var xs: List<List<Int>> = []\n Column { for x in xs key x { Text(x.len) } } }",
+        );
+        assert_eq!(errs.len(), 1, "{errs:?}");
+    }
+
+    #[test]
+    fn a_key_is_typed_in_the_loops_scope() {
+        let errs = errors_of(
+            "type Task = { id: Int }\n\
+             View V() { var ts: List<Task> = []\n Column { for t in ts key t.idd { Text(t.id) } } }",
+        );
+        assert!(
+            errs.iter()
+                .any(|e| matches!(e, CompileError::UnknownField { name, .. } if name == "idd")),
+            "{errs:?}"
+        );
+        // The loop variable ends with the loop, key included.
+        let errs = errors_of(
+            "View V() { var ns = [1]\n Column { for n in ns key n { Text(n) } }\n Text(n) }",
+        );
+        assert!(
+            errs.iter()
+                .any(|e| matches!(e, CompileError::UnknownName { .. })),
+            "{errs:?}"
+        );
     }
 
     // ── RFC-0027 operator & collection diagnostics ──────────────────

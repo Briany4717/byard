@@ -29,8 +29,13 @@ pub(crate) fn member_exprs(member: &mut Member, f: &mut dyn FnMut(&mut Expr)) {
             }
         }
         Member::Element(el) => element(el, f),
-        Member::For { iter, body, .. } => {
+        Member::For {
+            iter, key, body, ..
+        } => {
             expr(iter, f);
+            if let Some(key) = key {
+                expr(key, f);
+            }
             for m in body {
                 member_exprs(m, f);
             }

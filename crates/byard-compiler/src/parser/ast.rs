@@ -299,6 +299,9 @@ pub enum Member {
         index: Option<Symbol>,
         /// Iterable expression.
         iter: Expr,
+        /// The `key <expr>` of a keyed `for` (RFC-0068 §4b), read over the loop
+        /// variable. Items whose key survives a list change keep their mount.
+        key: Option<Expr>,
         /// Loop body.
         body: Vec<Member>,
         /// Source span.

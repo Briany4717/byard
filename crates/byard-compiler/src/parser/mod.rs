@@ -1036,7 +1036,7 @@ impl<'a> Parser<'a> {
         }
     }
 
-    /// `for_stmt := "for" (IDENT ",")? IDENT "in" expr "{" member* "}"`.
+    /// `for_stmt := "for" (IDENT ",")? IDENT "in" expr ("key" expr)? "{" member* "}"`.
     ///
     /// The two-name form binds the item's index first (`for i, item in items`),
     /// which is what RFC-0025's stagger reads (`delay: i * 50ms`).
@@ -1057,12 +1057,21 @@ impl<'a> Parser<'a> {
         };
         self.expect(&Token::In, "'in'");
         let iter = self.parse_expr(0);
+        // `key` is a contextual word: it only means something right here, after
+        // the list (RFC-0068 §4b), so a binding called `key` works everywhere else.
+        let key = if matches!(self.cur(), Some(Token::Ident(w)) if w.as_str() == "key") {
+            self.advance();
+            Some(self.parse_expr(0))
+        } else {
+            None
+        };
         self.expect(&Token::LBrace, "'{'");
         let body = self.parse_block_members();
         Member::For {
             var,
             index,
             iter,
+            key,
             body,
             span: self.span_from(start),
         }

@@ -164,6 +164,51 @@ Every use of a view makes a new instance with its own `var`s, as `Counter` showe
 The state lives as long as the instance is on screen. A view inside a `when` that
 turns false is gone, and its state with it. Showing it again starts fresh.
 
+### Rows that keep their state: `key`
+
+A `for` shows one instance of its body per item. When the list changes, a plain
+`for` keeps the instances where they are in the list: put a new item at the front
+and the first row now shows the new item, with the old first row's state. That is
+what you want for a list of plain texts, and it costs nothing. It is not what you
+want when each row is a view with a `var` of its own.
+
+Say what identifies an item with `key`, after the list:
+
+```byld
+View Main() {
+    var names = ["Ada", "Grace"]
+
+    Column #[p: 24, gap: 8] {
+        Button("Add at the front") => names = names.reverse().push("New").reverse()
+        for name in names key name {
+            Counter(name)
+        }
+    }
+}
+
+View Counter(name: Str) {
+    var count = 0
+    Row #[gap: 12, align: center] {
+        Text(name) #[width: 80]
+        Text("{count}")
+        Button("+") => count += 1
+    }
+}
+```
+
+Now a row whose key is still in the list is the same row: its `var`s, its animations
+and its position in the list (`for i, name in names key name`) follow the item, and
+only the rows for new keys are made. A key that is gone has its row removed, through
+`on leave` if it has one, and the rows are put in the list's order.
+
+Use `key` when the rows have state, an animation or focus, and the list can change
+other than at its end: items inserted, removed or reordered. Key by something that
+names the item and does not change, such as an `id`, not by its position. The key can
+be a `Str`, an `Int`, a `Float`, a `Bool`, an enum or a record of those (anything else
+is a `ForKeyNotComparable` error). Two items with the same key are a `DuplicateForKey`
+error, and the second is not drawn. A keyed `for` costs a little for each row, so a
+list that only grows at the end can do without it.
+
 ### `else when`
 
 A `when` shows its first block while the condition holds and its `else` block otherwise. To pick

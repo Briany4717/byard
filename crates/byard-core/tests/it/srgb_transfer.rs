@@ -4,8 +4,10 @@
 //! The WGSL is generated from the Rust constants, so the two agree by
 //! construction. This test is what notices the day someone writes the curve
 //! into a shader by hand: it runs `byard_out` and `byard_out_premul` on the
-//! GPU, in a float target so nothing rounds, and compares them with
-//! `linear_to_srgb` at 1024 points.
+//! GPU and compares them with `linear_to_srgb` at 1024 points. The shader
+//! writes each result's bits into an integer target, so nothing rounds and no
+//! float target is needed: GL renders to `Rgba32Float` only with an extension
+//! Mesa does not always offer.
 #![allow(clippy::cast_precision_loss)]
 
 use byard_core::color::{linear_to_srgb, wgsl_transfer};
@@ -21,14 +23,14 @@ fn vs_main(@builtin(vertex_index) vi: u32) -> @builtin(position) vec4<f32> {
 }
 
 @fragment
-fn fs_main(@builtin(position) p: vec4<f32>) -> @location(0) vec4<f32> {
+fn fs_main(@builtin(position) p: vec4<f32>) -> @location(0) vec4<u32> {
     let l = floor(p.x) / 1023.0;
     if (p.y < 1.0) {
         // Row 0: straight alpha, the colour encoded and the alpha left alone.
-        return byard_out(vec4<f32>(l, l * 0.5, l * 0.25, 0.75));
+        return bitcast<vec4<u32>>(byard_out(vec4<f32>(l, l * 0.5, l * 0.25, 0.75)));
     }
     // Row 1: premultiplied at alpha 0.5, so the straight colour is 2 * c.
-    return byard_out_premul(vec4<f32>(l * 0.5, l * 0.25, l * 0.125, 0.5));
+    return bitcast<vec4<u32>>(byard_out_premul(vec4<f32>(l * 0.5, l * 0.25, l * 0.125, 0.5)));
 }
 ";
 
@@ -61,7 +63,7 @@ fn the_wgsl_transfer_is_the_rust_one() {
             module: &module,
             entry_point: Some("fs_main"),
             targets: &[Some(wgpu::ColorTargetState {
-                format: wgpu::TextureFormat::Rgba32Float,
+                format: wgpu::TextureFormat::Rgba32Uint,
                 blend: None,
                 write_mask: wgpu::ColorWrites::ALL,
             })],
@@ -83,7 +85,7 @@ fn the_wgsl_transfer_is_the_rust_one() {
         mip_level_count: 1,
         sample_count: 1,
         dimension: wgpu::TextureDimension::D2,
-        format: wgpu::TextureFormat::Rgba32Float,
+        format: wgpu::TextureFormat::Rgba32Uint,
         usage: wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::COPY_SRC,
         view_formats: &[],
     });

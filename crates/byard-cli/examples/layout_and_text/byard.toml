@@ -1,0 +1,3 @@
+[project]
+name = "layout_and_text"
+entry = "src/main.byd"

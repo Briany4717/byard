@@ -900,6 +900,8 @@ mod tests {
     fn dirty_line(text: &str) -> crate::frame::TextLine {
         crate::frame::TextLine {
             align: crate::frame::TextAlign::Start,
+            max_lines: 0,
+            ellipsis: false,
             x: 0.0,
             y: 0.0,
             text: text.to_string(),
@@ -916,6 +918,8 @@ mod tests {
     fn clean_line(text: &str) -> crate::frame::TextLine {
         crate::frame::TextLine {
             align: crate::frame::TextAlign::Start,
+            max_lines: 0,
+            ellipsis: false,
             dirty: false,
             ..dirty_line(text)
         }

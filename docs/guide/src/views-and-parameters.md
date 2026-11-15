@@ -110,6 +110,9 @@ View Main() {
 error[KeywordAsName]: `when` is a keyword and cannot name a function
 ```
 
+A parameter belongs to its own view: two views may name a parameter the same and give it
+different types (`min: Str` in one, `min: Float` in another), and neither sees the other's.
+
 ### Defaults
 
 Put `= value` after a parameter's type and callers may leave it out. `Badge`
@@ -212,10 +215,76 @@ View Callout(kind: Str, content) {
 }
 ```
 
-`content` is a *slot*, not a value. You cannot store it, pass it on or inspect it.
-There is one per view, and that covers wrappers such as cards, dialogs and
-screens that share a frame. Aura Weather's `Screen` view puts a title above
-whatever each screen passes in.
+`content` is a *slot*, not a value. You cannot store it or inspect its elements. It can go
+anywhere in the body: in both branches of a `when`, in a `for`, as many times as you need. The
+block is written in the caller and sees the caller's names wherever the view puts it.
+
+```byld
+View Card(on_tap: Fn() = none, content) {
+    when on_tap != none {
+        Box #[tap => on_tap(), a11y_role: button] { content }
+    } else {
+        Box { content }
+    }
+}
+```
+
+### Several slots
+
+A parameter of type `Slot` is a slot of its own. The call fills it with `name: { … }`, in
+the parentheses or in `#[ ]`, and the view places it by writing its name, as it does `content`.
+The trailing block of a call is still `content`.
+
+```byld
+View ListItem(headline: Str, leading: Slot = none, trailing: Slot = none) {
+    Row #[gap: 16, align: center] {
+        when leading != none { leading }
+        Text(headline) #[grow: 1]
+        when trailing != none { trailing }
+    }
+}
+
+View Main() {
+    var on = true
+    ListItem("Wi-Fi", leading: { Text("W") }, trailing: { Toggle #[bind: on] })
+    ListItem("About")
+}
+```
+
+The call writes `leading: { … }` for a slot and `on_tap: { … }` for a callback in the same way; it is the
+parameter's type that says which the braces are, so `{ Api.save() }` is an action for an `Fn` and
+`{ Text("x") }` is an element for a `Slot`. A block that is neither says what each expected
+(`BlockFitsNeither`). A slot is the block written where the call is, lowered where the view places
+it, so a slot placed in each row of a `for` is a set of elements of its own in every row.
+
+`= none` makes a slot optional; without it the call has to give one (`MissingParam`).
+`leading != none` is true when the call gave it, decided when the view is instantiated, and
+`content != none` asks the same of the trailing block. A slot can be passed on to another view,
+`Inner(icon: icon)`. A value given to a `Slot`, or a block given to anything else, is
+`SlotArgument`.
+
+## Layout on a call
+
+A view call takes the layout attributes a parent reads from its children, besides its parameters.
+They apply to the view's root element, as if written on it:
+
+```byld
+View Main() {
+    Row #[gap: 8, height: 40] {
+        Dot() #[ml: 8, align_self: center]
+        Text("Wi-Fi") #[grow: 1]
+    }
+}
+
+View Dot() {
+    Box #[width: 12, height: 12, radius: 6, bg: 0x3B82F6] {}
+}
+```
+
+They are `width`, `height`, `min_width`, `max_width`, `min_height`, `max_height`, `m`, `mx`, `my`, `mt`, `mr`, `mb`, `ml`, `grow`, `shrink`, `basis` and
+`align_self`. A view with several roots, a `when` at its root, gives them to each root that is drawn,
+and what the call writes wins over what the root wrote. A parameter of the same name takes the value
+instead. Any other name is `UnknownParam`, and its message lists these.
 
 ## Passing behaviour
 
@@ -245,6 +314,31 @@ The braces run in the *caller's* scope. `ActionButton` never sees `count`, yet a
 tap inside it changes it. That is the whole trick, and it is how a reusable
 component stays ignorant of what it is used for. A default of `{}` is an action
 that does nothing, so the callback is optional.
+
+When the view has to behave differently depending on whether it was given one, the default is
+`none`: `on_tap: Fn() = none`. `when on_tap != none { … }` asks whether the call passed a callback,
+and calling one that was not given does nothing, so `tap => on_tap()` needs no guard. `none` can
+only be compared with a parameter that declared it (or `content`); comparing anything else is
+`NoneNeedsOptional`.
+
+### Leaving a value out
+
+`Fn` and `Slot` may be left out with `= none`, and so may a value of any type: write
+the type with a `?`. `color: Color? = none` is a colour or nothing (a colour is an
+`Int`, and `Color` is the name for it).
+
+```byld
+View Pill(label: Str, color: Color? = none) {
+    Box #[bg: color ?? 0x2A2A3A, p: 10] { Text(label) }
+}
+```
+
+Read it with `??`, which gives the right side when there is nothing, or inside
+`when color != none { … }` and the true arm of `color != none ? a : b`, where `color`
+is a colour. Any other read, such as `bg: color`, is `NoneNotHandled`, which shows both
+ways to write it. The default of a `T?` is `none` and nothing else; a call may pass
+`none` too, also as the arm of a `?:` (`color: on ? 0xFF0000 : none`), in a call or in
+a context's `provide`. Without a default the parameter is required.
 
 The names in the braces mean what they mean where you wrote them, always. If
 `ActionButton` has a parameter, a `let` or a `var` called `count` of its own, the
@@ -331,10 +425,24 @@ on to another view's binding. Every write goes to `wifi` in `Main`. There is no 
 in the view and no callback between the two, so tapping the button changes the
 caller's text in the same frame, and `Main` changing `wifi` moves the switch.
 
-A binding is declared with its type and has no default value: it is the caller's
-`var`, so there is nothing a default could stand in for. A view that wants to work
-without a caller's `var` keeps one of its own, and takes a plain parameter for its
-starting value.
+A binding is declared with its type. Without a default it is required: the call has
+to pass a `var`. With one, `bind selected: Int = 0`, the call may leave it out, and
+the view keeps a `var` of its own that starts at the default, as if it had written
+`var selected = 0`. A caller that passes `bind: page` owns the state, and one that
+passes nothing leaves it to the view; the view reads and writes it the same way
+either time. Compose's controls work like this, taking state when you hoist it and
+keeping it when you do not.
+
+```byld
+View Counter(bind n: Int = 0) {
+    Button("Taps: {n}") => n = n + 1
+}
+
+View Main() {
+    var shared = 10
+    Column { Counter() Counter(bind: shared) }
+}
+```
 
 ### At the call
 
@@ -439,6 +547,52 @@ If the view that owns the `var` goes away (a `when` turned false) while a view h
 its binding is still being used, nothing breaks: the binding keeps reading and writing
 the cell it was given, and the view that owned it starts over with a new one when it is
 shown again.
+
+## Context: values for everything a view draws
+
+A container often decides something for all its items: which tab is selected, how
+the bar looks. Writing it on every item invites a mixed bar, and an item written in
+the caller's block cannot see the container that places it. A *context* hands values
+down instead.
+
+```byld
+context TabsStyle {
+    current: Int = 0
+    select: Fn(Int) = none
+}
+
+View Tabs(bind current: Int = 0, content) {
+    provide TabsStyle(current: current, select: {|i| current = i })
+    Row { content }
+}
+
+View Tab(label: Str, index: Int) {
+    inject TabsStyle as s
+    Button(label) #[color: index == s.current ? 0xFFFFFF : 0x8A8AA0] => s.select(index)
+}
+
+View Main() {
+    Tabs {
+        Tab("Flights", 0)
+        Tab("Hotels", 1)
+    }
+}
+```
+
+`context Name { field: Type = default }` declares the values, each with a default.
+`provide Name(field: value)` at the top of a view gives them to everything it draws,
+slots included: a `Tab` written in the caller's block and drawn inside `Tabs` reads
+`Tabs`' context, not the caller's. `inject Name as s` reads the nearest provider above,
+at any depth, or the defaults when there is none, so a `Tab` alone still works. Values
+are live: change what `Tabs` provides and every `Tab` follows. A field may be a callback
+(`Fn`), which is how an item reports to its container, and may be `T?`. Providing a
+context twice in one view is `DuplicateProvide`, a name that is no context is
+`UnknownContext`, a field the context lacks is `UnknownField`, and a field without a
+default is `ContextFieldNeedsDefault`.
+
+Use a parameter for what one call decides and a context for what a container decides
+for all its items. A view that neither provides nor injects pays nothing for any of this.
+See `crates/byard-cli/examples/context_and_optional`.
 
 ## Views from other places
 

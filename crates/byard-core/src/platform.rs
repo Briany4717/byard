@@ -123,8 +123,9 @@ impl KeyModifiers {
     /// The modifiers are `shift`, `ctrl`, `alt` (or `option`), `meta` (or
     /// `cmd`, `super`) and `mod`, the platform's shortcut key (RFC-0041 §Q5).
     /// The key is a single character, or one of `Left`, `Right`, `Up`, `Down`,
-    /// `Home`, `End`, `Backspace`, `Delete`, `Enter`, `Tab`, `Escape` and
-    /// `Space`; case does not matter for those.
+    /// `Home`, `End`, `PageUp`, `PageDown`, `Insert`, `Backspace`, `Delete`,
+    /// `Enter`, `Tab`, `Escape` and `Space`, the arrows also as the platform
+    /// names them (`ArrowLeft`); case does not matter for those.
     ///
     /// # Errors
     ///
@@ -158,12 +159,15 @@ impl KeyModifiers {
             }
         }
         let name = match key.to_ascii_lowercase().as_str() {
-            "left" => "ArrowLeft".to_string(),
-            "right" => "ArrowRight".to_string(),
-            "up" => "ArrowUp".to_string(),
-            "down" => "ArrowDown".to_string(),
+            "left" | "arrowleft" => "ArrowLeft".to_string(),
+            "right" | "arrowright" => "ArrowRight".to_string(),
+            "up" | "arrowup" => "ArrowUp".to_string(),
+            "down" | "arrowdown" => "ArrowDown".to_string(),
             "home" => "Home".to_string(),
             "end" => "End".to_string(),
+            "pageup" | "page_up" => "PageUp".to_string(),
+            "pagedown" | "page_down" => "PageDown".to_string(),
+            "insert" | "ins" => "Insert".to_string(),
             "backspace" => "Backspace".to_string(),
             "delete" | "del" => "Delete".to_string(),
             "enter" | "return" => "Enter".to_string(),
@@ -174,7 +178,7 @@ impl KeyModifiers {
             "" => return Err(format!("`{chord}` names no key")),
             _ => {
                 return Err(format!(
-                    "`{key}` is not a key I know; try Left, Home, Delete or a single character"
+                    "`{key}` is not a key I know; use a single character or one of {KEY_NAMES}"
                 ));
             }
         };
@@ -187,6 +191,10 @@ impl KeyModifiers {
         self.mod_held() && self.shift
     }
 }
+
+/// The key names a command line accepts, as an error lists them.
+const KEY_NAMES: &str = "Left, Right, Up, Down, Home, End, PageUp, PageDown, Insert, Backspace, \
+     Delete, Enter, Tab, Escape or Space (an arrow also as ArrowLeft and so on)";
 
 /// A mouse/pointer button, expressed without depending on any windowing
 /// crate's types, mirrors the variants `winit::event::MouseButton` exposes
@@ -636,6 +644,18 @@ pub trait PlatformHost {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn a_key_is_spelt_short_or_as_the_platform_does() {
+        assert_eq!(
+            KeyModifiers::parse_chord("ArrowDown").map(|c| c.1),
+            Ok("ArrowDown".to_string())
+        );
+        assert_eq!(
+            KeyModifiers::parse_chord("down").map(|c| c.1),
+            Ok("ArrowDown".to_string())
+        );
+    }
+
     use super::*;
 
     /// Minimal `PlatformHost` that exercises only the trait's default
@@ -744,6 +764,17 @@ mod tests {
         assert_eq!(KeyModifiers::parse_chord("mod++").unwrap().1, "+");
         assert_eq!(KeyModifiers::parse_chord("+").unwrap().1, "+");
         assert_eq!(KeyModifiers::parse_chord("space").unwrap().1, " ");
+        for (given, name) in [
+            ("PageUp", "PageUp"),
+            ("pagedown", "PageDown"),
+            ("Insert", "Insert"),
+            ("home", "Home"),
+            ("END", "End"),
+        ] {
+            assert_eq!(KeyModifiers::parse_chord(given).unwrap().1, name);
+        }
+        let err = KeyModifiers::parse_chord("Flibber").unwrap_err();
+        assert!(err.contains("PageUp") && err.contains("Insert"), "{err}");
     }
 
     #[test]

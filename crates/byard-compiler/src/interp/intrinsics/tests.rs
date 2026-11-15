@@ -211,11 +211,51 @@ fn animating_a_paint_prop_is_still_allowed() {
 fn with_animation_on_a_layout_prop_is_rejected() {
     // Animating `width` would relayout every frame, a compile error, not a
     // silent slowdown (RFC-0010 §"Layout properties").
-    let e = errs("View V() { Box #[width: 100 with anim.spring()] {} }");
+    // (RFC-0061: `width` moves now; `grow` has no in-between to move through.)
+    let e = errs("View V() { Box #[grow: 1 with anim.spring()] {} }");
     assert!(matches!(
         &e[0],
         CompileError::LayoutPropNotAnimatable { .. }
     ));
+}
+
+/// RFC-0061: the sizes, the gap, and the padding and margin families take `with`,
+/// in the attributes and in an `on <state>` block.
+#[test]
+fn the_layout_properties_with_motion_take_with() {
+    for p in [
+        "width", "height", "gap", "p", "pt", "pr", "pb", "pl", "m", "mt", "mr", "mb", "ml", "mx",
+        "my",
+    ] {
+        assert_clean(&format!(
+            "View V() {{ Box #[{p}: 4 with anim.spring()] {{}} }}"
+        ));
+    }
+    assert_clean(
+        "View V() { Box #[p: (4, 8) with anim.spring(), m: (1, 2, 3, 4) with anim.spring()] {} }",
+    );
+}
+
+#[test]
+fn a_refused_layout_property_says_which_and_why() {
+    let why = |src: &str| {
+        let e = errs(src);
+        assert!(
+            matches!(&e[0], CompileError::LayoutPropNotAnimatable { .. }),
+            "{e:?}"
+        );
+        e[0].headline()
+    };
+    assert!(
+        why("View V() { Box #[grow: 1 with anim.spring()] {} }")
+            .contains("share of the free space")
+    );
+    assert!(
+        why("View V() { Box #[align: (true ? center : start) with anim.spring()] {} }")
+            .contains("keyword")
+    );
+    assert!(why("View V() { Text(\"a\") #[size: 9 with anim.spring()] {} }").contains("shaped"));
+    assert!(why("View V() { Box #[shrink: 1 with anim.spring()] {} }").contains("`shrink`"));
 }
 
 #[test]
@@ -249,10 +289,10 @@ fn nested_animated_values_still_check_the_innermost_value_and_every_curve() {
 #[test]
 fn an_animation_nested_inside_a_layout_expression_is_still_rejected() {
     for src in [
-        "View V() { Box #[width: ((true ? 200 : 20) with anim.linear(200ms)) + 0] {} }",
-        "View V() { Box #[height: 2 * (100 with anim.spring())] {} }",
-        "View V() { Box #[gap: (4 with anim.spring()) + 1] {} }",
-        "View V() { Box #[width: (anim.keyframes(0%: 0, 100%: 9, duration: 1s)) + 0] {} }",
+        "View V() { Box #[grow: ((true ? 2 : 1) with anim.linear(200ms)) + 0] {} }",
+        "View V() { Box #[shrink: 2 * (1 with anim.spring())] {} }",
+        "View V() { Box #[basis: (4 with anim.spring()) + 1] {} }",
+        "View V() { Box #[grow: (anim.keyframes(0%: 0, 100%: 9, duration: 1s)) + 0] {} }",
     ] {
         let e = errs(src);
         assert!(
@@ -281,9 +321,9 @@ fn keyframes_check_their_steps_and_are_rejected_on_a_layout_prop() {
         "a well-formed sequence on a paint prop checks clean"
     );
     // …on a layout property it would relayout every frame.
-    let e = errs("View V() { Box #[width: anim.keyframes(0%: 0, 100%: 200, duration: 1s)] {} }");
+    let e = errs("View V() { Box #[grow: anim.keyframes(0%: 0, 100%: 2, duration: 1s)] {} }");
     assert!(
-        matches!(&e[0], CompileError::LayoutPropNotAnimatable { prop, .. } if prop == "width"),
+        matches!(&e[0], CompileError::LayoutPropNotAnimatable { prop, .. } if prop == "grow"),
         "got {e:?}"
     );
     // A malformed sequence is reported, not silently dropped.

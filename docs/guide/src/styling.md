@@ -35,8 +35,9 @@ The ones that paint:
 | `color` | colour | Text colour, on `Text`, `Button` and `TextField` |
 | `radius` | length | Corner radius. A quad rounds each corner on its own |
 | `smooth` | `0` to `1` | Corner profile. `0` is a circular arc, about `0.6` a continuous corner like an Apple icon |
-| `opacity` | `0` to `1` | Of the whole element and what it holds |
+| `opacity` | `0` to `1` | Of the whole element and what it holds, a `Text` included |
 | `border`, `border_width` | colour, number | A line inside the edge. A box with a `border` and no `bg` draws just the line |
+| `border_gap` | `(start, length)` | A gap in the top edge of the border, below |
 | `outline`, `outline_width`, `outline_offset` | colour, number, number | A ring outside the shape, see [below](#outline-and-overlay) |
 | `overlay` | colour or gradient | A tint over `bg`, under the children, see [below](#outline-and-overlay) |
 | `shadow` | preset, tuple or list | See below |
@@ -67,12 +68,34 @@ A colour is an `Int`. Write `0xRRGGBB`, or `0xAARRGGBB` for alpha. A colour from
 theme is a name, and `.alpha()` makes it translucent: `t.primary.alpha(0.16)`.
 [Theming](theming.md) covers both.
 
+### A gap in a border
+
+`border_gap: (start, length)` leaves the top edge of the border out between `start` and
+`start + length` pixels from the element's left edge. It is for the outlined field whose label
+sits in the outline: what is under the border shows through the gap, so there is no patch to
+match to a background.
+
+```byld
+View Main() {
+    Column #[bg: 0x2B2930, p: 24, width: 280] {
+        Box #[border: 0xCAC4D0, border_width: 1, radius: 4, height: 48,
+              border_gap: (12, 52)] {
+            Text("Label") #[color: 0xCAC4D0, size: 12, ml: 16, mt: -7]
+        }
+    }
+}
+```
+
+It needs a `border` (on the element or in one of its states) and a pair of numbers, or it
+is an error. Keep the gap on the straight part of the edge: one that reaches into a rounded
+corner removes the border only along the top.
+
 ### Shadows
 
 ```byld
 View Main() {
     Column #[bg: 0xF2F3F5, p: 40, gap: 28, width: 400] {
-        // A preset: "sm", "md" or "lg".
+        // A preset: "sm", "md", "lg", "xl" or "2xl".
         Box #[bg: 0xFFFFFF, radius: 12, width: 320, height: 56, shadow: "md"] {}
 
         // Named fields: x, y, blur, spread and color, in any order.
@@ -86,6 +109,20 @@ View Main() {
     }
 }
 ```
+
+The presets are the elevations of Material, level 0 being no shadow at all:
+
+| Material level | Preset | Is |
+|----------------|--------|----|
+| 0 | `"none"` | no shadow |
+| 1 | `"sm"` | `(y: 1, blur: 3)` |
+| 2 | `"md"` | `(y: 3, blur: 8)` |
+| 3 | `"lg"` | `(y: 6, blur: 16)` |
+| 4 | `"xl"` | `(y: 8, blur: 20)` |
+| 5 | `"2xl"` | `(y: 12, blur: 28)` |
+
+A floating action button that sits at level 3 and lifts to level 4 on hover is
+`shadow: hovered ? "xl" : "lg" with anim.spring()`.
 
 A plain tuple is positional: `(x, y, blur, spread, color)`, and any slot may be
 left out from the end. A list paints its first shadow on top. A shadow follows
@@ -316,6 +353,7 @@ View Main() {
 | `invalid` | It has `invalid: true` |
 | `indeterminate` | A `Checkbox` has `indeterminate: true` |
 | `dragging` | A drag gesture is under way on it |
+| `focus_within` | It, or an element inside it, has keyboard focus |
 
 `selected` and `invalid` are plain attributes on any element. You decide when
 they are true, and the style reacts: `selected: tab == "home"` turns a tab
@@ -401,6 +439,35 @@ resting `radius`. Where there is no resting value to move back to, as for `overl
 `outline`, the element rests transparent. `on pressed` also shows while Space or Enter is
 held on a focused control, as it does for a press of the pointer.
 
+### States of another element
+
+An element named with `as name` publishes its states, and a state block on a descendant, or on an
+element after it in the same view, can name them: `on name.hover`, `on name.focused`,
+`on name.pressed`, any state in the table, joined with `+` to each other and to the element's own.
+A floating label and an indicator follow a field this way, with no `var` and no handler:
+
+```byld
+View LabelledField(label: Str, bind value: Str) {
+    ZStack #[width: 300, height: 64, alignment: top_start] {
+        Text(label) #[color: 0x79747E, ml: 16, mt: 18] {
+            on field.focused { color: 0x6750A4, translate.y: -18, scale: 0.75 }
+        }
+        TextField #[bind: value, width: 300, height: 56, indicator: none] as field
+        Box #[width: 300, height: 1, mt: 56, bg: 0x79747E] {
+            on field.focused + hover { bg: 0x6750A4 }
+        }
+    }
+}
+```
+
+A name belongs to the whole view, so the label may be written before its field. A name no element is
+tagged with is `UnknownStateTarget`, with the closest name. A block on another element's states, or on
+`focus_within`, changes what is painted and never the layout, so a layout attribute in one
+(`width`, `height`, `p`, `m`, `grow`, ...) is `LayoutInStateBlock`: a label that floats moves with
+`translate` and `scale`. The states are this frame's whichever is written first, pointer, focus and value states (`checked`,
+`selected`, `invalid`, `disabled`) alike. Two calls of one view keep their own
+names. See `examples/composing_components`.
+
 ## Responsive styles
 
 A block can depend on the window's width instead of a state:
@@ -458,6 +525,44 @@ error[UnknownBreakpoint]: no breakpoint `md` is declared
 ```
 
 The names are yours: Byard does not fix a `sm`, `md` and `lg`.
+
+### The window as a value
+
+A block can change how things look and how much room they take, but it cannot choose which
+elements are there. For that the window's size is a value, `window`, in any expression:
+
+```byld
+View Main() {
+    Column #[bg: 0x14141C, p: 20, gap: 12, grow: 1] {
+        Text("{window.width} x {window.height}") #[color: 0xE7ECF2]
+        when window.width >= 600 {
+            Row #[gap: 12] {
+                Box #[bg: 0x2B3A67, width: 120, height: 80, radius: 12] {}
+                Box #[bg: 0x1C2430, grow: 1, height: 80, radius: 12] {}
+            }
+        } else {
+            Column #[gap: 12] {
+                Box #[bg: 0x2B3A67, height: 80, radius: 12] {}
+                Box #[bg: 0x1C2430, height: 80, radius: 12] {}
+            }
+        }
+    }
+}
+```
+
+`window.width` and `window.height` are `Float`s, in logical pixels, and follow the window: the
+`when` above builds the row from 600 wide and the column below it, in the frame the window
+crossed the width, and the one that is not shown is not in the tree. A `let` that reads them follows
+them too, and so does an attribute (`width: window.width * 0.5`). `window` on its own is the
+record of the two. A program that never writes `window` pays nothing for it, and a view that has
+a `var` or a parameter called `window` reads its own.
+
+Beside `window.width` or `window.height` in a comparison, a bare name is a breakpoint from
+`[theme.breakpoints]`, the same names `on width >= md` takes, so the number is written once:
+`when window.width >= md`, `when window.height < lg`, `when md <= window.width`. One that is not
+declared is the same `UnknownBreakpoint`, and the comparison never holds. The rule is for that one
+place: `md + 1` is an unknown name. It is how a component such as a scaffold picks a navigation
+bar or a rail by itself, without the app passing a flag. See `crates/byard-cli/examples/window_and_roles`.
 
 ## Text
 

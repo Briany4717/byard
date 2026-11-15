@@ -16,6 +16,7 @@ use crate::diagnostics::Span;
 use crate::interp::env::Value;
 use crate::parser::ast::Expr;
 use crate::symbol::Symbol;
+use byard_core::frame::RepeatMode;
 
 /// Settling thresholds for the CPU-sampled animation path (RFC-0010).
 ///
@@ -54,6 +55,11 @@ pub(super) struct LoopClock {
     /// mount, and cleared by a retarget that cancels a `delay:`, never by one
     /// that restarts a stagger.
     honor_delay: bool,
+    /// The render this timeline began on, and whether it has been retargeted
+    /// since: what tells the move off an `on enter` value (the frame after
+    /// the element arrived) from a change the user made.
+    born_seq: u64,
+    retargeted: bool,
 }
 
 /// The persisted state of one animated gradient (RFC-0057 §3): where it left
@@ -113,6 +119,10 @@ pub(crate) struct AnimSlot {
     pub(super) row: u32,
     /// The view instance, or `0` outside any user view.
     pub(super) inst: u32,
+    /// The group of leaving elements the node is inside (RFC-0066 §3): `0` for
+    /// one that is not leaving. Not part of an [`AnimKey`], so an element that
+    /// starts to leave keeps the motions it had.
+    pub(super) leave: u32,
 }
 
 /// What a persisted animation belongs to: the `with` node that wrote it, **and
@@ -133,6 +143,11 @@ pub(crate) struct AnimKey {
     slot: u32,
     /// The view instance, or `0` outside any user view.
     inst: u32,
+    /// Which slot of a tuple this motion is (RFC-0061): `0` for a lone value,
+    /// `1..=4` for the slots of a radius, padding or margin that moves slot by
+    /// slot. The slots of one `with` retarget independently, so each needs a
+    /// motion of its own.
+    part: u8,
 }
 
 impl AnimKey {
@@ -142,7 +157,13 @@ impl AnimKey {
             span,
             slot: at.row,
             inst: at.inst,
+            part: 0,
         }
+    }
+
+    /// The key of slot `part` (`1..=4`) of the tuple this key names.
+    const fn part(self, part: u8) -> Self {
+        Self { part, ..self }
     }
 }
 
@@ -544,7 +565,7 @@ impl Interpreter {
             }
         }
         if !all_settled {
-            self.any_active = true;
+            self.note_active();
         }
         color_from_channels(current)
     }
@@ -617,7 +638,7 @@ impl Interpreter {
         };
         shown.offset = offset;
         if !settled {
-            self.any_active = true;
+            self.note_active();
         }
         Some(shown)
     }
@@ -676,7 +697,7 @@ impl Interpreter {
             blend_shadows(&record.from, &record.to, record.progress.sample(now))
         };
         if !settled {
-            self.any_active = true;
+            self.note_active();
         }
         shown
     }
@@ -735,7 +756,16 @@ impl Interpreter {
     /// A target change reseeds `from` to the current on-screen value so a
     /// mid-flight reversal is continuous.
     pub(super) fn eval_animated(&mut self, target: &Expr, anim: &Expr, key: AnimKey) -> Value {
+        let probing = self.first_measure_pending();
+        if probing {
+            self.ctx.start_read_log();
+        }
         let target_value = self.eval_pure(target);
+        self.snap_seq = if probing && self.read_first_measure() {
+            self.frame_seq
+        } else {
+            0
+        };
         // No advancing clock (a host that never calls `set_now_ms`, e.g. a
         // non-animating test path): resolve straight to the target so an
         // animation can never latch `has_active_animations` on `t = 0` forever.
@@ -758,18 +788,70 @@ impl Interpreter {
             Value::Tuple(items) if !spec.is_plain() => {
                 return self.eval_looped_pair(items, &spec, key);
             }
+            // RFC-0066: a pair moves on a plain curve too, each axis on a motion
+            // of its own, so `translate: (0, 0) with t.springSpatialFast` and the
+            // `on enter` and `on leave` that start and end it are motion and not
+            // a jump.
+            Value::Tuple(mut items) => {
+                if items.iter().any(|(_, v)| spacing_value(v).is_none()) {
+                    return Value::Tuple(items);
+                }
+                for (axis, (_, v)) in items.iter_mut().enumerate() {
+                    let to = spacing_value(v).unwrap_or_default();
+                    let part = u8::try_from(axis + 1).unwrap_or(4).min(4);
+                    *v = Value::Float(f64::from(self.animate_f32(to, &spec, key.part(part))));
+                }
+                return Value::Tuple(items);
+            }
             // Anything else can't be interpolated, pass it through untouched
             // (the checker already restricts `with` to numeric props).
             other => return other,
         };
+        Value::Float(f64::from(self.animate_f32(target_val, &spec, key)))
+    }
+
+    /// Whether the frame before this one was an element's first measurement
+    /// and its handler wrote something: only then is a read log of the
+    /// target worth taking.
+    fn first_measure_pending(&self) -> bool {
+        self.first_measure_seq != 0
+            && self.frame_seq == self.first_measure_seq + 1
+            && !self.first_measure_written.is_empty()
+    }
+
+    /// Whether the target, as it was just evaluated, read something an
+    /// element's first `on measure` wrote: only that value is where the
+    /// element *is*. A change the same frame made for another reason, a
+    /// branch of the target that did not read it, is still a change.
+    fn read_first_measure(&mut self) -> bool {
+        let (signals, memos) = self.ctx.take_read_log();
+        let written = &self.first_measure_written;
+        signals.iter().any(|s| written.contains(s))
+            || memos.iter().any(|m| self.ctx.memo_reads_any(*m, written))
+    }
+
+    /// Moves one number towards `target_val` on the motion `spec` names, under
+    /// `key`, and returns where it is now (RFC-0010, RFC-0025). Marks the frame
+    /// active until the motion settles. The scalar `with` and each slot of an
+    /// animated tuple ([`Self::animate_quad`]) go through here.
+    fn animate_f32(
+        &mut self,
+        target_val: f32,
+        spec: &crate::interp::anim::MotionSpec<'_>,
+        key: AnimKey,
+    ) -> f32 {
         // RFC-0025: a repeating, delayed or explicitly-started animation runs on
         // its own timeline; everything else keeps the original single-shot path
         // below, byte for byte.
         if !spec.is_plain() {
-            return Value::Float(f64::from(self.eval_looped(target_val, &spec, key)));
+            return self.eval_looped(target_val, spec, key);
         }
         let packed = pack_curve(spec.curve);
         let now = self.now_ms;
+        // The frame after an element is measured for the first time: what it
+        // wrote is where the element is, so an animation still on its first
+        // value starts from there and does not travel from the placeholder.
+        let measured = self.snap_seq != 0 && self.snap_seq == self.frame_seq;
         let motion = self
             .animations
             .entry(key)
@@ -782,7 +864,11 @@ impl Interpreter {
         // Retarget on a goal change: reseed `from` to where the property
         // actually is right now (interruptible spring), restart the clock.
         if (motion.to - target_val).abs() > f32::EPSILON {
-            let current = motion.sample(now);
+            let current = if measured && (motion.from - motion.to).abs() <= f32::EPSILON {
+                target_val
+            } else {
+                motion.sample(now)
+            };
             motion.from = current;
             motion.to = target_val;
             motion.start_ms = now;
@@ -798,9 +884,33 @@ impl Interpreter {
         // overshoot alive instead of freezing it at the first target crossing.
         let settled = motion.is_settled_with_eps(now, ANIM_SETTLE_EPS_POS, ANIM_SETTLE_EPS_VEL);
         if !settled {
-            self.any_active = true;
+            self.note_active();
         }
-        Value::Float(f64::from(sampled))
+        sampled
+    }
+
+    /// Moves the four slots of a radius, a padding or a margin towards
+    /// `target` on the motion `anim` names, each on a motion of its own
+    /// (RFC-0061), and returns where they are now.
+    ///
+    /// The slots are keyed by the `with` node's `span` and their index, so a
+    /// `?:` between `(4, 4, 0, 0)` and `4` retargets only the slots whose goal
+    /// changed, and an interrupted slot continues from where it is. With no
+    /// clock, or a curve the checker already rejected, the target is returned
+    /// as is.
+    pub(super) fn animate_quad(&mut self, target: [f32; 4], anim: &Expr, span: Span) -> [f32; 4] {
+        if !self.clock_set {
+            return target;
+        }
+        let Ok(spec) = crate::interp::anim::resolve_motion_in(anim, Some(&self.theme)) else {
+            return target;
+        };
+        let key = self.anim_key(span);
+        let mut out = target;
+        for (part, slot) in (1_u8..).zip(out.iter_mut()) {
+            *slot = self.animate_f32(*slot, &spec, key.part(part));
+        }
+        out
     }
 
     /// Drives one repeating / delayed / explicitly-started `with` animation
@@ -821,9 +931,10 @@ impl Interpreter {
         spec: &crate::interp::anim::MotionSpec<'_>,
         key: AnimKey,
     ) -> f32 {
-        let from_val = spec
-            .from
-            .map_or(target_val, |expr| self.eval_number(expr, target_val));
+        let from_val = match spec.from {
+            Some(expr) => self.eval_number(expr, target_val),
+            None => self.remembered_start(key, target_val, pack_curve(spec.curve)),
+        };
         let motion = byard_core::frame::Motion {
             from: from_val,
             to: target_val,
@@ -834,6 +945,34 @@ impl Interpreter {
             Some(phase) => motion.sample_secs(phase),
             None => from_val,
         }
+    }
+
+    /// Where a delayed, staggered or repeating animation with no `from:` starts
+    /// (RFC-0066 §3): the target it had before this one, so an element that
+    /// arrives at a value (`on enter` gave it the first) moves from that value
+    /// to its own, whatever the curve's delay or stagger. The target itself while
+    /// it has not changed, which is what an animation with no `from:` always did.
+    fn remembered_start(
+        &mut self,
+        key: AnimKey,
+        target: f32,
+        curve: byard_core::frame::MotionCurve,
+    ) -> f32 {
+        let now = self.now_ms;
+        let m = self
+            .animations
+            .entry(key)
+            .or_insert_with(|| byard_core::frame::Motion {
+                from: target,
+                to: target,
+                start_ms: now,
+                curve,
+            });
+        if (m.to - target).abs() > f32::EPSILON {
+            m.from = m.to;
+            m.to = target;
+        }
+        m.from
     }
 
     /// The pair form of [`Self::eval_looped`]: each component gets its own
@@ -856,6 +995,14 @@ impl Interpreter {
         let now = self.now_ms;
         // A pair has two components, so this only reaches the heap for a wider
         // tuple.
+        let mut starts: smallvec::SmallVec<[f32; 2]> = smallvec::SmallVec::new();
+        if from_value.is_none() {
+            for (axis, (_, v)) in items.iter().enumerate() {
+                let to = spacing_value(v).unwrap_or_default();
+                let part = u8::try_from(axis + 1).unwrap_or(4).min(4);
+                starts.push(self.remembered_start(key.part(part), to, curve));
+            }
+        }
         let motions: smallvec::SmallVec<[byard_core::frame::Motion; 2]> = items
             .iter()
             .enumerate()
@@ -867,7 +1014,7 @@ impl Interpreter {
                         .and_then(|(_, v)| spacing_value(v))
                         .unwrap_or(to),
                     Some(scalar) => spacing_value(scalar).unwrap_or(to),
-                    None => to,
+                    None => starts.get(axis).copied().unwrap_or(to),
                 };
                 byard_core::frame::Motion {
                     from,
@@ -929,7 +1076,7 @@ impl Interpreter {
         // Still inside the delay: hold the start value, and stay in the active
         // set so the frames that will start the motion keep coming.
         if elapsed < delay_ms {
-            self.any_active = true;
+            self.note_active();
             return None;
         }
         let period = motions
@@ -939,7 +1086,12 @@ impl Interpreter {
             .unwrap_or(Motion::MIN_PERIOD_MS);
         let phase = loop_phase(period, elapsed - delay_ms, spec.repeat, spec.reverse);
         if !phase.finished {
-            self.any_active = true;
+            // A loop that never ends does not keep a leaving element drawn.
+            if matches!(spec.repeat, RepeatMode::Infinite) {
+                self.endless_seq = self.frame_seq;
+            } else {
+                self.note_active();
+            }
         }
         Some(phase.t_secs)
     }
@@ -962,14 +1114,25 @@ impl Interpreter {
     /// Positions a keyframe sequence on the engine clock: which two steps
     /// surround "now" and how far between them the value sits (RFC-0025 §3).
     ///
-    /// Returns `None` when the sequence is malformed (the checker has already
-    /// reported it) or the host never advanced the clock. Marks the animation
+    /// Returns `None` when the sequence is malformed (reported, once, here or
+    /// by the attribute checker) or the host never advanced the clock. Marks the animation
     /// active unless a finite sequence has played out, the settling contract
     /// the whole animation system shares.
     fn keyframe_blend<'a>(&mut self, expr: &'a Expr) -> Option<KeyframeBlend<'a>> {
         use byard_core::frame::{MAX_KEYFRAME_STEPS, MotionCurve, keyframe_cursor, loop_phase};
 
-        let track = crate::interp::anim::resolve_keyframes_in(expr, Some(&self.theme))?.ok()?;
+        let track = match crate::interp::anim::resolve_keyframes_in(expr, Some(&self.theme))? {
+            Ok(track) => track,
+            // A sequence the attribute checker never sees (a coordinate in a
+            // path body, an argument of a shape) is reported here, once, so it
+            // is never a value that is silently flat.
+            Err(err) => {
+                if !self.errors.contains(&err) {
+                    self.errors.push(err);
+                }
+                return None;
+            }
+        };
         let key = self.anim_key(expr.span());
         // Without an advancing clock, resolve to the sequence's first value,
         // mirrors the `with` path, and never latches the active set at `t = 0`.
@@ -989,7 +1152,7 @@ impl Interpreter {
         let fingerprint = track.restart.map_or(0, |expr| self.restart_key(expr));
         let (elapsed, _) = self.loop_elapsed(key, fingerprint, false);
         if elapsed < delay_ms {
-            self.any_active = true;
+            self.note_active();
             let first = track.steps.first()?.value;
             return Some(KeyframeBlend {
                 lo: first,
@@ -1004,7 +1167,11 @@ impl Interpreter {
             track.reverse,
         );
         if !phase.finished {
-            self.any_active = true;
+            if matches!(track.repeat, RepeatMode::Infinite) {
+                self.endless_seq = self.frame_seq;
+            } else {
+                self.note_active();
+            }
         }
         // The step table is capped by the RFC (and validated on resolution), so
         // the timing lookup runs on the stack with no allocation.
@@ -1113,6 +1280,17 @@ impl Interpreter {
         self.anim_clocks.retain(|k, _| !dead.contains(&k.slot));
     }
 
+    /// Records that a motion sampled this frame has not settled: frames must
+    /// keep coming, and, for an element that is leaving, it is not gone yet
+    /// (RFC-0066 §3).
+    pub(super) fn note_active(&mut self) {
+        self.any_active = true;
+        let group = self.anim_slot.leave;
+        if group != 0 && !self.leave_busy.contains(&group) {
+            self.leave_busy.push(group);
+        }
+    }
+
     /// The animation key for `span` on the instance currently being rendered.
     pub(super) const fn anim_key(&self, span: Span) -> AnimKey {
         AnimKey::new(span, self.anim_slot)
@@ -1175,6 +1353,8 @@ impl Interpreter {
             last_seen_seq: seq,
             endpoints,
             honor_delay: true,
+            born_seq: seq,
+            retargeted: false,
         });
         if seq.saturating_sub(clock.last_seen_seq) > 1 {
             clock.start_ms = clock
@@ -1183,9 +1363,17 @@ impl Interpreter {
         }
         clock.last_seen_seq = seq;
         if clock.endpoints != endpoints {
+            // The first retarget, on the frame after an element with an `on
+            // enter` arrived, is the element leaving the values that block
+            // gave it for its own: a mount, whose delay is waited out.
+            let arriving = !clock.retargeted
+                && self.entering_seq != 0
+                && clock.born_seq == self.entering_seq
+                && seq == clock.born_seq + 1;
+            clock.retargeted = true;
             clock.endpoints = endpoints;
             clock.start_ms = now;
-            clock.honor_delay = !cancellable;
+            clock.honor_delay = !cancellable || arriving;
         }
         clock.last_seen_ms = now;
         (now.saturating_sub(clock.start_ms), clock.honor_delay)

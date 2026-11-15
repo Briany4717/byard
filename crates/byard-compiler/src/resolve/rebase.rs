@@ -52,6 +52,18 @@ pub(super) fn shift_const(decl: &mut ConstDecl, delta: u32) {
     shift_expr(&mut decl.init, delta);
 }
 
+/// Rebases a record type or a context (field types and defaults) by `delta`
+/// bytes.
+pub(super) fn shift_record(decl: &mut crate::parser::ast::RecordDecl, delta: u32) {
+    shift(&mut decl.span, delta);
+    for field in &mut decl.fields {
+        shift_type(&mut field.ty, delta);
+        if let Some(default) = &mut field.default {
+            shift_expr(default, delta);
+        }
+    }
+}
+
 /// Rebases an enum and its cases by `delta` bytes.
 pub(super) fn shift_enum(decl: &mut EnumDecl, delta: u32) {
     shift(&mut decl.span, delta);
@@ -129,6 +141,13 @@ fn shift_member(member: &mut Member, delta: u32) {
             shift(span, delta);
             shift_type(ty, delta);
         }
+        Member::Provide { ty, fields, span } => {
+            shift(span, delta);
+            shift_type(ty, delta);
+            for arg in fields {
+                shift_expr(&mut arg.value, delta);
+            }
+        }
         Member::Element(el) => shift_element(el, delta),
         Member::For {
             iter, body, span, ..
@@ -174,9 +193,14 @@ fn shift_member(member: &mut Member, delta: u32) {
                 shift_style_rule(rule, delta);
             }
         }
-        Member::Timer { action, span, .. }
-        | Member::Lifecycle { action, span, .. }
-        | Member::Measure { action, span } => {
+        Member::Timer {
+            dur, action, span, ..
+        } => {
+            shift(span, delta);
+            shift_expr(dur, delta);
+            shift_expr(action, delta);
+        }
+        Member::Lifecycle { action, span, .. } | Member::Measure { action, span } => {
             shift(span, delta);
             shift_expr(action, delta);
         }
@@ -276,9 +300,20 @@ fn shift_expr(expr: &mut Expr, delta: u32) {
                 shift_arg(arg, delta);
             }
         }
-        Expr::Lambda { body, span, .. } => {
+        Expr::Lambda {
+            body, span, slot, ..
+        } => {
             shift(span, delta);
+            for m in slot.iter_mut().flatten() {
+                shift_member(m, delta);
+            }
             shift_expr(body, delta);
+        }
+        Expr::SlotBlock { members, span } => {
+            shift(span, delta);
+            for m in members {
+                shift_member(m, delta);
+            }
         }
         Expr::Block(stmts, span) => {
             shift(span, delta);

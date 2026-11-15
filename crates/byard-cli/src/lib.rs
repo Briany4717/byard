@@ -178,10 +178,19 @@ enum Command {
         /// how long it is held. Repeatable, in order with `--tap`.
         #[arg(long, value_name = "X,Y", value_parser = parse_point)]
         hold: Vec<(f32, f32)>,
+        /// Release the pointer at a point, `X,Y`, ending a `--hold`: with a
+        /// `--hover` between them, a drag. Repeatable, in order with `--tap`.
+        #[arg(long, value_name = "X,Y", value_parser = parse_point)]
+        release: Vec<(f32, f32)>,
         /// Move the pointer to a point without pressing, `X,Y`, so
         /// `on hover` shows. Repeatable, in order with `--tap`.
         #[arg(long, value_name = "X,Y", value_parser = parse_point)]
         hover: Vec<(f32, f32)>,
+        /// Drag from one point to another before the picture, `X,Y:X,Y`:
+        /// a press at the first, eight moves, a release at the second.
+        /// Repeatable, in order with `--tap`.
+        #[arg(long, value_name = "X,Y:X,Y", value_parser = parse_drag)]
+        drag: Vec<commands::shot::Drag>,
         /// Press a key before the picture, like `Left`, `shift+Left` or
         /// `mod+a`; repeatable. Applied in order with `--tap` and `--type`.
         #[arg(long, value_name = "KEY", value_parser = parse_key)]
@@ -252,6 +261,14 @@ fn parse_point(s: &str) -> Result<(f32, f32), String> {
     ))
 }
 
+/// `X,Y:X,Y`, for `byard shot --drag`.
+fn parse_drag(s: &str) -> Result<commands::shot::Drag, String> {
+    let (from, to) = s
+        .split_once(':')
+        .ok_or("expected X,Y:X,Y, like 200,600:200,300")?;
+    Ok((parse_point(from)?, parse_point(to)?))
+}
+
 /// A key chord, for `byard shot --key`.
 fn parse_key(s: &str) -> Result<commands::shot::Key, String> {
     let (mods, name) = byard_core::KeyModifiers::parse_chord(s)?;
@@ -261,11 +278,14 @@ fn parse_key(s: &str) -> Result<commands::shot::Key, String> {
 /// The taps, keys and typed text of `byard shot`, in the order they were
 /// written on the command line. clap collects each flag into its own list, so
 /// the order between lists is read back from the positions it recorded.
+#[allow(clippy::too_many_arguments)]
 fn shot_steps(
     matches: &clap::ArgMatches,
     taps: &[(f32, f32)],
     holds: &[(f32, f32)],
+    releases: &[(f32, f32)],
     hovers: &[(f32, f32)],
+    drags: &[commands::shot::Drag],
     keys: &[commands::shot::Key],
     typed: &[String],
     waits: &[u32],
@@ -293,10 +313,22 @@ fn shot_steps(
             .map(|(i, &(x, y))| (i, Step::Hold(x, y))),
     );
     steps.extend(
+        at("release")
+            .into_iter()
+            .zip(releases)
+            .map(|(i, &(x, y))| (i, Step::Release(x, y))),
+    );
+    steps.extend(
         at("hover")
             .into_iter()
             .zip(hovers)
             .map(|(i, &(x, y))| (i, Step::Hover(x, y))),
+    );
+    steps.extend(
+        at("drag")
+            .into_iter()
+            .zip(drags)
+            .map(|(i, &(from, to))| (i, Step::Drag(from, to))),
     );
     steps.extend(
         at("key")
@@ -388,7 +420,9 @@ pub fn main() {
             light,
             tap,
             hold,
+            release,
             hover,
+            drag,
             key,
             type_text,
             wait,
@@ -412,7 +446,9 @@ pub fn main() {
             } else {
                 None
             },
-            steps: &shot_steps(&matches, &tap, &hold, &hover, &key, &type_text, &wait),
+            steps: &shot_steps(
+                &matches, &tap, &hold, &release, &hover, &drag, &key, &type_text, &wait,
+            ),
         }),
         Command::Test {
             path,
@@ -454,7 +490,9 @@ mod tests {
         let Command::Shot {
             tap,
             hold,
+            release,
             hover,
+            drag,
             key,
             type_text,
             wait,
@@ -463,7 +501,9 @@ mod tests {
         else {
             panic!("a shot");
         };
-        shot_steps(&matches, &tap, &hold, &hover, &key, &type_text, &wait)
+        shot_steps(
+            &matches, &tap, &hold, &release, &hover, &drag, &key, &type_text, &wait,
+        )
     }
 
     fn key(chord: &str) -> Step {
@@ -520,6 +560,47 @@ mod tests {
                 Step::Hold(200.0, 120.0),
                 Step::Tap(1.0, 2.0),
                 Step::Hover(7.0, 8.0),
+            ]
+        );
+    }
+
+    /// RFC-0063: a drag is a hold, a hover and a release.
+    #[test]
+    fn a_drag_is_a_hold_a_hover_and_a_release() {
+        assert_eq!(
+            steps_of(&[
+                "shot",
+                "--hold",
+                "10,10",
+                "--hover",
+                "50,10",
+                "--release",
+                "50,10"
+            ]),
+            [
+                Step::Hold(10.0, 10.0),
+                Step::Hover(50.0, 10.0),
+                Step::Release(50.0, 10.0)
+            ]
+        );
+    }
+
+    #[test]
+    fn a_drag_is_one_step_in_the_order_written() {
+        assert_eq!(
+            steps_of(&[
+                "shot",
+                "--tap",
+                "1,2",
+                "--drag",
+                "10,20:30,40",
+                "--wait",
+                "5"
+            ]),
+            [
+                Step::Tap(1.0, 2.0),
+                Step::Drag((10.0, 20.0), (30.0, 40.0)),
+                Step::Wait(5)
             ]
         );
     }

@@ -63,6 +63,10 @@ pub struct Param {
     /// (RFC-0051): the caller passes a `var`, and the view reads and writes it
     /// as its own.
     pub bind: bool,
+    /// Whether the type was written `T?` (RFC-0065): the call may leave the
+    /// parameter out (`= none`) or pass `none`, and the view reads it with `??`
+    /// or inside a `!= none` branch.
+    pub optional: bool,
     /// Source span.
     pub span: Span,
 }
@@ -150,6 +154,9 @@ pub struct RecordDecl {
     pub fields: Vec<RecordField>,
     /// Written `private type …` (RFC-0055).
     pub private: bool,
+    /// Declared `context Name { … }` rather than `type` (RFC-0065): the fields
+    /// carry defaults, and a view `provide`s and `inject`s it.
+    pub context: bool,
     /// Source span.
     pub span: Span,
 }
@@ -197,6 +204,9 @@ pub struct RecordField {
     pub ty: Type,
     /// Whether a value may leave it out (`?`).
     pub optional: bool,
+    /// The default, written `= expr`: every field of a context has one
+    /// (RFC-0065). A `type`'s field has none.
+    pub default: Option<Expr>,
 }
 
 /// A top-level `fn` (RFC-0002, top-level functions): a pure helper visible to
@@ -264,6 +274,16 @@ pub enum Member {
         ty: Type,
         /// Local binding name.
         name: Symbol,
+        /// Source span.
+        span: Span,
+    },
+    /// `provide Name(field: expr, …)`, the values a view gives to everything it
+    /// draws, slots included (RFC-0065 §1).
+    Provide {
+        /// The context provided, a named type.
+        ty: Type,
+        /// The fields written, `field: value`.
+        fields: Vec<Arg>,
         /// Source span.
         span: Span,
     },
@@ -348,8 +368,9 @@ pub enum Member {
     Timer {
         /// `true` for `every` (repeating), `false` for `after` (one-shot).
         every: bool,
-        /// The interval or delay, in milliseconds.
-        dur_ms: u64,
+        /// The interval or delay, in milliseconds: a literal (`300ms`, `2s`) or
+        /// any expression that is a number of them (`wait * 1ms`).
+        dur: Expr,
         /// The action to run on each fire.
         action: Expr,
         /// Source span.
@@ -473,6 +494,94 @@ pub struct ElementNode {
     pub span: Span,
 }
 
+impl ElementNode {
+    /// The members of every slot block written as an argument of this call
+    /// (RFC-0062), in written order: elements in them are part of this view's
+    /// body as much as its children are.
+    pub fn slot_members(&self) -> impl Iterator<Item = &[Member]> {
+        let attrs = self.attrs.iter().filter_map(|a| match &a.kind {
+            AttrKind::Prop { value } => Some(value),
+            _ => None,
+        });
+        self.content
+            .iter()
+            .map(|a| &a.value)
+            .chain(attrs)
+            .filter_map(|v| match v {
+                Expr::SlotBlock { members, .. }
+                | Expr::Lambda {
+                    slot: Some(members),
+                    ..
+                } => Some(members.as_slice()),
+                _ => None,
+            })
+    }
+
+    /// This call with each `{ … }` argument that reads both ways settled by
+    /// the callee's parameters (RFC-0062 §2): the actions for a name `is_callback`
+    /// says is an `Fn`, the elements for any other. `None` when no argument
+    /// was ambiguous, which is nearly every call.
+    #[must_use]
+    pub fn with_blocks_settled(
+        &self,
+        is_slot: impl Fn(&Symbol) -> bool,
+        is_callback: impl Fn(&Symbol) -> bool,
+    ) -> Option<ElementNode> {
+        let ambiguous = |v: &Expr| matches!(v, Expr::Lambda { slot: Some(_), .. });
+        let any = self.content.iter().any(|a| ambiguous(&a.value))
+            || self
+                .attrs
+                .iter()
+                .any(|a| matches!(&a.kind, AttrKind::Prop { value } if ambiguous(value)));
+        if !any {
+            return None;
+        }
+        let settle = |name: Option<&Symbol>, value: &Expr| -> Option<Expr> {
+            let Expr::Lambda {
+                slot: Some(members),
+                params,
+                types,
+                body,
+                span,
+            } = value
+            else {
+                return None;
+            };
+            // Elements for a `Slot`, and for a parameter that is no callback
+            // either, so that the checker can say it wanted a `Slot`.
+            Some(if name.is_some_and(|n| is_slot(n) || !is_callback(n)) {
+                Expr::SlotBlock {
+                    members: members.clone(),
+                    span: *span,
+                }
+            } else {
+                Expr::Lambda {
+                    params: params.clone(),
+                    types: types.clone(),
+                    body: body.clone(),
+                    slot: None,
+                    span: *span,
+                }
+            })
+        };
+        let mut node = self.clone();
+        for arg in &mut node.content {
+            if let Some(settled) = settle(arg.name.as_ref(), &arg.value) {
+                arg.value = settled;
+            }
+        }
+        for attr in &mut node.attrs {
+            let name = attr.name.clone();
+            if let AttrKind::Prop { value } = &mut attr.kind {
+                if let Some(settled) = settle(Some(&name), value) {
+                    *value = settled;
+                }
+            }
+        }
+        Some(node)
+    }
+}
+
 /// One `#[...]` attribute: either a property (`name: expr`) or an engine event
 /// (`name(payload)? => expr`), RFC-0003 D4-bis. The kind is decided
 /// syntactically by the separator; a mismatch against the intrinsic's contract
@@ -547,6 +656,13 @@ pub enum StyleStateKind {
     /// The element holds keyboard focus *and* focus got there by the
     /// keyboard (or into a text field), so a ring is wanted (RFC-0052).
     FocusVisible,
+    /// The element, or an element inside it, holds keyboard focus (RFC-0062).
+    FocusWithin,
+    /// The element's first frame: the values it arrives from (RFC-0066 §3).
+    Enter,
+    /// The element is leaving, kept drawn until its motion ends: the values it
+    /// goes to (RFC-0066 §3).
+    Leave,
 }
 
 impl StyleStateKind {
@@ -567,6 +683,9 @@ impl StyleStateKind {
             "indeterminate" => Some(Self::Indeterminate),
             "dragging" => Some(Self::Dragging),
             "focus_visible" => Some(Self::FocusVisible),
+            "focus_within" => Some(Self::FocusWithin),
+            "enter" => Some(Self::Enter),
+            "leave" => Some(Self::Leave),
             _ => None,
         }
     }
@@ -585,11 +704,14 @@ impl StyleStateKind {
             Self::Indeterminate => "indeterminate",
             Self::Dragging => "dragging",
             Self::FocusVisible => "focus_visible",
+            Self::FocusWithin => "focus_within",
+            Self::Enter => "enter",
+            Self::Leave => "leave",
         }
     }
 
     /// Every state name, for `closest_match` suggestions.
-    pub const NAMES: [&'static str; 10] = [
+    pub const NAMES: [&'static str; 13] = [
         "hover",
         "pressed",
         "focused",
@@ -600,6 +722,9 @@ impl StyleStateKind {
         "indeterminate",
         "dragging",
         "focus_visible",
+        "focus_within",
+        "enter",
+        "leave",
     ];
 }
 
@@ -613,6 +738,9 @@ pub struct StateBlock {
     /// apply (RFC-0024 combined selectors: `on focused+hover { … }`). A single
     /// state is the common case; the block's *specificity* is `states.len()`.
     pub states: Vec<StyleStateKind>,
+    /// States of *other* elements, named with `as` (RFC-0062): `on field.focused`.
+    /// Every one must hold, together with `states`, for the block to apply.
+    pub remote: Vec<RemoteState>,
     /// The attributes overlaid onto the base while every `states` entry is active.
     pub attrs: Vec<Attr>,
     /// A viewport condition that must also hold (RFC-0016 responsive
@@ -621,6 +749,21 @@ pub struct StateBlock {
     pub viewport: Option<ViewportCond>,
     /// Source span.
     pub span: Span,
+}
+
+/// One `name.state` condition of a state block (RFC-0062): a state of the
+/// element tagged `as name`.
+#[derive(Clone, Debug, PartialEq)]
+pub struct RemoteState {
+    /// The name the element was tagged with.
+    pub name: Symbol,
+    /// The state that must hold on it.
+    pub kind: StyleStateKind,
+    /// Source span of `name.state`.
+    pub span: Span,
+    /// The identity of the named element, set when the block is lowered; `None`
+    /// before, and for a name that was not declared (which is an error).
+    pub target: Option<u32>,
 }
 
 /// Which viewport extent a responsive block compares (RFC-0016).
@@ -857,6 +1000,11 @@ pub enum Expr {
         types: Vec<Option<Type>>,
         /// The body expression.
         body: Box<Expr>,
+        /// A `{ … }` argument of a view call that reads both as actions and as
+        /// elements (`{ Text("x") }`, `{ Api.save() }`): the elements. The
+        /// callee's parameter says which it was meant to be (RFC-0062 §2), and
+        /// a call resolves it before anything else reads the argument.
+        slot: Option<Vec<Member>>,
         /// Source span.
         span: Span,
     },
@@ -869,6 +1017,16 @@ pub enum Expr {
     ///
     /// [`Value::Unit`]: crate::interp::env::Value::Unit
     Block(Vec<Expr>, Span),
+    /// A block of elements handed to a `Slot` parameter at a view call
+    /// (RFC-0062): `leading: { Icon("wifi") }`. Written in the caller, lowered
+    /// there, and placed by the callee by name. Only meaningful as a call's
+    /// argument; anywhere else the checker says so.
+    SlotBlock {
+        /// The elements, `when`s and `for`s the block holds.
+        members: Vec<Member>,
+        /// Source span.
+        span: Span,
+    },
     /// An assignment `target op value` (`= += -=`).
     Assign {
         /// The l-value target.
@@ -1049,6 +1207,7 @@ impl Expr {
             | Self::ControllerCall { span, .. }
             | Self::Lambda { span, .. }
             | Self::Block(_, span)
+            | Self::SlotBlock { span, .. }
             | Self::Assign { span, .. }
             | Self::Postfix { span, .. }
             | Self::Unary { span, .. }

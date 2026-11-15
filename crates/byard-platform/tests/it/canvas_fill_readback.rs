@@ -230,6 +230,32 @@ fn a_filled_path_paints_its_interior_and_leaves_the_rest_alone() {
 }
 
 #[test]
+fn a_filled_path_stops_at_the_clip_it_was_drawn_under() {
+    let Some((device, queue, _turn)) = try_device() else {
+        eprintln!("no GPU adapter, skipping canvas-fill readback");
+        return;
+    };
+    let mut frame = RenderFrame::new();
+    // The path is the whole card; the clip is its left quarter.
+    frame.begin_clip(byard_core::frame::Rect::new(
+        CARD[0],
+        CARD[1],
+        CARD[2] * 0.25,
+        CARD[3],
+    ));
+    frame.push_fill(fill(CARD, [0.0, 1.0, 0.0, 1.0], None));
+    frame.end_clip();
+    frame.request_full_redraw();
+    let rb = render(&device, &queue, &frame);
+
+    let y = CARD[1] + CARD[3] * 0.5;
+    let kept = rb.green(CARD[0] + CARD[2] * 0.1, y);
+    assert!(kept > 0.9, "inside the clip the fill is drawn: {kept}");
+    let cut = rb.green(CARD[0] + CARD[2] * 0.6, y);
+    assert!(cut < 0.1, "outside it the fill is cut: {cut}");
+}
+
+#[test]
 fn a_path_gradient_runs_across_the_paths_own_bounds() {
     let Some((device, queue, _turn)) = try_device() else {
         eprintln!("no GPU adapter, skipping canvas-fill readback");

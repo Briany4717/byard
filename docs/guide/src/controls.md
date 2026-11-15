@@ -118,6 +118,9 @@ View Main() {
 error[BindNotAVar]: `TextField #[bind: value]` cannot change `value`: a parameter is a copy of what the caller passed
 ```
 
+A `bind` may have a default, `bind value: Str = ""`: a call that passes no `var` gets
+one the view keeps for itself.
+
 The message names the fix: declare it `bind value: Str`. A view that wants to keep a
 copy of what it was given, to edit it and hand the result up when the user is done,
 still takes a value and a callback. `examples/reusable_field` does.
@@ -158,6 +161,17 @@ field falls back to 200. Its height is 36 unless `height` says otherwise. The te
 left edge unless `p` or `pl` says otherwise; that inset is part of the field and stays at 10,
 so a design that wants none writes `p: (horizontal: 0)`.
 
+`text_align: center` or `text_align: end` places the text, the placeholder and the caret in the
+field's content box instead of at its start, for a digit box or a number that reads from the
+right; `start` is the default. Text longer than the box scrolls as before. It is for a
+one-line field: on one with `lines`, `min_lines` or `max_lines` it is an
+`InvalidAttributeCombination`.
+
+```byld,fragment
+var hour = "12"
+TextField #[bind: hour, width: 96, height: 72, typo: displayMedium, text_align: center]
+```
+
 While it has focus a field draws a 2 pixel line in the theme's `primary` along its bottom edge.
 `indicator: none` leaves it out, for a design that draws its own, and `indicator: line` is the
 default. Whatever else a focused field should look like is the field's own `border` and
@@ -172,6 +186,31 @@ Its events are `input` and `change`, which run after each edit, and `submit`, wh
 runs on Enter. Each can name the text, as `input(text) => …`. See
 [events](events-and-actions.md#handlers-that-take-a-value). An edit that changes nothing,
 such as Backspace at the start, runs nothing.
+
+### More than one line
+
+`lines` makes a field several lines high, and `min_lines` and `max_lines` let it grow with
+what it holds:
+
+```byld,fragment
+TextField #[bind: notes, lines: 3, width: 320]                      // always 3 lines
+TextField #[bind: notes, min_lines: 2, max_lines: 6, width: 320]    // 2 to 6, then it scrolls
+```
+
+Long lines wrap at the field's width. Enter inserts a line break and does not run `submit`;
+`Mod`+Enter runs it instead, without a break. A paste keeps its breaks. Up and
+Down move between lines and keep the column, Home and End go to the ends of a line, and
+`Mod`+Home and `Mod`+End to the ends of the text (`Cmd`+Up and `Cmd`+Down on macOS), and PageUp and
+PageDown a page of lines. The wheel and a trackpad scroll a field that holds more lines than it
+shows (at its top or bottom the wheel goes on to a `ScrollView` around it), and the text stays where it was scrolled until the caret moves or something is typed. A
+screen reader is told the field has several lines. The
+selection is painted a rectangle to a line, and the text scrolls to keep the caret in view
+once it is longer than the field. The vertical padding is 8 unless `p`, `pt` or `pb` says
+otherwise, an explicit `height` beats `lines`, and `min_lines` alone has no ceiling.
+
+`lines: 1`, `max_lines: 1` and writing none of them are the single-line field, so a view can
+forward `lines: lines` with a default of 1. `lines` together with `min_lines` or `max_lines`,
+a minimum above the maximum, and a count below 1 are errors.
 
 ### Editing
 
@@ -196,7 +235,7 @@ more for it. While it has focus:
 
 `Mod` is Command on macOS and Control elsewhere. A character is a whole grapheme, so
 an accented letter or an emoji moves and deletes as one. Typing replaces the selection.
-A paste is one line: its line breaks become spaces. The clipboard is the system's.
+A paste is one line: its line breaks become spaces (a [multiline field](#more-than-one-line) keeps them). The clipboard is the system's.
 
 Typing is undone a word at a time, and a paste, a cut or a deleted selection is a step of
 its own. When the `var` is written from somewhere else, such as a button's action or a
@@ -342,19 +381,20 @@ View Main() {
 ```
 
 A role that implies focus is `button`, `toggle_button`, `switch`, `checkbox`, `radio`,
-`tab`, `menu_item` and `link`. A role alone does not put an element in the Tab order if it
+`tab`, `menu_item`, `link`, `grid_cell` and `list_item`. A role alone does not put an element in the Tab order if it
 has nothing to press; an element with a `focus =>`, a `blur =>` or a `focused:` is in it
 whatever its role, and a `tap` there is pressed by the keys too. A `Box` with only a `tap`
 and no role stays out of the order. What presses it follows the role:
 
 | Role | Space | Enter |
 |------|-------|-------|
-| none, `button`, `toggle_button`, `menu_item`, `tab` | presses | presses |
+| none, `button`, `toggle_button`, `menu_item`, `tab`, `list_item` | presses | presses |
 | `switch` | presses | presses |
 | `checkbox`, `radio` | presses | does nothing |
 | `link` | does nothing | presses |
 
-A key a role does not take goes on to the element's own `key_down`. Holding a key presses
+A key a role does not take goes on to the element's own `key_down`, which any element Tab
+can reach takes (see [Events and actions](events-and-actions.md)). Holding a key presses
 once.
 
 A row with `a11y_role: tab_list`, or `radio_group`, holds the elements with the role `tab`
@@ -366,11 +406,28 @@ or `radio` inside it as a group, and the arrow keys walk it:
 | Left, Up | Focus the previous, wrapping |
 | Home, End | Focus the first, the last (a `tab_list` only) |
 
+A group is one stop for Tab, as the WAI-ARIA pattern for tab lists and radio groups has it. Tab enters it at the member that is selected (`a11y_selected`
+or `a11y_checked` true), or at the first when none is, and the next Tab leaves it;
+Shift+Tab comes back to the selected one. The arrows move inside it.
+
+A `grid` is a group too, of the `grid_cell`s in its `row`s: it is one Tab stop, and the arrows
+move by cell and by row. Its keys, and the ones it leaves to the cell (PageUp and PageDown
+among them), are in [accessibility](accessibility.md#grids-and-spin-buttons).
+
 A disabled member is skipped. In a `radio_group` the one that gets focus is also pressed, as
 the arrow keys select among built-in `RadioButton`s. In a `tab_list` it is not: Enter or
 Space selects, and a tab that should select as focus arrives says `focus =>`. The arrows
 draw the ring, like Tab. [Accessibility](accessibility.md) has the roles and what each
 attribute tells a reader.
+
+## Moving focus yourself
+
+`autofocus: true` names the element focus goes to when its [overlay opens](layout.md#where-focus-goes);
+on one that is not in an overlay it takes focus the first time it is drawn, if nothing has it,
+and in an overlay that is already open, the first time it is drawn, if nothing in the overlay has it. It
+is `AutofocusNeedsFocus` on an element nothing can focus. `focused: v` goes both ways: a write of
+`true` to `v` focuses the element if it can take focus and is drawn, `false` blurs it, and when
+several are written in one frame the last wins.
 
 ## Disabled, focused, invalid
 

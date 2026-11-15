@@ -829,6 +829,8 @@ fn assert_f32_eq(actual: f32, expected: f32) {
 fn line(x: f32, y: f32, text: &str, font_size: f32, dirty: bool) -> TextLine {
     TextLine {
         align: crate::frame::TextAlign::Start,
+        max_lines: 0,
+        ellipsis: false,
         weight: 400,
         family: None,
         variations: None,
@@ -1493,6 +1495,7 @@ fn decorated_instance_attributes_land_on_their_fields() {
         (12, 172, wgpu::VertexFormat::Float32x4),
         (13, 188, wgpu::VertexFormat::Float32x4),
         (14, 204, wgpu::VertexFormat::Uint32),
+        (15, 208, wgpu::VertexFormat::Float32x2),
     ];
     let actual: Vec<(u32, u64, wgpu::VertexFormat)> = layout
         .attributes
@@ -1502,7 +1505,7 @@ fn decorated_instance_attributes_land_on_their_fields() {
     assert_eq!(actual, expected);
     assert_eq!(
         std::mem::size_of::<DecoratedInstance>(),
-        208,
+        216,
         "the packing changed which locations are read, not a byte of what is uploaded"
     );
 }

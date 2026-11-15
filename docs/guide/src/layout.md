@@ -89,8 +89,28 @@ View Main() {
 Without `shrink: 0` the circle is squeezed to a sliver by the wide bar beside it.
 A child never shrinks below what its content needs, so the bar must be told it may:
 `width: 0` with `grow: 1` starts it from nothing and gives it what is left, and the
-`Clip` cuts the bar to that. A one-line `Text` between two icons takes the same
+`Clip` cuts the bar to that. A `Clip` lays what is inside it out at its own size, at any
+width of its own, and cuts the rest off; a child fills it only if it asks
+(`align_self: stretch`). So an `on measure` there reads the content's width, also while a
+label slides open. A one-line `Text` between two icons takes the same
 `grow: 1, width: 0`, or it pushes the icon after it out of the row.
+
+### Minimum and maximum
+
+`min_width`, `max_width`, `min_height` and `max_height` bound the size layout settles
+on, in logical pixels: a size under the minimum is raised to it, one over the maximum
+is lowered to it, and when the two disagree the minimum wins, as in CSS. They work on
+everything that takes `width` and `height`, so a card that is "at most 560 wide" and a
+chip that is "at least 32 high" are one attribute each, and they hold when the content
+or the window changes, which a `width` does not. Like every layout attribute they take
+a value that may be computed but not animated.
+
+```byld,fragment
+Box #[bg: 0x2B2930, radius: 12, p: 16, max_width: 560, min_height: 48] {}
+```
+
+A `Button` has a minimum already, the theme's touch size; writing `min_height` or
+`min_width` on the button replaces it.
 
 ## Space
 
@@ -108,6 +128,38 @@ Named sides are `top`, `right`, `bottom`, `left`, `horizontal` and `vertical`. A
 named form cannot mix with a positional one, and naming a side twice, or `left`
 beside `horizontal`, is an error. Single sides have short forms too: `pt`, `pr`,
 `pb`, `pl`, and for margin `mt`, `mr`, `mb`, `ml`, `mx` and `my`.
+
+Each slot of a tuple is an expression, and a `?:` may choose between a tuple and a
+number: `p: wide ? (8, 24) : 12`. Sizes, gap, padding and margin move with `with`,
+also inside `on pressed` and the other state blocks; see [Motion](motion.md).
+
+A `let` written inside a `for` or `when` body is defined there, per row, and can feed
+any value in it: `for i, x in xs { let q = i + 3  Box #[radius: q] {} }`.
+
+### A row that wraps
+
+A `Row` with `wrap: true` moves the children that do not fit to a new line, the way a
+set of chips does in a narrow window. `gap` is the space between neighbours on a line and
+`row_gap` the space between lines; `row_gap` is `gap` when it is not written.
+
+```byld
+View Chip(label: Str) {
+    Text(label) #[bg: 0xD0BCFF, color: 0x1D1B20, radius: 8, p: (6, 12)]
+}
+
+View Main() {
+    Row #[wrap: true, gap: 8, row_gap: 12, width: 220, bg: 0x1E1E2A, p: 10] {
+        Chip("Bluegrass")
+        Chip("Jazz")
+        Chip("Folk")
+        Chip("Electronic")
+    }
+}
+```
+
+The row is as tall as its lines. `wrap` can be a value, so a row can wrap only on a
+narrow window. `row_gap` without `wrap: true` is an error, since there are no lines to
+put space between, and only `Row` wraps. See `examples/layout_and_text`.
 
 ## Alignment
 
@@ -195,11 +247,13 @@ View Main() {
 ```
 
 The values are `center`, `top`, `bottom`, `start`, `end`, and the corners
-`top_start`, `top_end`, `bottom_start` and `bottom_end`.
+`top_start`, `top_end`, `bottom_start` and `bottom_end`. They place a child along both axes,
+whether the stack is wider than its children or not.
 
 A child that should fill the stack says `grow: 1` or `align_self: stretch`. It then takes the
 stack's whole width and height, unless it has a `width` or a `height` of its own, which it
-keeps. This is how an overlay or a background layer is written:
+keeps, and along that axis it sits where `alignment` puts it (a `Box #[height: 1, align_self:
+stretch]` in a `bottom_start` stack is a rule across the bottom). This is how an overlay or a background layer is written:
 
 ```byld
 View Main() {
@@ -251,8 +305,13 @@ A `ScrollView` also snaps to pages or items (`snap: page`, `snap: item`, with
 `snap_align`), reports `page` and `page_count`, calls `end_reached =>` near the
 end for infinite lists, and can pull to refresh (`pull_refresh: true` with
 `refresh =>`). A header that shrinks as you scroll is `collapse_header: true`
-with `collapse_min`; the children of that header read the engine's
-`scroll_fraction`, from 0 to 1. The `scroll_snap` and `collapse_header` examples
+with `collapse_min`; the header is its first child, and keeps the `height` it is given
+whatever the content below measures; the children of that header read the engine's
+`scroll_fraction`, from 0 to 1. The header is the first thing the `ScrollView` draws: a
+box, a `when` arm or a view you wrote, which may take `scroll_fraction` as an argument
+(`TopBar(fraction: scroll_fraction)`). `collapse_header` may be a value as well as `true`
+(`collapse_header: top != none`); when it is `false` nothing is pinned and `scroll_fraction`
+stays 0. The `scroll_snap` and `collapse_header` examples
 show each one working.
 
 ## Overlay
@@ -286,7 +345,9 @@ The scrim is the theme's `scrim` colour at 32%, which is black unless the theme 
 otherwise; `scrim: 0x80000000` gives the overlay another colour,
 and a fully transparent one draws none. A child that fills the whole window is
 taken for a scrim you wrote yourself, and then no other is drawn. A non-modal
-overlay has no scrim. `dismiss =>` runs when the scrim is tapped (a press outside
+overlay has no scrim. The scrim fades with the overlay's first element: when that element's
+`opacity` is animated (an `on enter { opacity: 0.0 }` and `on leave`), the scrim arrives
+and goes with it. `dismiss =>` runs when the scrim is tapped (a press outside
 the overlay's content, not on a panel, its padding or a field in it) or Escape is
 pressed. A child places
 itself with `anchor`: `center`, `top`, `bottom`, `start` or `end`.
@@ -308,7 +369,7 @@ View Main() {
 
     when query != "" {
         Overlay #[modal: false] {
-            Box #[anchor_to: "searchField", anchor_edge: below, anchor_align: start,
+            Box #[anchor_to: searchField, anchor_edge: below, anchor_align: start,
                   anchor_gap: 6, width: match(searchField), bg: 0x1C2430, radius: 10, p: 10,
                   dismiss => query = ""] {
                 Text("Bucharest") #[color: 0xE7ECF2]
@@ -326,6 +387,55 @@ start (`anchor_align` is `start`, `center` or `end`), sits 6 pixels off
 is no room below, it flips above. `dismiss =>` here runs on a press outside both
 the panel and its anchor, and it needs an `anchor_to` on the same element.
 
+`anchor_to` takes the name itself, not a text. The name is looked up in the view the
+overlay is written in, so a view called a hundred times, a tooltip, anchors each copy to
+its own element and needs no name of its own. A text, `anchor_to: "searchField"`, still
+works and is looked up in the whole window; it is a warning, which points at the name
+form. A name no element is tagged with is `UnknownStateTarget`.
+
+### Where focus goes
+
+An overlay that is modal, or whose first element with a role is a `dialog` or a `menu`,
+is a focus scope. When it appears focus moves into it: to the element marked
+`autofocus: true`, else to the first one Tab would reach, else nowhere, so the keys go to
+the overlay and not to the page. Tab cycles inside it. When it goes, or starts to leave,
+focus goes back to the element that had it; if that is gone, to the nearest focusable
+element around where it was. A focus that moved by itself shows its ring only if the
+overlay was opened by a key. A tooltip, or a list of suggestions, is not a scope and
+leaves focus where it is.
+
+The same rule holds after it has opened: an element with `autofocus: true` drawn into an
+overlay that is already open (the next page of a dialog replacing the last) takes focus the
+first time it is drawn, if nothing in that overlay has focus then. Focus that is on another
+element of the overlay stays where it is. Only the topmost overlay does this.
+
+`Escape` dismisses the topmost overlay that has a `dismiss`, and only that one, so a
+submenu closes before its menu. `focused: v` goes both ways: writing `v = true` moves
+focus to the element, `v = false` takes it away.
+
+### Menus
+
+<!-- ignore: a piece of a larger view, with names it does not declare -->
+```byld,ignore
+Column #[a11y_role: menu] {
+    Button("Copy") #[a11y_role: menu_item] => copy()
+    Button("Share") #[a11y_role: menu_item, a11y_expanded: sub] as share => { sub = true }
+}
+```
+
+A `menu` is one Tab stop, entered at its selected item (`a11y_selected`), else the first.
+Up and Down move between its `menu_item`s and wrap, Home and End go to the ends, Enter and
+Space press. A menu written as a `Row` runs along Left and Right. A menu item that writes
+`a11y_expanded: false` opens a submenu with Right (or Enter); the submenu is an overlay
+with a `menu` in it, takes focus, and closes with Left or Escape, returning focus to the
+item.
+
+### Passing the pointer through
+
+`interactive: false` takes an element and what is in it out of hit-testing: presses,
+hover and the wheel go to what is under it. It is still drawn and still in the
+accessibility tree. A tooltip is one.
+
 ## Images and icons
 
 ```byld,fragment
@@ -338,6 +448,10 @@ attributes. A changed file reloads under `byard dev`. `VectorIcon("path.svg")` s
 a single-colour vector icon, tinted with `color` and sized with `size`.
 
 ## Knowing your own size
+
+For the window's size, not an element's, there is `window.width` and `window.height`, which a
+`when` can read to choose between a bar and a rail
+([styling](styling.md#the-window-as-a-value)).
 
 Sometimes a child needs to know how wide its parent turned out. `on measure` runs
 an action whenever the element it is written in has been laid out, with the
@@ -358,7 +472,13 @@ View Main() {
 }
 ```
 
-`it.w` and `it.h` are the element's width and height. The line is drawn to the
+`it.w` and `it.h` are the element's width and height, and `it.x` and `it.y` its
+position in its parent, in points, as laid out (before `translate` and `scale`). A
+sliding tab indicator keeps the selected tab's `it.x` and `it.w` and moves to them with
+`translate.x: ix with …`. A change of position alone fires `on measure` too. The first
+measurement of an element is not a change: a value it writes is drawn at once (an animation whose value reads it starts there; nothing else on that frame is affected), where an
+indicator would otherwise grow from 0 to its place on the first frame; every later one
+moves with its `with`. The line is drawn to the
 measured width and not to a number written in the file, so it stays right as the
 window resizes. Use the measurement downward: a parent measures, its children
 read the number. The other way round never settles: a parent that is as wide as its
@@ -382,6 +502,16 @@ them start from nothing, and a column of such cells lines up from row to row.
 `p` insets the words inside the text's own box, `m`
 leaves room around it. A `Text` has no children, so `gap`, `align` and `justify`
 do not apply (its `align` positions the words, see [styling](styling.md)).
+
+`max_lines: 2` stops the text after two lines: the `Text` is at most that tall and the
+last line ends in `…` where words were left out. `overflow: clip` cuts without the mark,
+and `overflow: ellipsis` is what `max_lines` does without it. It is how a list item or
+a card keeps its supporting text to a line or two. `overflow` without `max_lines`, and
+`max_lines` on a `wrap: false` text, are errors; `max_lines` must be 1 or more.
+
+```byld,fragment
+Text("A long supporting line") #[max_lines: 2, size: 14]
+```
 
 `wrap: false` with a `width` makes a cell of exactly that width, whatever the text
 measures. Words that do not fit are clipped at the cell's edge, not drawn over the

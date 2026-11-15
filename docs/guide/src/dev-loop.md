@@ -211,6 +211,7 @@ picture. Every test of a screen can pass while the screen is wrong.
 | `--tap <X,Y>` | none | Tap a logical point before the picture. Repeat it for more taps |
 | `--hold <X,Y>` | none | Press at a point and keep the button down for the picture. `--at` is how long. Repeatable |
 | `--hover <X,Y>` | none | Move the pointer to a point, pressing nothing. Repeatable |
+| `--drag <X,Y:X,Y>` | none | Drag between two points: a press, eight moves a frame apart, a release. Repeatable |
 | `--key <KEY>` | none | Press a key before the picture, such as `Left`, `shift+Left` or `mod+a`. Repeatable |
 | `--type <TEXT>` | none | Type text before the picture. Repeatable |
 | `--wait <MS>` | none | Let app time pass before the next input or the picture. Repeatable |
@@ -218,7 +219,9 @@ picture. Every test of a screen can pass while the screen is wrong.
 
 `--at` runs 16 ms frames, but only while something moves. When two frames in a row
 ask for no more, the shot goes to its last frame, which is the picture it would
-have drawn; set `BYARD_SHOT_EVERY_FRAME=1` to draw them all.
+have drawn; set `BYARD_SHOT_EVERY_FRAME=1` to draw them all. A loop that never ends
+(`repeat: infinite`, `loop: true`) does not count as something that moves: it is a function of
+the clock, so a page of spinners and progress bars is shot as fast as a still one.
 
 Taps are how you reach a screen that needs a press. This opens the second tab of
 an app, at logical point 120, 840, and draws it dark and wide:
@@ -250,7 +253,7 @@ byard shot crates/byard-cli/examples/ripple --hold 200,90 --at 120 -o pressed.pn
 ```
 
 A key is a single character or one of `Left`, `Right`, `Up`, `Down`, `Home`, `End`,
-`Backspace`, `Delete`, `Enter`, `Tab`, `Escape` and `Space`, in any case. In front of it go
+`PageUp`, `PageDown`, `Insert`, `Backspace`, `Delete`, `Enter`, `Tab`, `Escape` and `Space`, in any case. In front of it go
 modifiers, joined by `+`: `shift`, `ctrl`, `alt` (or `option`), `meta` (or `cmd`) and `mod`.
 `mod` is Command on macOS and Control elsewhere, as for the keys in
 [controls](controls.md#editing). Typed text goes in as it would from a keyboard, as one
@@ -314,6 +317,7 @@ test that needs an animation to finish has a `{ wait = 400 }` where it matters.
 | Step | |
 |------|-|
 | `{ tap = ... }`, `{ hold = ... }`, `{ hover = ... }` | A point `[x, y]`, or text from a line of the tree: the pointer goes to the centre of that node. No line, or more than one, is a failure that lists the lines |
+| `{ drag = ["x,y", "x,y"] }` | A press at the first point, eight moves a frame apart, a release at the second, as `--drag`. Each end is `"x,y"`, `[x, y]` or text from a line of the tree |
 | `{ key = "mod+a" }` | A key, as `--key` |
 | `{ type = "text" }` | Typed text |
 | `{ wait = 200 }` | Milliseconds of app time pass |

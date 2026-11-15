@@ -165,6 +165,8 @@ impl LayoutFingerprint {
             .opt_f32(s.min_height)
             .u8(s.direction as u8)
             .f32(s.gap)
+            .bool(s.wrap)
+            .opt_f32(s.row_gap)
             .spacing(s.padding)
             .spacing(s.margin)
             .u8(s.align as u8)
@@ -302,6 +304,10 @@ pub struct TextLeaf {
     pub width: Option<f32>,
     /// Natural single-line `(width, height)` fallback.
     pub fallback: (f32, f32),
+    /// The most lines the leaf is tall (RFC-0064), `None` for as many as the
+    /// text takes. The measured height is capped at that many lines of the
+    /// text's line height, 1.2 times its size.
+    pub max_lines: Option<u32>,
 }
 
 /// The box a `Text` leaf takes part in layout with, beyond its content: what
@@ -323,6 +329,10 @@ pub struct TextBox {
     pub padding: Spacing,
     /// Space around the leaf.
     pub margin: Spacing,
+    /// Floor on the height, the whole box, padding included (RFC-0064).
+    pub min_height: Option<f32>,
+    /// Ceiling on the height, the whole box, padding included (RFC-0064).
+    pub max_height: Option<f32>,
 }
 
 impl TextBox {
@@ -339,6 +349,12 @@ impl TextBox {
             style.size.height = Dimension::from_length(h);
         }
         style.flex_grow = self.grow;
+        if let Some(h) = self.min_height {
+            style.min_size.height = Dimension::from_length(h);
+        }
+        if let Some(h) = self.max_height {
+            style.max_size.height = Dimension::from_length(h);
+        }
         if let Some(b) = self.basis {
             style.flex_basis = Dimension::from_length(b.max(0.0));
         }
@@ -360,7 +376,11 @@ impl TextBox {
         if self.is_default() {
             return;
         }
-        fp.opt_f32(self.height).f32(self.grow).opt_f32(self.basis);
+        fp.opt_f32(self.height)
+            .f32(self.grow)
+            .opt_f32(self.basis)
+            .opt_f32(self.min_height)
+            .opt_f32(self.max_height);
         for s in [self.padding, self.margin] {
             fp.f32(s.top).f32(s.right).f32(s.bottom).f32(s.left);
         }
@@ -462,6 +482,15 @@ pub struct FlexItem {
     /// (a single grid cell, where `align_self` places a child vertically and
     /// this places it horizontally). `None` follows the parent.
     pub justify_self: Option<Align>,
+    /// Floor on the width in logical pixels (RFC-0064). `None` keeps what the
+    /// node was built with.
+    pub min_width: Option<f32>,
+    /// Floor on the height. `None` keeps what the node was built with.
+    pub min_height: Option<f32>,
+    /// Ceiling on the width. `None` keeps what the node was built with.
+    pub max_width: Option<f32>,
+    /// Ceiling on the height. `None` keeps what the node was built with.
+    pub max_height: Option<f32>,
 }
 
 impl FlexItem {
@@ -480,6 +509,8 @@ struct FlexItemEntry {
     base_shrink: f32,
     base_align_self: Option<AlignItems>,
     base_justify_self: Option<AlignItems>,
+    base_min: Size<Dimension>,
+    base_max: Size<Dimension>,
 }
 
 /// Main-axis distribution of a flex container's children.
@@ -506,6 +537,7 @@ pub enum Justify {
 /// [`ContainerStyle::default`] and the `with_*` builders.
 #[derive(Debug, Clone, Copy, Default)]
 #[non_exhaustive]
+#[allow(clippy::struct_excessive_bools)]
 pub struct ContainerStyle {
     /// Explicit width in logical pixels. `None` means "grow to fit children".
     pub width: Option<f32>,
@@ -522,6 +554,11 @@ pub struct ContainerStyle {
     pub direction: FlexDir,
     /// Space between children, in logical pixels.
     pub gap: f32,
+    /// Whether the children flow onto new lines when they do not fit
+    /// (`flex-wrap`, RFC-0064). Off is what every container did before.
+    pub wrap: bool,
+    /// The space between wrapped lines; `None` is [`gap`](Self::gap).
+    pub row_gap: Option<f32>,
     /// Granular padding, in logical pixels.
     pub padding: Spacing,
     /// Granular margin, in logical pixels.
@@ -590,6 +627,15 @@ impl ContainerStyle {
     #[must_use]
     pub fn with_gap(mut self, gap: f32) -> Self {
         self.gap = gap;
+        self
+    }
+
+    /// Lets the children wrap onto new lines, `row_gap` apart (`None` is the
+    /// [`gap`](Self::gap)).
+    #[must_use]
+    pub fn with_wrap(mut self, wrap: bool, row_gap: Option<f32>) -> Self {
+        self.wrap = wrap;
+        self.row_gap = row_gap;
         self
     }
 
@@ -675,8 +721,16 @@ impl ContainerStyle {
             },
             gap: Size {
                 width: LengthPercentage::from_length(self.gap),
-                height: LengthPercentage::from_length(self.gap),
+                height: LengthPercentage::from_length(self.row_gap.unwrap_or(self.gap)),
             },
+            flex_wrap: if self.wrap {
+                taffy::FlexWrap::Wrap
+            } else {
+                taffy::FlexWrap::NoWrap
+            },
+            // Wrapped lines pack at the start instead of stretching to a
+            // height the row was given: a chip set is as tall as its chips.
+            align_content: self.wrap.then_some(taffy::AlignContent::FlexStart),
             padding: TaffyRect {
                 left: LengthPercentage::from_length(self.padding.left),
                 right: LengthPercentage::from_length(self.padding.right),
@@ -1322,6 +1376,18 @@ impl LayoutAtlas {
         &self.layout_dirty
     }
 
+    /// The element index the next `add_*` call will give its node, on the full
+    /// path and on a retained build alike (RFC-0061): the number of nodes this
+    /// build has placed so far. [`Self::next_target_index`] is the size of the
+    /// tree, which on a retained build is the old tree's, not this walk's place.
+    #[must_use]
+    pub fn next_build_slot(&self) -> u32 {
+        #[allow(clippy::cast_possible_truncation)]
+        self.retained
+            .as_ref()
+            .map_or_else(|| self.next_target_index(), |r| r.cursor as u32)
+    }
+
     /// Places a node into the next build-order slot: creates it on the full
     /// path, or reuses (and restyles when its fingerprint moved) the node that
     /// already occupies the slot on the retained path.
@@ -1632,7 +1698,11 @@ impl LayoutAtlas {
             .str(spec.family.as_deref().unwrap_or(""))
             .opt_f32(spec.width)
             .f32(spec.fallback.0)
-            .f32(spec.fallback.1);
+            .f32(spec.fallback.1)
+            .opt_f32(
+                spec.max_lines
+                    .map(|n| f32::from(u16::try_from(n).unwrap_or(u16::MAX))),
+            );
         boxed.fingerprint(&mut fp);
         self.place(NodeKind::TextLeaf, fp.finish(), style, &[], Some(spec))
     }
@@ -1874,6 +1944,15 @@ impl LayoutAtlas {
         !self.flex_items.is_empty()
     }
 
+    /// The [`FlexItem`] a node carries from the build before, the default one
+    /// when it has none.
+    #[must_use]
+    pub fn flex_item(&self, node: AtlasNodeId) -> FlexItem {
+        self.flex_items
+            .get(&node.node_id)
+            .map_or_else(FlexItem::default, |e| e.item)
+    }
+
     /// Lays a child's own `shrink` and `align_self` over the style it was built
     /// with (`shrink: 0` keeps a fixed-size child from being squeezed;
     /// `align_self` places it on the cross axis whatever the parent's `align`
@@ -1908,9 +1987,32 @@ impl LayoutAtlas {
             .style(node.node_id)
             .map_err(|e| AtlasError::from_taffy(&e))?
             .clone();
-        let (base_shrink, base_align_self, base_justify_self) = match had {
-            Some(e) if !restyled => (e.base_shrink, e.base_align_self, e.base_justify_self),
-            _ => (style.flex_shrink, style.align_self, style.justify_self),
+        let (base_shrink, base_align_self, base_justify_self, base_min, base_max) = match had {
+            Some(e) if !restyled => (
+                e.base_shrink,
+                e.base_align_self,
+                e.base_justify_self,
+                e.base_min,
+                e.base_max,
+            ),
+            _ => (
+                style.flex_shrink,
+                style.align_self,
+                style.justify_self,
+                style.min_size,
+                style.max_size,
+            ),
+        };
+        let limit = |v: Option<f32>, base: Dimension| {
+            v.map_or(base, |v| Dimension::from_length(v.max(0.0)))
+        };
+        style.min_size = Size {
+            width: limit(item.min_width, base_min.width),
+            height: limit(item.min_height, base_min.height),
+        };
+        style.max_size = Size {
+            width: limit(item.max_width, base_max.width),
+            height: limit(item.max_height, base_max.height),
         };
         style.flex_shrink = item.shrink.map_or(base_shrink, |s| s.max(0.0));
         style.align_self = item
@@ -1932,6 +2034,8 @@ impl LayoutAtlas {
                     base_shrink,
                     base_align_self,
                     base_justify_self,
+                    base_min,
+                    base_max,
                 },
             );
         }
@@ -2025,19 +2129,16 @@ impl LayoutAtlas {
         // it (the ZStack keeps each child at its natural size).
         taffy_style.justify_items = Some(justify);
         taffy_style.align_items = Some(align_items);
-        // A child that stretches (`align_self: stretch`, or `grow`) is asked to
-        // fill the stack. The cell is then the whole stack: otherwise the column
-        // is only as wide as the widest child, packed at the start, and a
-        // stretching empty box is as wide as nothing (RFC-0059). A stack with no
-        // such child keeps the layout it always had.
+        // The cell is the whole stack, not as wide as the widest child packed at
+        // the start: otherwise `alignment: center` or `top_end` has nowhere to
+        // move a smaller child, and a stretching empty box (`align_self:
+        // stretch`, or `grow`) is as wide as nothing (RFC-0059).
         let fills = children.iter().any(|c| {
             self.tree
                 .style(c.node_id)
                 .is_ok_and(|s| s.justify_self == Some(AlignItems::Stretch))
         });
-        if fills {
-            taffy_style.justify_content = Some(JustifyContent::Stretch);
-        }
+        taffy_style.justify_content = Some(JustifyContent::Stretch);
 
         let mut fp = LayoutFingerprint::new(NodeKind::Stack);
         fp.container(&style)
@@ -2273,6 +2374,25 @@ impl LayoutAtlas {
         Ok(self.resolved_rect_internal(node))
     }
 
+    /// The offset of a node's box from its parent's box, as laid out: the
+    /// position `on measure` reports (RFC-0065 §3), before `translate` and
+    /// `scale`. `None` if the node is unknown or not yet computed.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`AtlasError::ForeignNode`] if `node` belongs to another atlas.
+    pub fn local_offset(&self, node: AtlasNodeId) -> Result<Option<(f32, f32)>, AtlasError> {
+        self.validate_node(node)?;
+        if self.state != AtlasState::Computed {
+            return Ok(None);
+        }
+        Ok(self
+            .tree
+            .layout(node.node_id)
+            .ok()
+            .map(|l| (l.location.x, l.location.y)))
+    }
+
     /// The `(width, height)` of a node's **content**, the extent of its
     /// children, which for a `ScrollView` (Taffy `overflow: Scroll`) exceeds the
     /// node's own box. Subtracting the viewport size gives the maximum scroll
@@ -2455,6 +2575,13 @@ impl LayoutAtlas {
         } else {
             None
         }
+    }
+
+    /// The node whose context index is `index`, in the tree built last
+    /// (the inverse of [`node_index`](Self::node_index)), if there is one.
+    #[must_use]
+    pub fn node_at(&self, index: u32) -> Option<AtlasNodeId> {
+        self.nodes_by_index.get(index as usize).copied()
     }
 
     /// Returns the parent node of the given node, if it belongs to this atlas and has a parent.
@@ -2880,6 +3007,14 @@ fn measure_text_node(
             spec.family.as_deref(),
         ),
         None => spec.fallback,
+    };
+    // RFC-0064: the leaf is no taller than `max_lines` lines; the paint pass
+    // cuts the run to the same count.
+    let height = match spec.max_lines {
+        Some(n) => {
+            height.min(f32::from(u16::try_from(n).unwrap_or(u16::MAX)) * spec.font_size * 1.2)
+        }
+        None => height,
     };
     // Reserve a **whole pixel** of width for the glyphs. Taffy rounds resolved
     // layout to integer coordinates (rounding on by default), so a node measured

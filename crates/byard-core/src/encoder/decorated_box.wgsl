@@ -38,6 +38,10 @@ struct InstanceInput {
     @location(13) grad_axis: vec4<f32>,
     // 0 = linear, 1 = radial, 2 = conic, 3 = no gradient at all.
     @location(14) grad_kind: u32,
+    // RFC-0064: a gap in the top edge of the border, (start, length) in px from
+    // the element's left edge; a length of 0 is no gap. The last free vertex
+    // location (15 is the portable floor).
+    @location(15) border_gap: vec2<f32>,
 };
 
 struct VertexOutput {
@@ -57,6 +61,7 @@ struct VertexOutput {
     // Constant across the primitive: an integer cannot be interpolated, and
     // there is nothing here to interpolate anyway.
     @location(12) @interpolate(flat) grad_kind: u32,
+    @location(13) @interpolate(flat) border_gap: vec2<f32>,
 };
 
 @group(0) @binding(0) var<uniform> viewport_size: vec2<f32>;
@@ -129,6 +134,7 @@ fn vs_main(vertex: VertexInput, instance: InstanceInput) -> VertexOutput {
     out.grad_to = instance.grad_to;
     out.grad_axis = instance.grad_axis;
     out.grad_kind = instance.grad_kind;
+    out.border_gap = instance.border_gap;
     return out;
 }
 
@@ -251,7 +257,25 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
             -border_width + edge_softness,
             fdist,
         );
-        surface = mix(in.color, in.border_color, border_cov);
+        // RFC-0064: where the gap is, the top band of the border is not there
+        // and whatever is under it shows. An interval along x, anti-aliased
+        // a pixel wide, times the band within `border_width` of the top edge.
+        var kept = 1.0;
+        if (in.border_gap.y > 0.0) {
+            let x = in.local_pos.x + in.half_size.x;
+            let from_top = in.local_pos.y + in.half_size.y;
+            let along = smoothstep(in.border_gap.x - 0.5, in.border_gap.x + 0.5, x)
+                * (1.0 - smoothstep(
+                    in.border_gap.x + in.border_gap.y - 0.5,
+                    in.border_gap.x + in.border_gap.y + 0.5,
+                    x,
+                ));
+            // Past the border's own anti-aliased inner edge, so no residue of it
+            // is left in the band's last fraction of a pixel.
+            let band = 1.0 - smoothstep(border_width + 0.5, border_width + 1.5, from_top);
+            kept = 1.0 - along * band;
+        }
+        surface = mix(in.color, in.border_color, border_cov * kept);
     }
 
     let a_top = fill_cov * surface.a;

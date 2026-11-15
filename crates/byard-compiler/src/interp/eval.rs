@@ -37,11 +37,13 @@ mod access;
 mod animation;
 pub(crate) use animation::gradient_stop_count;
 mod canvas;
+mod context;
 mod controller;
 mod controls;
 mod editing;
 mod element;
 mod expr;
+mod focus;
 mod follow;
 mod instance;
 mod layout;
@@ -88,6 +90,7 @@ fn members_span(members: &[Member]) -> Span {
             | Member::Let { span, .. }
             | Member::Fn { span, .. }
             | Member::Inject { span, .. }
+            | Member::Provide { span, .. }
             | Member::For { span, .. }
             | Member::When { span, .. }
             | Member::Route { span, .. }
@@ -251,6 +254,9 @@ pub enum RenderNode {
         /// Fixed at lowering and kept for as long as the node lives, which is
         /// what lets two calls of one view keep their own animations.
         inst: u32,
+        /// The identity the run's `as name` gave it (`a11y_described_by`,
+        /// `anchor_to`); `None` for a run that is not tagged.
+        uid: Option<u32>,
     },
     /// A flexible gap (layout-only, RFC-0005): absorbs its parent's free space
     /// along the main axis. `attrs` carries `grow`/`basis`, which is why this is
@@ -380,6 +386,10 @@ pub enum RenderNode {
         /// Fixed at lowering and kept for as long as the node lives, which is
         /// what lets two calls of one view keep their own animations.
         inst: u32,
+        /// This overlay's identity, fixed when it is lowered: what a focus scope
+        /// is from one frame to the next, so focus can be given back when the
+        /// overlay goes (RFC-0066 §1).
+        uid: u32,
     },
     /// A reactive `when cond { … } else { … }` (RFC-0018 structural reactivity).
     /// The driver re-reads `cond` every frame and expands the taken branch, so a
@@ -472,6 +482,63 @@ pub struct InstanceBindings {
     /// The bindings (RFC-0051): `(param name, the caller's signal)`. The
     /// callee holds the signal itself, not a memo over it.
     pub signals: Vec<(Symbol, SignalId)>,
+    /// Layout attributes written on the call (RFC-0062 §4): `(attribute,
+    /// memo over the caller's value, the bare word the caller wrote if it wrote one)`, to be put on the callee's root elements.
+    pub layout: Vec<(Symbol, ScopeId, Option<Symbol>)>,
+}
+
+/// A block a call gave to a slot (RFC-0062): the elements as written, and what
+/// lowering them needs, the names visible at the call and the view instance
+/// that wrote them. Lowered where the callee places the slot, once for each
+/// placement, so a slot placed in every row of a `for` is a set of elements of
+/// its own in each: its own focus, its own editing state.
+#[derive(Debug)]
+pub(crate) struct SlotSource {
+    pub(crate) members: Vec<Member>,
+    pub(crate) env: super::env::Captured,
+    pub(crate) inst: u32,
+    /// The slots of the view that wrote the block, for a slot it passes on.
+    pub(crate) outer: Option<std::rc::Rc<SlotFrame>>,
+    pub(crate) known_views: Vec<String>,
+}
+
+/// The RFC-0062 state features lowering found in use.
+#[derive(Debug, Default, Clone, Copy)]
+#[allow(clippy::struct_excessive_bools)]
+pub(crate) struct StateUses {
+    /// A state block names `focus_within`.
+    pub(crate) focus_within: bool,
+    /// An element has an `on enter` block (RFC-0066).
+    pub(crate) enter: bool,
+    /// An element has an `on leave` block (RFC-0066).
+    pub(crate) leave: bool,
+    /// An element is tagged `as name` (RFC-0062, RFC-0066).
+    pub(crate) names: bool,
+}
+
+/// One context a view above provides (RFC-0065): its fields, as the values a
+/// view that `inject`s it reads, and the provider above this one. A chain of
+/// these is the contexts in scope where a view is drawn; a view that provides
+/// none adds nothing to it.
+#[derive(Debug)]
+pub(crate) struct CtxNode {
+    pub(crate) parent: Option<std::rc::Rc<CtxNode>>,
+    pub(crate) name: Symbol,
+    pub(crate) fields: Vec<(Symbol, Value)>,
+}
+
+/// The slots one view instance was called with (RFC-0062): for each `Slot`
+/// parameter and `content`, `None` when the call did not give it.
+#[derive(Debug, Default)]
+pub(crate) struct SlotFrame {
+    pub(crate) slots: Vec<(Symbol, Option<std::rc::Rc<SlotSource>>)>,
+}
+
+impl SlotFrame {
+    /// The entry for `name`: `None` when the view has no such slot.
+    pub(crate) fn get(&self, name: &Symbol) -> Option<&Option<std::rc::Rc<SlotSource>>> {
+        self.slots.iter().find(|(n, _)| n == name).map(|(_, s)| s)
+    }
 }
 
 /// The reserved parameter/element name for a user view's child-block slot
@@ -530,6 +597,11 @@ pub struct Interpreter {
     /// responsive block (RFC-0016 `on width >= md`) compares against. Set at
     /// the top of every render, before layout reads it.
     viewport: (f32, f32),
+    /// The two reactive `Float` signals behind `window.width` and
+    /// `window.height` (RFC-0067): `None` until a program lowers a read of
+    /// `window`, so one that never writes it pays a single `Option` test a
+    /// frame. Kept across a hot reload, like the theme's scheme.
+    window: Option<(SignalId, SignalId)>,
     /// The registered font families, in the shape the render thread reads
     /// them (RFC-0034), rebuilt whenever the theme changes and handed to
     /// every frame.
@@ -594,11 +666,21 @@ pub struct Interpreter {
     /// re-evaluated later must capture them now, exactly as it would inside the
     /// `for` body or route body the snapshot came from.
     restored_depth: u32,
+    /// Depth of collapsing-header lowering: while a header is being lowered,
+    /// `scroll_fraction` is a name in the environment that a `when` branch in
+    /// the header (lowered later, away from here) has to be given back.
+    collapse_depth: u32,
     /// Stack of caller-supplied child-block slots, one frame per active
     /// user-view instance (RFC-0007 D-A). The block is
     /// pre-lowered in the *caller* scope so a `content` element reference inside
     /// the callee body splices nodes that capture the caller's environment.
-    slot_stack: Vec<Vec<RenderNode>>,
+    slot_stack: Vec<std::rc::Rc<SlotFrame>>,
+    /// The contexts provided by the views being drawn, innermost first
+    /// (RFC-0065). Lowering a view's body happens inside the lowering of the
+    /// views that draw it, slots included, so this is where `inject` looks.
+    ctx_chain: Option<std::rc::Rc<CtxNode>>,
+    /// The program's contexts: name → fields, with their defaults.
+    contexts: std::collections::HashMap<Symbol, std::rc::Rc<Vec<crate::parser::ast::RecordField>>>,
     /// Reactive `for` body pools (RFC-0018), indexed by [`RenderNode::For::pool`].
     /// Grows as `for` loops are lowered; each pool holds that loop's reusable
     /// per-slot bodies and element signals. Reconciled once per frame before the
@@ -725,6 +807,41 @@ pub struct Interpreter {
     measures: Vec<MeasureSlot>,
     /// The next [`RenderNode::Box::uid`] to hand out.
     next_elem_uid: u32,
+    /// The interaction states of every named element (`as name`) painted so
+    /// far this frame, by [`RenderNode::Box::uid`] (RFC-0062 §5). Filled only
+    /// when a state block that names another element was lowered.
+    elem_states: std::collections::HashMap<u32, crate::interp::events::StyleState>,
+    /// The value states of the same elements, read during layout, where their
+    /// attributes are in scope, and published before the frame paints.
+    elem_value_states: std::collections::HashMap<u32, crate::interp::events::StyleState>,
+    /// The elements whose states another element's state block names
+    /// (RFC-0062), by [`RenderNode::Box::uid`]: only these publish theirs.
+    remote_targets: std::collections::HashSet<u32>,
+    /// What lowering found the frame has to pay for.
+    state_uses: StateUses,
+    /// The leaving groups that had a motion running while they were painted
+    /// (RFC-0066 §3), this frame's and last frame's: a group that was not busy
+    /// last frame has settled. Empty, and so unallocated, until something
+    /// leaves.
+    leave_busy: Vec<u32>,
+    leave_busy_prev: Vec<u32>,
+    /// The elements with an `on enter` block that were drawn last frame and
+    /// this one: one that was not drawn last frame is on its first.
+    entered_prev: std::collections::HashSet<u64>,
+    entered_now: std::collections::HashSet<u64>,
+    /// Writes to a bound `focused:` that ask for focus to move, `(element,
+    /// whether it is to have it)`, in the order the elements were drawn
+    /// (RFC-0066 §1).
+    focus_requests: Vec<(u32, bool)>,
+    /// What the focus scopes that are mounted need to give back when they go
+    /// (RFC-0066 §1): by the identity of the overlay that is one.
+    live_scopes: Vec<focus::LiveScope>,
+    /// The elements marked `autofocus` that have already been drawn (and so
+    /// been given focus, or not, once), by identity.
+    autofocused: std::collections::HashSet<u32>,
+    /// The layout indices of the focused element and its ancestors, for this
+    /// frame, once something asked.
+    focus_chain: Option<Vec<u32>>,
     /// This frame's `(layout index, uid)` of every box, recorded by the layout
     /// build; and the last frame's, which focus and editing state were keyed by.
     elem_uids: Vec<(u32, u32)>,
@@ -740,6 +857,26 @@ pub struct Interpreter {
     /// Whether an `on measure` ran during the last [`render`](Self::render).
     /// Its writes land after layout, so only the next frame shows them.
     measure_fired: bool,
+    /// The [`frame_seq`](Self::frame_seq) on which an `on measure` fired for
+    /// the first time for its element, `0` before any. What it wrote is drawn
+    /// on the next frame, where an animation that has not moved yet takes the
+    /// new target as its start: a first measurement is where the element is,
+    /// not a change to move to.
+    first_measure_seq: u64,
+    /// The signals those first measurements wrote: only an animation whose
+    /// target reads one of them starts from the new value.
+    first_measure_written: Vec<super::env::SignalId>,
+    /// Set by `eval_animated` for the animation it is about to move, to the
+    /// current frame when its target reads what a first measurement just
+    /// wrote, else `0`.
+    snap_seq: u64,
+    /// The [`frame_seq`](Self::frame_seq) of the last frame an element drew
+    /// its `on enter` values on, `0` before any.
+    entering_seq: u64,
+    /// Set by an overlay before it draws a child, to NaN: the effective
+    /// opacity of the first box drawn replaces it, and the modal scrim fades
+    /// with it. `None` when no overlay is looking.
+    root_opacity: Option<f32>,
     /// The program's top-level functions (RFC-0002), by canonical name, as
     /// entries of `fn_table`. Rebuilt by [`Self::load_views`].
     top_fns: std::collections::HashMap<Symbol, super::env::AstId>,
@@ -792,6 +929,11 @@ pub struct Interpreter {
     ///
     /// [`has_active_animations`]: Self::has_active_animations
     any_active: bool,
+    /// The [`frame_seq`](Self::frame_seq) a looping animation that never ends
+    /// was last sampled on. Kept apart from `any_active` because it asks for
+    /// frames for good but is a function of the clock alone: a shot that runs
+    /// to a time need not draw the frames in between.
+    endless_seq: u64,
     /// First-class style values (RFC-0016): `let name = style { … }` registers
     /// its base attributes and `on <state>` blocks here, and a `..name` spread
     /// on an element splices them in at lower time. Static and view-scoped, no
@@ -806,6 +948,9 @@ pub struct Interpreter {
     /// reads this to convert a wheel into a clamped scroll, the same
     /// render-then-dispatch handshake the router's hit rects use.
     scroll_targets: Vec<ScrollTarget>,
+    /// The multiline fields drawn last render and where the pointer reaches
+    /// them (RFC-0064): a wheel over one scrolls its text first.
+    wheel_fields: Vec<(crate::interp::intrinsics::Rect, editing::FieldHandle)>,
     /// Live native-view instances (RFC-0039), indexed by a lowered element's
     /// `slot`.
     ///
@@ -881,6 +1026,10 @@ pub struct Interpreter {
     /// pointer press lands on inert `ScrollView` content; each move writes the
     /// offset so the content tracks the pointer; cleared on release.
     scroll_drag: Option<ScrollDrag>,
+    /// A press that landed on something that only taps, inside a `ScrollView`:
+    /// it becomes a drag-to-scroll, and the tap is cancelled, if the pointer
+    /// travels past the tap slop before it is released.
+    pending_scroll: Option<ScrollDrag>,
     /// RFC-0021 `on_end_reached` debounce: `ScrollView` element indices currently
     /// past their `end_threshold` and already fired. An elem re-fires only after
     /// its offset falls back below the threshold (removed here), so appending
@@ -924,6 +1073,9 @@ pub struct Interpreter {
     /// name declared before it: by the time the overlay is placed, the anchor's
     /// rect is a fact rather than a prediction.
     anchor_rects: std::collections::HashMap<Symbol, crate::interp::intrinsics::Rect>,
+    /// The same rects by the identity of the element that landed there
+    /// (RFC-0066 §5), for an `anchor_to` that names an element in its own view.
+    anchor_uid_rects: std::collections::HashMap<u32, crate::interp::intrinsics::Rect>,
     /// RFC-0021 pull-to-refresh: the in-flight spring retracting or resting the
     /// pull region per elem (see [`PullAnim`]).
     pull_anims: std::collections::HashMap<u32, PullAnim>,
@@ -970,6 +1122,10 @@ pub struct Interpreter {
     access: access::AccessScratch,
 }
 
+/// What an `on measure` was last told, as raw bits: width, height, x, y
+/// (RFC-0065 §3 added the position, so an element that only moves fires too).
+type MeasureKey = (u32, u32, u32, u32);
+
 /// One element's `on measure` declaration (RFC-0038): the action, and the last
 /// size it was told about.
 struct MeasureSlot {
@@ -984,9 +1140,9 @@ struct MeasureSlot {
     /// compare equal, so a collapsed element would silently never fire again.
     /// This is the RFC-0032 fingerprint rule, and it applies here for the same
     /// reason it applies there.
-    last: Option<(u32, u32)>,
+    last: Option<MeasureKey>,
     /// The size before [`last`](Self::last), for the oscillation check below.
-    prev: Option<(u32, u32)>,
+    prev: Option<MeasureKey>,
     /// How many times in a row the rect has flipped back to the size it held
     /// two fires ago: the signature of a same-element feedback loop that the
     /// compiler could not see statically (RFC-0038 "no feedback loop").
@@ -1187,7 +1343,12 @@ impl Interpreter {
         }
         self.consts.clear();
         self.enums.clear();
+        self.contexts.clear();
         if let Some(first) = views.first() {
+            for decl in first.records.iter().filter(|r| r.context) {
+                self.contexts
+                    .insert(decl.name.clone(), std::rc::Rc::new(decl.fields.clone()));
+            }
             for decl in first.enums.iter() {
                 let cases = decl.cases.iter().map(|(c, _)| c.clone()).collect();
                 self.enums.insert(decl.name.clone(), cases);
@@ -1251,6 +1412,8 @@ impl Interpreter {
         self.now_ms = ms;
         self.clock_set = true;
         self.clock.set_app_ms(ms);
+        self.router.set_clock_ms(&mut self.ctx, u64::from(ms));
+        self.fire_due_timers(u64::from(ms));
     }
 
     /// Fixes the wall clock `now()` and `nowUtc()` read at `iso` (an ISO date
@@ -1295,7 +1458,17 @@ impl Interpreter {
     /// is true and lets the app idle (0 frames) once every animation settles.
     #[must_use]
     pub fn has_active_animations(&self) -> bool {
-        self.any_active || self.theme_transitioning()
+        self.any_active || self.endless_seq == self.frame_seq || self.theme_transitioning()
+    }
+
+    /// [`needs_another_frame`](Self::needs_another_frame) without the loops
+    /// that never end: whether something that has to be stepped through, a
+    /// spring, a measure, a scroll glide, is still going. A loop is a function
+    /// of the clock, so when only loops remain the frames up to a given time
+    /// can be skipped (`byard shot`).
+    #[must_use]
+    pub fn needs_another_frame_besides_loops(&self) -> bool {
+        self.any_active || self.theme_transitioning() || self.measure_fired
     }
 
     /// Whether the host should produce another frame without waiting for an
@@ -1314,6 +1487,15 @@ impl Interpreter {
     #[must_use]
     pub fn has_background_work(&self) -> bool {
         self.vector_jit.is_generating()
+    }
+
+    /// Waits, up to `timeout`, for the work [`has_background_work`] reports,
+    /// so it lands on the next tick. Only a headless host calls this, to draw
+    /// the same picture on any machine (see `VectorJit::wait_for_pending`).
+    ///
+    /// [`has_background_work`]: Self::has_background_work
+    pub fn wait_for_background_work(&mut self, timeout: std::time::Duration) {
+        self.vector_jit.wait_for_pending(timeout);
     }
 
     /// The most recently projected value of a value binding (for tests).
@@ -1337,6 +1519,12 @@ impl Interpreter {
     pub fn eval_view_decls(&mut self, view: &ViewDecl) {
         for member in &view.body {
             self.eval_member(member);
+        }
+        // What the view provides is in scope for everything it draws below.
+        // Done last, so the values may name any `var` or parameter of the
+        // view wherever the `provide` is written.
+        if !self.contexts.is_empty() {
+            self.provide_contexts(view);
         }
     }
 
@@ -1392,6 +1580,12 @@ impl Interpreter {
                     crate::parser::ast::Type::Named { name: n, .. } => n.clone(),
                     crate::parser::ast::Type::Function { .. } => Symbol::intern("?"),
                 };
+                // A context of the program (RFC-0065): the nearest provider
+                // among the views being drawn, or its defaults.
+                if self.contexts.contains_key(&ty_name) {
+                    self.inject_context(&ty_name, name);
+                    return;
+                }
                 match self.env.resolve_inject(&ty_name).cloned() {
                     Some(val) => self.env.push(name.clone(), val),
                     // Nothing provides it. Which of the two things that means
@@ -1659,6 +1853,7 @@ impl Interpreter {
         // layout built against last frame's viewport would lay out one width's
         // variant and paint another's.
         self.viewport = (width, height);
+        self.sync_window();
         // Every frame answers `needs_another_frame` for itself, including one
         // that returns before layout.
         self.measure_fired = false;
@@ -1694,6 +1889,8 @@ impl Interpreter {
         // Recomputed every frame: an animation re-marks itself active below if it
         // sampled without having settled this tick (RFC-0010).
         self.any_active = false;
+        self.leave_busy_prev = std::mem::take(&mut self.leave_busy);
+        self.focus_requests.clear();
         // RFC-0023: retire fully-faded ripples by time. Gesture-like state kept
         // across renders, so this runs before the walk, ink whose element no
         // longer renders (hot reload, `when` unmount) ages out here too.
@@ -1711,6 +1908,10 @@ impl Interpreter {
         // rects have to go first. An anchor whose element unmounted must stop
         // existing rather than keep pointing at where it used to be.
         self.anchor_rects.clear();
+        self.anchor_uid_rects.clear();
+        // RFC-0062: the states named elements publish are this frame's too.
+        self.elem_states.clear();
+        self.focus_chain = None;
         // The atlas is **not** torn down here any more (RFC-0032 §R3). Whether
         // it can be retained is not knowable until `reconcile_structure` has
         // run, so the decision, and the `clear()` that follows from it, moves
@@ -1737,6 +1938,7 @@ impl Interpreter {
         // router's hit rects. RFC-0021 `snap: item` boundaries follow the same
         // lifecycle (settle above read the previous frame's; emit rebuilds them).
         self.scroll_targets.clear();
+        self.wheel_fields.clear();
         self.scroll_item_bounds.clear();
         // RFC-0039: where each native view ended up is re-recorded every
         // render, for the same reason the scroll targets are, a rect from two
@@ -1820,7 +2022,7 @@ impl Interpreter {
         // positioned wrapper floating over the main tree. Nothing is built when
         // no overlay is mounted, so the overlay path is truly zero-cost, the
         // render root stays the plain main container it always was.
-        let mut overlays: Vec<&RenderNode> = Vec::new();
+        let mut overlays: Vec<(&RenderNode, AnimSlot)> = Vec::new();
         self.collect_overlays(tree, pools, &mut overlays);
 
         // ── RFC-0032 §R4: may this frame retain the layout tree? ──────────────
@@ -1946,7 +2148,16 @@ impl Interpreter {
         self.fire_measures();
         // Layout indices have just been reassigned: focus and editing state
         // find their elements again before anything paints or reads them.
+        // This frame's elements, before following swaps the tables.
+        let named = if self.remote_targets.is_empty() {
+            Vec::new()
+        } else {
+            self.elem_uids.clone()
+        };
         self.follow_elements();
+        // RFC-0062: what a named element's states are, known before anything
+        // paints, so an element written before it can follow.
+        self.publish_named_states(&named);
 
         self.retained.flat_ids.clear();
         self.retained.flat_ids.extend_from_slice(&flat_ids);
@@ -2006,9 +2217,13 @@ impl Interpreter {
             // identity leaves the walk with it, it is emitted here rather than
             // where it was written, so whatever row the main pass finished
             // inside must not carry over into it.
-            self.anim_slot = AnimSlot::default();
+            self.anim_slot = ol.anim;
             self.emit_overlay(ol, frame, width, height, pools);
         }
+        self.anim_slot = AnimSlot::default();
+        // RFC-0066 §1: focus goes into the scopes that opened, back out of the
+        // ones that closed, and where a bound `focused:` asks.
+        self.settle_focus();
 
         // RFC-0032 §R3 step 6, and the last thing this frame does before its
         // primitives leave the interpreter: replace the blanket `dirty: true`
@@ -2032,6 +2247,12 @@ impl Interpreter {
         // in flight rather than waiting a frame for nothing.
         self.dispatch_native_calls(frame);
         self.access_end(frame);
+        // RFC-0066: what drew this frame is what "was drawn" means for the
+        // next one, so an `on enter` plays when an element comes back.
+        if self.state_uses.enter {
+            std::mem::swap(&mut self.entered_prev, &mut self.entered_now);
+            self.entered_now.clear();
+        }
 
         self.settle_text_editing();
 
@@ -2120,7 +2341,8 @@ impl Interpreter {
         // as it always was. A hot reload of the same view invalidates in
         // `reload`, which knows the AST changed.
         let identity = (view.name.clone(), view.span);
-        if self.lowered_view.as_ref() != Some(&identity) {
+        let another_view = self.lowered_view.as_ref() != Some(&identity);
+        if another_view {
             self.invalidate_retained_layout();
             self.lowered_view = Some(identity);
         }
@@ -2128,6 +2350,7 @@ impl Interpreter {
         self.check_font_families(view);
         // The root is outside every call, whatever the last lowering left.
         self.cur_inst = 0;
+        self.ctx_chain = None;
         // RFC-0018: a fresh tree gets fresh `when`/`for` pools; the previous
         // tree's pool ids are discarded with it (hot-reload re-lowers the tree).
         self.for_pools.clear();
@@ -2155,12 +2378,15 @@ impl Interpreter {
         // the view, so nothing binds its parameters. They go into scope as
         // unset values: a name an attribute reads is then known to be a name
         // the view binds, the same as inside a call, and not a bare keyword.
-        // A parameter that is already a name here keeps its value. An unset one
+        // A parameter that is already a name here keeps its value, when it is
+        // the same view lowered again; another view's names are not this
+        // view's (a `min: Str` there must not be the `min: Float` here), so
+        // its parameters shadow whatever the last lowering left. An unset one
         // is the zero of its declared type, so a number is a number where a
         // number goes (`radius: v`) and a `Str` there is still the mismatch it
         // should be; a type with no obvious zero stays `Unit`.
         for param in &view.params {
-            if self.env.lookup(&param.name).is_none() {
+            if another_view || self.env.lookup(&param.name).is_none() {
                 self.env.push(param.name.clone(), unset_param(param));
             }
         }
@@ -2172,15 +2398,20 @@ impl Interpreter {
         // `content` reference then splices nothing instead of being mistaken for
         // an `UnknownView`. A real call (`lower_user_view_call`) pushes the
         // caller's block over this before lowering the body.
-        let has_content_slot = view
-            .params
-            .iter()
-            .any(|p| p.name.as_str() == RESERVED_CONTENT);
-        if has_content_slot {
-            self.slot_stack.push(Vec::new());
+        let has_slots = view.params.iter().any(instance::is_slot_param);
+        if has_slots {
+            let frame = SlotFrame {
+                slots: view
+                    .params
+                    .iter()
+                    .filter(|p| instance::is_slot_param(p))
+                    .map(|p| (p.name.clone(), None))
+                    .collect(),
+            };
+            self.slot_stack.push(std::rc::Rc::new(frame));
         }
-        let nodes = self.lower_members(&view.body, known_views);
-        if has_content_slot {
+        let nodes = self.lower_scope(&view.body, known_views);
+        if has_slots {
             self.slot_stack.pop();
         }
         nodes
@@ -2190,6 +2421,9 @@ impl Interpreter {
 /// What a parameter reads as when its view is lowered with no call: the zero of
 /// its declared type.
 fn unset_param(param: &Param) -> Value {
+    if param.optional {
+        return Value::Unit;
+    }
     match &param.ty {
         Some(Type::Named { name, args, .. }) if args.is_empty() => match name.as_str() {
             "Int" => Value::Int(0),

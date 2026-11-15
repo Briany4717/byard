@@ -120,6 +120,7 @@ fn resolve_state_attrs_applies_specificity_then_declaration_order() {
         span: sp,
     };
     let block = |states: Vec<StyleStateKind>, v: i64| StateBlock {
+        remote: Vec::new(),
         states,
         attrs: vec![prop("bg", v)],
         viewport: None,
@@ -133,12 +134,24 @@ fn resolve_state_attrs_applies_specificity_then_declaration_order() {
     ];
 
     // No state active → base survives, and the borrow is cheap (no clone).
-    let none = resolve_state_attrs(&base, &blocks, StyleState::empty(), &|_| false);
+    let none = resolve_state_attrs(
+        &base,
+        &blocks,
+        StyleState::empty(),
+        &std::collections::HashMap::default(),
+        &|_| false,
+    );
     assert!(matches!(none, std::borrow::Cow::Borrowed(_)));
     assert_eq!(find_int(&none, "bg"), Some(1));
 
     // Hover alone → the hover block overlays (the combined block needs focus).
-    let hov = resolve_state_attrs(&base, &blocks, StyleState::HOVER, &|_| false);
+    let hov = resolve_state_attrs(
+        &base,
+        &blocks,
+        StyleState::HOVER,
+        &std::collections::HashMap::default(),
+        &|_| false,
+    );
     assert_eq!(find_int(&hov, "bg"), Some(2));
 
     // Hover + disabled (equal specificity) → disabled wins by declaration
@@ -147,6 +160,7 @@ fn resolve_state_attrs_applies_specificity_then_declaration_order() {
         &base,
         &blocks,
         StyleState::HOVER.union(StyleState::DISABLED),
+        &std::collections::HashMap::default(),
         &|_| false,
     );
     assert_eq!(find_int(&both, "bg"), Some(3));
@@ -157,6 +171,7 @@ fn resolve_state_attrs_applies_specificity_then_declaration_order() {
         &base,
         &blocks,
         StyleState::HOVER.union(StyleState::FOCUSED),
+        &std::collections::HashMap::default(),
         &|_| false,
     );
     assert_eq!(find_int(&combined, "bg"), Some(4));

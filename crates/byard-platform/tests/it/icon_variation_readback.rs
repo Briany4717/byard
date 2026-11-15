@@ -128,6 +128,8 @@ fn frame(fill: Option<f32>) -> RenderFrame {
     frame.set_fonts(Arc::new(fonts));
     frame.push_text(TextLine {
         align: byard_core::frame::TextAlign::Start,
+        max_lines: 0,
+        ellipsis: false,
         x: 40.0,
         y: 40.0,
         text: "favorite".to_string(),

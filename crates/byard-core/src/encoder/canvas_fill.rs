@@ -228,6 +228,8 @@ pub struct StagedFill {
     pub record: super::instance_arena::Region,
     /// How many indices to draw.
     pub index_count: u32,
+    /// The content clip it is drawn under, if any.
+    pub clip: Option<u16>,
 }
 
 /// Stages this segment's filled paths into the arena (RFC-0033 §G1).
@@ -240,6 +242,7 @@ pub fn stage(
     out: &mut Vec<StagedFill>,
     fills: &[CanvasFill],
     depths: &[f32],
+    clips: &[Option<u16>],
 ) {
     for (i, fill) in fills.iter().enumerate() {
         let mesh = &fill.mesh;
@@ -255,29 +258,39 @@ pub fn stage(
             indices: arena.push_index(&mesh.indices),
             record: arena.push_vertex(&[FillInstance::new(fill, depth)]),
             index_count: u32::try_from(mesh.indices.len()).unwrap_or(u32::MAX),
+            clip: clips.get(i).copied().flatten(),
         });
     }
 }
 
-/// Draws this segment's staged fills.
+/// Draws this segment's staged fills, each under the content clip it was
+/// emitted in (a `Clip`, a `ScrollView`): the scissor bounds the work and the
+/// shader's clip test shapes the edge, as for every other pipeline.
 pub fn draw(
     render_pass: &mut wgpu::RenderPass<'_>,
     arena: &super::instance_arena::InstanceArena,
     staged: &[StagedFill],
     pipeline: &wgpu::RenderPipeline,
-    bind_group: &wgpu::BindGroup,
+    ctx: super::ClipCtx<'_>,
 ) {
     if staged.is_empty() {
         return;
     }
     render_pass.set_pipeline(pipeline);
-    render_pass.set_bind_group(0, bind_group, &[super::clip_offset(None)]);
     for fill in staged {
+        let Some((x, y, w, h)) = super::clip_scissor(ctx, fill.clip) else {
+            continue;
+        };
+        render_pass.set_scissor_rect(x, y, w, h);
+        render_pass.set_bind_group(0, ctx.viewport_bind_group, &[super::clip_offset(fill.clip)]);
         render_pass.set_vertex_buffer(0, arena.slice(fill.vertices));
         render_pass.set_vertex_buffer(1, arena.slice(fill.record));
         render_pass.set_index_buffer(arena.slice(fill.indices), wgpu::IndexFormat::Uint32);
         render_pass.draw_indexed(0..fill.index_count, 0, 0..1);
     }
+    let (x, y, w, h) = ctx.base;
+    render_pass.set_scissor_rect(x, y, w, h);
+    render_pass.set_bind_group(0, ctx.viewport_bind_group, &[super::clip_offset(None)]);
 }
 
 /// The registered `CanvasFill` pipeline (RFC-0039).
@@ -307,7 +320,7 @@ impl super::pipeline::RenderPipeline for CanvasFillPipeline {
             cx.arena,
             &cx.staged.fills,
             &self.pipeline,
-            cx.viewport_bind_group,
+            cx.clip_ctx,
         );
     }
 

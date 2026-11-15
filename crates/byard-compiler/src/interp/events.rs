@@ -24,6 +24,16 @@ pub enum EventKind {
     PointerDown,
     /// A pointer release.
     PointerUp,
+    /// A held press has moved past the tap slop (RFC-0063). **Internal**:
+    /// fired by the router on the element the press began on, once per press.
+    DragStart,
+    /// The pointer moved while a press that is a drag is held (RFC-0063).
+    /// **Internal**: fired on the element the press began on, wherever the
+    /// pointer is.
+    Drag,
+    /// A press that was a drag was released (RFC-0063). **Internal**: fired on
+    /// the element the press began on.
+    DragEnd,
     /// A qualifying tap (down+up within thresholds; E4).
     Tap,
     /// Continuous pointer movement.
@@ -66,6 +76,12 @@ pub enum EventKind {
     /// produced by a raw [`InputEvent`], fired directly by
     /// `EventRouter::steal_focus` on the falling edge of `focused_sig`.
     Blur,
+    // ── RFC-0066 crossings of an element's subtree ───────────────────────
+    /// Keyboard focus arrived in an element or anything inside it. **Internal**:
+    /// fired by the router on the way focus moves, once per crossing.
+    FocusIn,
+    /// Keyboard focus left an element and everything inside it. **Internal**.
+    FocusOut,
     // ── RFC-0021 advanced scroll behaviours ──────────────────────────────
     /// A `ScrollView` scrolled past its `end_threshold` (infinite scroll).
     /// **Internal-only**: fired by the scroll machinery, debounced until the
@@ -101,6 +117,9 @@ impl EventKind {
             self,
             Self::PointerDown
                 | Self::PointerUp
+                | Self::DragStart
+                | Self::Drag
+                | Self::DragEnd
                 | Self::Tap
                 | Self::DoubleTap
                 | Self::LongPress
@@ -171,6 +190,14 @@ thread_local! {
     /// the handlers that need a clock (a text field coalescing typed
     /// characters into one undo step).
     pub static CURRENT_EVENT_TIME: std::cell::Cell<u64> = const { std::cell::Cell::new(0) };
+    /// The delta of the event currently being dispatched (a wheel's lines or a
+    /// trackpad's pixels), for the handlers that scroll by it.
+    pub static CURRENT_EVENT_DELTA: std::cell::Cell<(f32, f32)> =
+        const { std::cell::Cell::new((0.0, 0.0)) };
+    /// Where the press in flight began, for the drag events' `dx` and `dy`
+    /// (RFC-0063). The event's own position when no press is held.
+    pub static CURRENT_PRESS_POS: std::cell::Cell<(f32, f32)> =
+        const { std::cell::Cell::new((0.0, 0.0)) };
 }
 
 /// A handler's reactive action. Receives the context (for `var` mutation) and
@@ -185,12 +212,18 @@ struct Handler {
     frame: Option<Transform>,
     kind: EventKind,
     action: Action,
+    /// Registered under an `interactive: false` element (RFC-0066 §5): the
+    /// pointer goes through it to what is beneath. Keys and the router's own
+    /// events still reach it.
+    through: bool,
 }
 
 struct Focusable {
     elem: u32,
     rect: Rect,
     frame: Option<Transform>,
+    /// See [`Handler::through`].
+    through: bool,
     /// The `var` bound via `#[focused: …]`.
     focused_sig: SignalId,
     /// How many handlers were registered before this one: where it sits in the
@@ -204,6 +237,11 @@ struct DownState {
     time_ms: u64,
     /// True when the secondary (right) button initiated the press.
     secondary: bool,
+    /// The router's clock when the press began, which a held press measures
+    /// its long press against.
+    clock_ms: u64,
+    /// Whether the long press already fired while the press was held.
+    long_fired: bool,
 }
 
 /// The interaction-state mask of one element (RFC-0012 Part B): the engine-owned
@@ -231,12 +269,41 @@ pub enum GroupKind {
     Tabs,
     /// A radio group: the arrows move focus and select what they reach.
     Radios,
+    /// A menu (RFC-0066 §2): Up and Down move focus and wrap, Home and End go
+    /// to the ends, Left and Right belong to submenus. A menu bar, a `Row`, is
+    /// the same with the axes swapped.
+    Menu {
+        /// Whether the items run along a row.
+        horizontal: bool,
+    },
+    /// A grid (RFC-0067): Left and Right move by cell and on to the next or
+    /// previous row at the end of one, Up and Down by row, Home and End to the
+    /// ends of the row. Every other key, and an arrow with nowhere to go, is
+    /// left to the focused cell.
+    Grid {
+        /// The number of columns of a layout `Grid` whose cells are not written
+        /// inside `row` elements, or `0` when the rows are the `row` elements.
+        columns: u16,
+    },
 }
 
 /// A set of focus targets the arrow keys move between.
 struct Group {
     kind: GroupKind,
-    members: Vec<u32>,
+    /// The members, each with whether it is the selected one (RFC-0063 §4).
+    members: Vec<(u32, bool)>,
+    /// For a grid (RFC-0067): the row each member is in, parallel to `members`.
+    /// Empty for every other kind, which pay nothing for it.
+    rows: Vec<u32>,
+    /// For a grid: the number of `row` elements opened so far, the row a member
+    /// registered now is in.
+    row: u32,
+}
+
+impl Group {
+    fn has(&self, elem: u32) -> bool {
+        self.members.iter().any(|&(m, _)| m == elem)
+    }
 }
 
 impl StyleState {
@@ -267,6 +334,15 @@ impl StyleState {
     /// text field (RFC-0052). A pointer press on anything else focuses
     /// without it.
     pub const FOCUS_VISIBLE: StyleState = StyleState(1 << 9);
+    /// The element, or an element inside it, has keyboard focus (RFC-0062).
+    /// Not reported by the router, which knows no tree; the paint walk adds it.
+    pub const FOCUS_WITHIN: StyleState = StyleState(1 << 10);
+    /// The element is on its first frame (RFC-0066 `on enter`). Not reported by
+    /// the router: the paint walk adds it.
+    pub const ENTERING: StyleState = StyleState(1 << 11);
+    /// The element is leaving, kept drawn until its motion settles (RFC-0066
+    /// `on leave`). Not reported by the router: the paint walk adds it.
+    pub const LEAVING: StyleState = StyleState(1 << 12);
 
     /// The empty state (no interaction flags).
     #[must_use]
@@ -311,6 +387,9 @@ pub struct EventRouter {
     handlers: Vec<Handler>,
     focusables: Vec<Focusable>,
     down: Option<DownState>,
+    /// The app clock the host last set (`set_clock_ms`), for a press that is
+    /// still held when its long-press time passes.
+    clock_ms: u64,
     focused: Option<u32>,
     /// The `var` the focused element reports into, kept from the frame that
     /// focused it so an element that goes away can still be blurred.
@@ -372,7 +451,7 @@ pub struct EventRouter {
     /// is the non-obvious half: without it, pressing the field that opened the
     /// panel dismisses and reopens it in one gesture, which reads as a flicker
     /// nobody can explain.
-    light_dismiss: Vec<(Vec<Rect>, Action)>,
+    light_dismiss: Vec<(Vec<Rect>, Action, u32)>,
     /// Elements that keep a drag after it leaves them (RFC-0041 §4): while a
     /// press that began on one is held, `PointerDrag` and `PointerUp` go to
     /// it wherever the pointer is, instead of to whatever is under the pointer.
@@ -403,6 +482,55 @@ pub struct EventRouter {
     /// held the element reports `PRESSED`, as it does for a pointer press
     /// (RFC-0059). Gesture state, kept across the render rebuild.
     activation_held: Option<u32>,
+    /// How many `interactive: false` elements enclose what is being registered
+    /// (RFC-0066 §5). Rebuilt every render.
+    pass_through: u32,
+    /// Whether what is being registered is leaving (RFC-0066 §3): it takes no
+    /// input, is not in the Tab order and dismisses nothing. Rebuilt every
+    /// render.
+    inert: bool,
+    /// For an element that listens for the pointer or focus crossing its
+    /// subtree (RFC-0066 §5): the elements inside it. An element with a
+    /// listener and no entry is a leaf, and only itself is inside it.
+    subtrees: std::collections::HashMap<u32, Vec<u32>>,
+    /// The focus scopes mounted this frame (RFC-0066 §1), outermost first.
+    scopes: Vec<Scope>,
+    /// The elements marked `autofocus` this frame, in the order they were
+    /// drawn.
+    autofocus: Vec<u32>,
+    /// Menu items that open a submenu (RFC-0066 §2), which Right presses.
+    submenu_openers: Vec<(u32, bool)>,
+    /// What Escape dismisses, the topmost last.
+    escapes: Vec<Escape>,
+    /// How many light dismisses were registered this frame, to number them.
+    light_seq: u32,
+    /// Whether the last thing the user did was press a key (RFC-0066 §1): a
+    /// focus that moves by itself shows its ring only then, as a Tab after a
+    /// click does (RFC-0052). Gesture state, kept across the render rebuild.
+    key_modality: bool,
+}
+
+/// A focus scope mounted this frame (RFC-0066 §1): an overlay that is modal, or
+/// whose content is a dialog or a menu.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct Scope {
+    /// What the scope is from one frame to the next: its overlay's identity.
+    pub key: u32,
+    /// Where its focusables begin in this frame's list, and where they end.
+    pub first: usize,
+    /// See `first`.
+    pub end: usize,
+    /// Whether its content is a menu.
+    pub menu: bool,
+}
+
+/// What Escape can dismiss, in the order the overlays mounted (RFC-0066 §2).
+#[derive(Clone, Copy, Debug)]
+enum Escape {
+    /// A modal overlay's scrim, by handler index.
+    Scrim(usize),
+    /// An anchored overlay's light dismiss, by the number it was given.
+    Light(u32),
 }
 
 impl EventRouter {
@@ -433,18 +561,182 @@ impl EventRouter {
         self.text_entries.clear();
         self.groups.clear();
         self.open_groups.clear();
+        self.pass_through = 0;
+        self.inert = false;
+        self.subtrees.clear();
+        self.scopes.clear();
+        self.autofocus.clear();
+        self.submenu_openers.clear();
+        self.escapes.clear();
+        self.light_seq = 0;
+    }
+
+    /// Marks what is registered next as leaving (RFC-0066 §3), or not, and
+    /// returns what it was: a leaving element takes no input, is not in the Tab
+    /// order and dismisses nothing.
+    pub fn set_inert(&mut self, inert: bool) -> bool {
+        std::mem::replace(&mut self.inert, inert)
+    }
+
+    /// Enters an `interactive: false` element (RFC-0066 §5): the pointer goes
+    /// through what is registered until [`leave_pass_through`](Self::leave_pass_through).
+    pub fn enter_pass_through(&mut self) {
+        self.pass_through += 1;
+    }
+
+    /// Leaves an `interactive: false` element.
+    pub fn leave_pass_through(&mut self) {
+        self.pass_through = self.pass_through.saturating_sub(1);
+    }
+
+    /// Whether what is registered now is under an `interactive: false` element.
+    #[must_use]
+    pub fn passes_pointer(&self) -> bool {
+        self.pass_through > 0
+    }
+
+    /// Records the elements inside `elem`, for the crossings its `pointer_enter`,
+    /// `pointer_leave`, `focus_in` and `focus_out` are about (RFC-0066 §5).
+    pub fn listen_subtree(&mut self, elem: u32, inside: Vec<u32>) {
+        if !self.inert {
+            self.subtrees.insert(elem, inside);
+        }
+    }
+
+    /// Marks `elem` as the element focus goes to when its scope opens
+    /// (RFC-0066 §1).
+    pub fn mark_autofocus(&mut self, elem: u32) {
+        if !self.inert {
+            self.autofocus.push(elem);
+        }
+    }
+
+    /// Marks `elem` as a menu item that opens a submenu: Right presses it
+    /// (RFC-0066 §2).
+    pub fn submenu_opener(&mut self, elem: u32, collapsed: bool) {
+        if !self.inert {
+            self.submenu_openers.push((elem, collapsed));
+        }
+    }
+
+    /// Opens a focus scope (RFC-0066 §1): what is registered until
+    /// [`end_scope`](Self::end_scope) is inside it, and Tab cycles inside the
+    /// topmost one. `menu` says its content is a menu.
+    pub fn begin_scope(&mut self, key: u32, menu: bool) {
+        if self.inert {
+            return;
+        }
+        self.focusable_floor = self.focusables.len();
+        self.scopes.push(Scope {
+            key,
+            first: self.focusables.len(),
+            end: self.focusables.len(),
+            menu,
+        });
+    }
+
+    /// Closes the scope [`begin_scope`](Self::begin_scope) opened.
+    pub fn end_scope(&mut self) {
+        let end = self.focusables.len();
+        if let Some(scope) = self.scopes.last_mut() {
+            if scope.end == scope.first && scope.end <= end {
+                scope.end = end;
+            }
+        }
+    }
+
+    /// The focus scopes mounted this frame, outermost first.
+    #[must_use]
+    pub fn scopes(&self) -> &[Scope] {
+        &self.scopes
+    }
+
+    /// Whether the last thing the user did was press a key.
+    #[must_use]
+    pub const fn key_modality(&self) -> bool {
+        self.key_modality
+    }
+
+    /// Where focus goes when `scope` opens (RFC-0066 §1): the element marked
+    /// `autofocus` (the first drawn, if several), else the first element Tab
+    /// would reach in it, `None` when it holds nothing focus can go to.
+    #[must_use]
+    pub fn scope_entry(&self, scope: &Scope) -> Option<u32> {
+        let inside = &self.focusables
+            [scope.first.min(self.focusables.len())..scope.end.min(self.focusables.len())];
+        if let Some(marked) = self.autofocus.iter().find(|a| {
+            inside
+                .iter()
+                .any(|f| f.elem == **a && !self.disabled.contains(&f.elem))
+        }) {
+            return Some(*marked);
+        }
+        self.tab_stops(scope.first).first().copied()
+    }
+
+    /// Whether no element is marked `autofocus` this frame.
+    #[must_use]
+    pub fn autofocus_is_empty(&self) -> bool {
+        self.autofocus.is_empty()
+    }
+
+    /// The elements marked `autofocus` this frame, in the order drawn.
+    #[must_use]
+    pub fn autofocus_all(&self) -> &[u32] {
+        &self.autofocus
+    }
+
+    /// The elements marked `autofocus` this frame that are not in any of
+    /// `scopes`.
+    #[must_use]
+    pub fn autofocus_outside(&self, scopes: &[Scope]) -> Vec<u32> {
+        self.autofocus
+            .iter()
+            .copied()
+            .filter(|a| !scopes.iter().any(|s| self.scope_holds(s, *a)))
+            .collect()
+    }
+
+    /// Whether `elem` is drawn this frame as something focus can go to,
+    /// wherever it is: the check a focus that returns makes (RFC-0066 §1).
+    #[must_use]
+    pub fn is_focusable_now(&self, elem: u32) -> bool {
+        !self.disabled.contains(&elem) && self.focusables.iter().any(|f| f.elem == elem)
+    }
+
+    /// Whether `elem` is, or is nested in, what `scope` holds: its elements
+    /// that are focusable this frame.
+    #[must_use]
+    pub fn scope_holds(&self, scope: &Scope, elem: u32) -> bool {
+        self.focusables
+            [scope.first.min(self.focusables.len())..scope.end.min(self.focusables.len())]
+            .iter()
+            .any(|f| f.elem == elem)
+    }
+
+    /// Moves focus to `elem`, or takes it away, as the interpreter asks
+    /// (RFC-0066 §1): no check that it is in the scope the trap leaves open,
+    /// which is the caller's.
+    pub fn move_focus(&mut self, ctx: &mut ReactiveCtx, elem: Option<u32>, visible: bool) {
+        self.steal_focus(ctx, elem, visible);
     }
 
     /// Makes a focused Space or Enter press `elem`: it fires its `Tap` handler.
     /// Registered after the handler it presses. `keys` says which of the two
     /// does it (RFC-0052 §3); the other goes on to the element's own `key_down`.
     pub fn activate_on_key(&mut self, elem: u32, keys: ActivationKeys) {
+        if self.inert {
+            return;
+        }
         self.activatable.push((elem, keys));
     }
 
     /// Marks `elem` as one that shows focus however it was reached, a text
     /// field (RFC-0052 §4).
     pub fn text_entry(&mut self, elem: u32) {
+        if self.inert {
+            return;
+        }
         self.text_entries.push(elem);
     }
 
@@ -456,7 +748,19 @@ impl EventRouter {
         self.groups.push(Group {
             kind,
             members: Vec::new(),
+            rows: Vec::new(),
+            row: 0,
         });
+    }
+
+    /// Starts the next row of the innermost open group, when it is a grid
+    /// (RFC-0067). The cells registered from here on are in it.
+    pub fn next_row(&mut self) {
+        if let Some(&g) = self.open_groups.last() {
+            if matches!(self.groups[g].kind, GroupKind::Grid { .. }) {
+                self.groups[g].row += 1;
+            }
+        }
     }
 
     /// Closes the innermost open group.
@@ -465,10 +769,26 @@ impl EventRouter {
     }
 
     /// Adds a focus target to the innermost open group, if there is one.
-    pub fn group_member(&mut self, elem: u32) {
-        if let Some(&g) = self.open_groups.last() {
-            self.groups[g].members.push(elem);
+    /// `selected` is whether it is the group's selected member, where Tab
+    /// enters the group (RFC-0063 §4).
+    pub fn group_member(&mut self, elem: u32, selected: bool) {
+        if self.inert {
+            return;
         }
+        if let Some(&g) = self.open_groups.last() {
+            let group = &mut self.groups[g];
+            group.members.push((elem, selected));
+            if matches!(group.kind, GroupKind::Grid { .. }) {
+                group.rows.push(group.row);
+            }
+        }
+    }
+
+    /// Whether the innermost open group exists: a member's selected state is
+    /// worth reading only then.
+    #[must_use]
+    pub fn in_group(&self) -> bool {
+        !self.open_groups.is_empty()
     }
 
     /// Whether a key press of `key` ("Space" or "Enter", however the platform
@@ -487,6 +807,9 @@ impl EventRouter {
 
     /// Makes `elem` keep the drag of a press that began on it (RFC-0041 §4).
     pub fn capture_drag(&mut self, elem: u32) {
+        if self.inert {
+            return;
+        }
         self.drag_captures.push(elem);
     }
 
@@ -517,10 +840,16 @@ impl EventRouter {
     /// overlay with no `dismiss` still blocks input but cannot be dismissed by
     /// an outside tap (the caller relies on its own controls).
     pub fn push_modal_scrim(&mut self, elem: u32, rect: Rect, dismiss: Option<Action>) {
+        // A leaving overlay blocks nothing and dismisses nothing (RFC-0066 §3).
+        if self.inert {
+            return;
+        }
         self.modal_floor = self.handlers.len();
         self.focusable_floor = self.focusables.len();
         let idx = self.handlers.len();
+        let dismissable = dismiss.is_some();
         self.handlers.push(Handler {
+            through: false,
             elem,
             rect,
             // A scrim covers the viewport in screen space whatever it was
@@ -530,11 +859,18 @@ impl EventRouter {
             action: dismiss.unwrap_or_else(|| Box::new(|_, _| {})),
         });
         self.modal_scrims.push(idx);
+        // Escape reaches a scrim that has a `dismiss` to run, and no other.
+        if dismissable {
+            self.escapes.push(Escape::Scrim(idx));
+        }
     }
 
     /// Marks `rect` as the content of the most recent modal scrim: a press
     /// inside it does not reach the scrim, so it cannot dismiss.
     pub fn keep_scrim_open_over(&mut self, rect: Rect) {
+        if self.inert {
+            return;
+        }
         let Some(&idx) = self.modal_scrims.last() else {
             return;
         };
@@ -551,18 +887,39 @@ impl EventRouter {
     /// raised, so the view underneath keeps every event it would otherwise
     /// have had.
     pub fn push_light_dismiss(&mut self, keep: Vec<Rect>, action: Action) {
-        self.light_dismiss.push((keep, action));
+        if self.inert {
+            return;
+        }
+        let seq = self.light_seq;
+        self.light_seq += 1;
+        self.light_dismiss.push((keep, action, seq));
+        self.escapes.push(Escape::Light(seq));
     }
 
-    /// Fires every light dismiss unconditionally (RFC-0036, `Escape`), and
-    /// reports how many fired.
-    fn fire_light_dismiss_all(&mut self, ctx: &mut ReactiveCtx) -> usize {
-        let pending = std::mem::take(&mut self.light_dismiss);
-        let fired = pending.len();
-        for (_, mut action) in pending {
-            action(ctx, None);
+    /// Dismisses the topmost overlay that has a `dismiss` (RFC-0066 §2), and
+    /// nothing else. Returns whether one was dismissed.
+    fn escape_topmost(&mut self, ctx: &mut ReactiveCtx) -> bool {
+        while let Some(target) = self.escapes.pop() {
+            match target {
+                Escape::Scrim(i) => {
+                    let mut action =
+                        std::mem::replace(&mut self.handlers[i].action, Box::new(|_, _| {}));
+                    action(ctx, None);
+                    self.handlers[i].action = action;
+                    return true;
+                }
+                Escape::Light(seq) => {
+                    // One a press already dismissed this tick is gone, and the
+                    // one beneath it is the topmost left.
+                    if let Some(at) = self.light_dismiss.iter().position(|d| d.2 == seq) {
+                        let (_, mut action, _) = self.light_dismiss.remove(at);
+                        action(ctx, None);
+                        return true;
+                    }
+                }
+            }
         }
-        fired
+        false
     }
 
     /// Fires every light dismiss whose press landed outside all of its kept
@@ -578,9 +935,9 @@ impl EventRouter {
         let pending = std::mem::take(&mut self.light_dismiss);
         let mut fired = 0;
         let mut kept = Vec::new();
-        for (keep, mut action) in pending {
+        for (keep, mut action, seq) in pending {
             if keep.iter().any(|r| contains(*r, pos)) {
-                kept.push((keep, action));
+                kept.push((keep, action, seq));
                 continue;
             }
             action(ctx, None);
@@ -640,6 +997,10 @@ impl EventRouter {
     /// element styled with `on hover`/`on pressed` but no event handler still
     /// reports those interaction states. Rebuilt every render.
     pub fn track_region(&mut self, elem: u32, rect: Rect) {
+        // An element the pointer goes through has no hover to report.
+        if self.inert || self.pass_through > 0 {
+            return;
+        }
         self.hover_regions.push((elem, rect, self.current_frame));
     }
 
@@ -684,14 +1045,25 @@ impl EventRouter {
         s
     }
 
+    /// The element that holds keyboard focus, if any (RFC-0062: `focus_within`
+    /// is the focused element and its ancestors).
+    #[must_use]
+    pub fn focused_element(&self) -> Option<u32> {
+        self.focused
+    }
+
     /// Registers a handler for `kind` on element `elem`'s `rect`.
     pub fn on(&mut self, elem: u32, rect: Rect, kind: EventKind, action: Action) {
+        if self.inert {
+            return;
+        }
         self.handlers.push(Handler {
             elem,
             rect,
             frame: self.current_frame,
             kind,
             action,
+            through: self.pass_through > 0,
         });
     }
 
@@ -703,6 +1075,44 @@ impl EventRouter {
     #[must_use]
     pub fn claims_pointer(&self, pos: (f32, f32)) -> bool {
         self.claims_pointer_from(pos, 0)
+    }
+
+    /// Whether the press at `pos` is claimed only by something that taps or
+    /// presses, with no drag of its own and no focus of its own: a drag that
+    /// starts there can scroll a view around it and cancel the tap.
+    #[must_use]
+    pub fn press_only_taps(&self, pos: (f32, f32)) -> bool {
+        let at = |kinds: &[EventKind]| {
+            self.handlers
+                .iter()
+                .any(|h| hits(h.rect, h.frame, pos) && kinds.contains(&h.kind))
+        };
+        // What is focusable at the point counts only when it is the thing
+        // that taps: a focusable that merely holds the tapping element (a
+        // list that takes the arrow keys) is not a reason to keep the press
+        // from scrolling the view inside it.
+        let focus_taps = self.focusable_at(None, pos).is_some_and(|f| {
+            self.handlers.iter().any(|h| {
+                h.elem == f
+                    && hits(h.rect, h.frame, pos)
+                    && matches!(h.kind, EventKind::Tap | EventKind::PointerDown)
+            })
+        });
+        at(&[EventKind::Tap, EventKind::PointerDown])
+            && !at(&[
+                EventKind::PointerDrag,
+                EventKind::DragStart,
+                EventKind::Drag,
+                EventKind::Change,
+            ])
+            && !focus_taps
+    }
+
+    /// Gives up the press in flight: its release is no tap, and no drag of its
+    /// own begins. A view that took the gesture to scroll calls this.
+    pub fn cancel_press(&mut self) {
+        self.down = None;
+        self.dragging = None;
     }
 
     /// How many handlers are registered so far this frame. Handlers are
@@ -719,12 +1129,15 @@ impl EventRouter {
     #[must_use]
     pub fn claims_pointer_from(&self, pos: (f32, f32), from: usize) -> bool {
         self.handlers.iter().skip(from).any(|h| {
-            hits(h.rect, h.frame, pos)
+            !h.through
+                && hits(h.rect, h.frame, pos)
                 && matches!(
                     h.kind,
                     EventKind::Tap
                         | EventKind::PointerDown
                         | EventKind::PointerDrag
+                        | EventKind::DragStart
+                        | EventKind::Drag
                         | EventKind::Change
                 )
         })
@@ -732,9 +1145,13 @@ impl EventRouter {
 
     /// Registers a focusable element bound to `focused_sig` (`#[focused: …]`).
     pub fn focusable(&mut self, elem: u32, rect: Rect, focused_sig: SignalId) {
+        if self.inert {
+            return;
+        }
         self.focusables.push(Focusable {
             elem,
             rect,
+            through: self.pass_through > 0,
             frame: self.current_frame,
             focused_sig,
             after: self.handlers.len(),
@@ -899,9 +1316,12 @@ impl EventRouter {
         CURRENT_EVENT_POS.with(|c| c.set(ev.pos));
         CURRENT_EVENT_MODS.with(|c| c.set(ev.mods));
         CURRENT_EVENT_TIME.with(|c| c.set(ev.time_ms));
+        CURRENT_EVENT_DELTA.with(|c| c.set(ev.delta));
+        CURRENT_PRESS_POS.with(|c| c.set(self.down.as_ref().map_or(ev.pos, |d| d.pos)));
 
         match ev.kind {
             EventKind::PointerDown => {
+                self.key_modality = false;
                 // RFC-0036: an anchored overlay dismisses on a press outside
                 // itself and its anchor. Before the press is routed, not
                 // after: the element the press lands on is entitled to its own
@@ -915,9 +1335,12 @@ impl EventRouter {
                     pos: ev.pos,
                     time_ms: ev.time_ms,
                     secondary,
+                    clock_ms: self.clock_ms,
+                    long_fired: false,
                 });
                 // A fresh press starts a new gesture, not yet a drag (RFC-0024).
                 self.dragging = None;
+                CURRENT_PRESS_POS.with(|c| c.set(ev.pos));
                 if secondary {
                     self.fire(ctx, atlas, EventKind::Secondary, ev.pos, None);
                 } else {
@@ -939,6 +1362,14 @@ impl EventRouter {
                         self.fire_on_elem(ctx, Some(elem), EventKind::PointerUp, ev.pos, None);
                     }
                     None => self.fire(ctx, atlas, EventKind::PointerUp, ev.pos, None),
+                }
+                // RFC-0063: a press that was a drag ends, on the element it
+                // began on, after the release itself.
+                if let Some(elem) = self
+                    .dragging
+                    .filter(|_| self.down.as_ref().is_some_and(|d| !d.secondary))
+                {
+                    self.fire_on_elem(ctx, Some(elem), EventKind::DragEnd, ev.pos, None);
                 }
                 // The gesture ends, clear the drag latch (RFC-0024).
                 self.dragging = None;
@@ -972,6 +1403,7 @@ impl EventRouter {
                     } else {
                         // Check long press (held > LONG_PRESS_MS without much movement).
                         if down.elem.is_some()
+                            && !down.long_fired
                             && down.elem == self.hit_any(atlas, ev.pos)
                             && moved < TAP_SLOP
                             && elapsed >= LONG_PRESS_MS
@@ -993,8 +1425,19 @@ impl EventRouter {
                         // RFC-0024 `dragging`: latch once the pointer travels past
                         // the drag threshold from the press point.
                         let (dx, dy) = (ev.pos.0 - dpos.0, ev.pos.1 - dpos.1);
+                        let primary = self.down.as_ref().is_some_and(|d| !d.secondary);
                         if (dx * dx + dy * dy).sqrt() > TAP_SLOP {
+                            // RFC-0063: the latch rising is the drag starting.
+                            let began = self.dragging.is_none() && elem.is_some() && primary;
                             self.dragging = elem;
+                            if began {
+                                self.fire_on_elem(ctx, elem, EventKind::DragStart, ev.pos, None);
+                            }
+                        }
+                        // Once it is a drag it stays one, however near the
+                        // press point the pointer comes back to.
+                        if primary && self.dragging.is_some() {
+                            self.fire_on_elem(ctx, self.dragging, EventKind::Drag, ev.pos, None);
                         }
                         match self.captured_drag() {
                             Some(elem) => self.fire_on_elem(
@@ -1012,28 +1455,19 @@ impl EventRouter {
                         // Enter / Exit / Hover: compare new hovered elem to prev.
                         let new_hover = self.hit_any(atlas, ev.pos);
                         if new_hover != self.hovered {
-                            if self.hovered.is_some() {
-                                // Fire PointerExit on the element we left.
-                                if let Some(old_pos) = self.hovered.map(|_| ev.pos) {
-                                    self.fire_on_elem(
-                                        ctx,
-                                        self.hovered,
-                                        EventKind::PointerExit,
-                                        old_pos,
-                                        None,
-                                    );
-                                }
-                            }
+                            // RFC-0066 §5: an element is entered when the pointer
+                            // arrives in it or anything inside it, and left
+                            // when it leaves all of that, once per crossing.
+                            let old = self.hovered;
                             self.hovered = new_hover;
-                            if new_hover.is_some() {
-                                self.fire_on_elem(
-                                    ctx,
-                                    new_hover,
-                                    EventKind::PointerEnter,
-                                    ev.pos,
-                                    None,
-                                );
-                            }
+                            self.cross(
+                                ctx,
+                                EventKind::PointerEnter,
+                                EventKind::PointerExit,
+                                old,
+                                new_hover,
+                                ev.pos,
+                            );
                         }
                         // Hover fires every move while inside (like mousemove).
                         if new_hover.is_some() {
@@ -1044,6 +1478,9 @@ impl EventRouter {
             }
             EventKind::Tap
             | EventKind::PointerDrag
+            | EventKind::DragStart
+            | EventKind::Drag
+            | EventKind::DragEnd
             | EventKind::PointerEnter
             | EventKind::PointerExit
             | EventKind::Hover
@@ -1054,6 +1491,7 @@ impl EventRouter {
             }
             // Keyboard events are routed to the focused element.
             EventKind::KeyDown => {
+                self.key_modality = true;
                 // Tab key cycles focus.
                 if let Some(Value::Str(key)) = &ev.value {
                     if key == "Tab" {
@@ -1083,20 +1521,30 @@ impl EventRouter {
                     {
                         return;
                     }
+                    // RFC-0066 §2: Right opens the submenu of a menu item that
+                    // has one, and Left closes the one focus is in.
+                    if key == "ArrowRight" {
+                        if let Some(opener) = self
+                            .focused
+                            .filter(|f| self.submenu_openers.contains(&(*f, true)))
+                        {
+                            self.fire_on_elem(ctx, Some(opener), EventKind::Tap, ev.pos, None);
+                            return;
+                        }
+                    }
+                    if key == "ArrowLeft" && self.in_submenu() && self.escape_topmost(ctx) {
+                        return;
+                    }
                     // RFC-0017: Escape dismisses the topmost modal overlay.
                     // RFC-0036: and every open anchored overlay, which has no
                     // scrim to press but is just as much "the thing Escape is
                     // for". Both, in that order, so a dropdown inside a dialog
                     // closes before the dialog does.
-                    if key == "Escape" {
-                        let light = self.fire_light_dismiss_all(ctx);
-                        if light > 0 {
-                            return;
-                        }
-                        if !self.modal_scrims.is_empty() {
-                            self.dismiss_topmost_modal(ctx);
-                            return;
-                        }
+                    // RFC-0066 §2: it reaches the topmost overlay that has a
+                    // `dismiss`, modal or anchored, and nothing else, so a
+                    // submenu closes before the menu it came from.
+                    if key == "Escape" && self.escape_topmost(ctx) {
+                        return;
                     }
                 }
                 self.fire_focused(ctx, EventKind::KeyDown, ev.value.as_ref());
@@ -1118,12 +1566,28 @@ impl EventRouter {
             // Present only so this match stays exhaustive as the enum grows.
             EventKind::Focus
             | EventKind::Blur
+            | EventKind::FocusIn
+            | EventKind::FocusOut
             | EventKind::EndReached
             | EventKind::PageChange
             | EventKind::ScrollEnd
             | EventKind::Refresh
             | EventKind::RouteChange => {}
         }
+    }
+
+    /// Whether focus is in a menu that a menu item opened (RFC-0066 §2): the
+    /// topmost scope is a menu, focus is inside it, and an item that opens a
+    /// submenu is drawn outside it.
+    fn in_submenu(&self) -> bool {
+        let Some(top) = self.scopes.last().filter(|s| s.menu) else {
+            return false;
+        };
+        self.focused.is_some_and(|f| self.scope_holds(top, f))
+            && self
+                .submenu_openers
+                .iter()
+                .any(|(o, _)| !self.scope_holds(top, *o))
     }
 
     /// Fires a handler of `kind` on a specific element `elem_id` (for enter/exit/hover).
@@ -1170,7 +1634,11 @@ impl EventRouter {
         // something above this handler also listens for presses here, that
         // element has the press, even if it has no handler of this kind (a
         // `TextField` over a panel with `tap`).
+        // A long press is the exception: it goes to the nearest element that
+        // listens for one, so a wrapper's `long_press` fires over a child that
+        // takes the tap.
         if kind.is_press()
+            && kind != EventKind::LongPress
             && self
                 .press_owner(pos)
                 .is_some_and(|e| e != self.handlers[i].elem)
@@ -1221,7 +1689,66 @@ impl EventRouter {
             // RFC-0012 S2: `focus =>` sugar fires on the rising edge.
             self.fire_on_elem(ctx, Some(n), EventKind::Focus, (0.0, 0.0), None);
         }
+        let old = self.focused;
         self.focused = new;
+        // RFC-0066 §5: and for the elements it is inside of.
+        self.cross(
+            ctx,
+            EventKind::FocusIn,
+            EventKind::FocusOut,
+            old,
+            new,
+            (0.0, 0.0),
+        );
+    }
+
+    /// Whether `x` is `listener` or inside it (RFC-0066 §5).
+    fn is_inside(&self, listener: u32, x: u32) -> bool {
+        listener == x
+            || self
+                .subtrees
+                .get(&listener)
+                .is_some_and(|inside| inside.contains(&x))
+    }
+
+    /// Fires `leave` on every element that listens for it and held `old` but
+    /// does not hold `new`, innermost first, then `enter` on every one that
+    /// holds `new` but did not hold `old`, outermost first (RFC-0066 §5).
+    fn cross(
+        &mut self,
+        ctx: &mut ReactiveCtx,
+        enter: EventKind,
+        leave: EventKind,
+        old: Option<u32>,
+        new: Option<u32>,
+        pos: (f32, f32),
+    ) {
+        let held = |this: &Self, kind: EventKind, x: Option<u32>, other: Option<u32>| {
+            let mut out: Vec<u32> = Vec::new();
+            for h in this.handlers.iter().filter(|h| h.kind == kind) {
+                let e = h.elem;
+                if out.contains(&e) {
+                    continue;
+                }
+                let has = x.is_some_and(|x| this.is_inside(e, x));
+                let had = other.is_some_and(|o| this.is_inside(e, o));
+                if has && !had {
+                    out.push(e);
+                }
+            }
+            out
+        };
+        let size = |this: &Self, e: u32| this.subtrees.get(&e).map_or(0, Vec::len);
+        let mut left = held(self, leave, old, new);
+        left.sort_by_key(|e| size(self, *e));
+        for e in left {
+            self.fire_on_elem(ctx, Some(e), leave, pos, None);
+        }
+        let mut entered = held(self, enter, new, old);
+        entered.sort_by_key(|e| std::cmp::Reverse(size(self, *e)));
+        for e in entered {
+            self.fire_on_elem(ctx, Some(e), enter, pos, None);
+        }
     }
 
     /// The element owning a press at `pos`: the topmost handler of any press
@@ -1233,7 +1760,10 @@ impl EventRouter {
             .enumerate()
             .rev()
             .find(|(i, h)| {
-                *i >= self.modal_floor && h.kind.is_press() && hits(h.rect, h.frame, pos)
+                *i >= self.modal_floor
+                    && !h.through
+                    && h.kind.is_press()
+                    && hits(h.rect, h.frame, pos)
             })
             .map(|(i, h)| (i, h.elem));
         // A focusable (a `TextField`) takes the press although it registers no
@@ -1246,6 +1776,7 @@ impl EventRouter {
             .rev()
             .find(|(i, f)| {
                 *i >= self.focusable_floor
+                    && !f.through
                     && !self.disabled.contains(&f.elem)
                     && hits(f.rect, f.frame, pos)
             })
@@ -1255,6 +1786,28 @@ impl EventRouter {
             (Some((_, e)), None) | (None, Some((_, e))) => Some(e),
             (None, None) => None,
         }
+    }
+
+    /// Tells the router the app clock, and fires the long press of a press that
+    /// has been held for [`LONG_PRESS_MS`] without moving off its spot: while
+    /// it is still held, not when it is released.
+    pub fn set_clock_ms(&mut self, ctx: &mut ReactiveCtx, ms: u64) {
+        self.clock_ms = ms;
+        let Some(down) = self.down.as_ref() else {
+            return;
+        };
+        if down.long_fired
+            || down.secondary
+            || self.dragging.is_some()
+            || ms.saturating_sub(down.clock_ms) < LONG_PRESS_MS
+        {
+            return;
+        }
+        let pos = down.pos;
+        if let Some(down) = self.down.as_mut() {
+            down.long_fired = true;
+        }
+        self.fire(ctx, None, EventKind::LongPress, pos, None);
     }
 
     /// Finds the topmost handler of `kind` whose registered (inflated, E8) hit
@@ -1274,7 +1827,9 @@ impl EventRouter {
             .rev()
             // RFC-0017: a mounted modal overlay raises `modal_floor`, hiding every
             // handler beneath its scrim so input can't reach the main tree.
-            .find(|(i, h)| *i >= self.modal_floor && h.kind == kind && hits(h.rect, h.frame, pos))
+            .find(|(i, h)| {
+                *i >= self.modal_floor && !h.through && h.kind == kind && hits(h.rect, h.frame, pos)
+            })
             .map(|(i, _)| i)
     }
 
@@ -1289,7 +1844,7 @@ impl EventRouter {
             .iter()
             .enumerate()
             .rev()
-            .find(|(i, h)| *i >= self.modal_floor && hits(h.rect, h.frame, pos))
+            .find(|(i, h)| *i >= self.modal_floor && !h.through && hits(h.rect, h.frame, pos))
             .map(|(_, h)| h.elem)
             // Fall back to declarative hover/press regions (RFC-0016) for
             // elements that style interaction states but register no handler.
@@ -1321,6 +1876,7 @@ impl EventRouter {
             // cannot steal focus.
             .find(|(i, f)| {
                 *i >= self.focusable_floor
+                    && !f.through
                     && !self.disabled.contains(&f.elem)
                     && hits(f.rect, f.frame, pos)
             })
@@ -1359,12 +1915,9 @@ impl EventRouter {
         // RFC-0017 focus trap: when a modal overlay is mounted, cycle only within
         // its scope (`focusables[focusable_floor..]`), wrapping last→first inside
         // it. Outside a modal overlay, `focusable_floor` is 0, the whole set.
-        let floor = self.focusable_floor;
-        let scope: smallvec::SmallVec<[u32; 16]> = self.focusables[floor..]
-            .iter()
-            .filter(|f| !self.disabled.contains(&f.elem))
-            .map(|f| f.elem)
-            .collect();
+        // RFC-0066 §1 raises the same floor for a dialog or a menu that is not
+        // modal.
+        let scope = self.tab_stops(self.focusable_floor);
         if scope.is_empty() {
             return;
         }
@@ -1391,32 +1944,79 @@ impl EventRouter {
         self.steal_focus(ctx, Some(scope[next_idx]), true);
     }
 
+    /// The places Tab stops at, from the focusable at `floor` on: the ones that
+    /// are not disabled, with a tab list, a radio group or a menu as one stop
+    /// (RFC-0063 §4, RFC-0066 §2).
+    fn tab_stops(&self, floor: usize) -> smallvec::SmallVec<[u32; 16]> {
+        let floor = floor.min(self.focusables.len());
+        let mut scope: smallvec::SmallVec<[u32; 16]> = self.focusables[floor..]
+            .iter()
+            .filter(|f| !self.disabled.contains(&f.elem))
+            .map(|f| f.elem)
+            .collect();
+        // RFC-0063 §4: a tab list or radio group is one stop, at the member
+        // with focus, else the selected one, else the first.
+        for group in &self.groups {
+            let live: smallvec::SmallVec<[(u32, bool); 8]> = group
+                .members
+                .iter()
+                .copied()
+                .filter(|(m, _)| scope.contains(m))
+                .collect();
+            let stop = live
+                .iter()
+                .find(|(m, _)| self.focused == Some(*m))
+                .or_else(|| live.iter().find(|(_, selected)| *selected))
+                .or_else(|| live.first())
+                .map(|&(m, _)| m);
+            if let Some(stop) = stop {
+                scope.retain(|e| *e == stop || !group.has(*e));
+            }
+        }
+        scope
+    }
+
     /// Moves focus within the group the focused element is a member of, for an
     /// arrow, Home or End key (RFC-0052 §3). Returns whether the key was used.
     fn group_key(&mut self, ctx: &mut ReactiveCtx, key: &str) -> bool {
         let Some(focused) = self.focused else {
             return false;
         };
-        let Some(group) = self.groups.iter().find(|g| g.members.contains(&focused)) else {
+        let Some(group) = self.groups.iter().find(|g| g.has(focused)) else {
             return false;
         };
         let kind = group.kind;
+        if matches!(kind, GroupKind::Grid { .. }) {
+            return self.grid_key(ctx, key, focused);
+        }
         let live: smallvec::SmallVec<[u32; 16]> = group
             .members
             .iter()
-            .copied()
+            .map(|&(m, _)| m)
             .filter(|m| !self.disabled.contains(m))
             .collect();
         let Some(here) = live.iter().position(|&m| m == focused) else {
             return false;
         };
         let n = live.len();
-        let next = match key {
-            "ArrowRight" | "ArrowDown" => (here + 1) % n,
-            "ArrowLeft" | "ArrowUp" => (here + n - 1) % n,
-            "Home" if kind == GroupKind::Tabs => 0,
-            "End" if kind == GroupKind::Tabs => n - 1,
-            _ => return false,
+        // A menu moves along its own axis: the other axis opens and closes
+        // submenus (RFC-0066 §2).
+        let (forward, back): (&[&str], &[&str]) = match kind {
+            GroupKind::Menu { horizontal: false } => (&["ArrowDown"], &["ArrowUp"]),
+            GroupKind::Menu { horizontal: true } => (&["ArrowRight"], &["ArrowLeft"]),
+            _ => (&["ArrowRight", "ArrowDown"], &["ArrowLeft", "ArrowUp"]),
+        };
+        let ends = matches!(kind, GroupKind::Tabs | GroupKind::Menu { .. });
+        let next = if forward.contains(&key) {
+            (here + 1) % n
+        } else if back.contains(&key) {
+            (here + n - 1) % n
+        } else if key == "Home" && ends {
+            0
+        } else if key == "End" && ends {
+            n - 1
+        } else {
+            return false;
         };
         let target = live[next];
         self.steal_focus(ctx, Some(target), true);
@@ -1427,15 +2027,87 @@ impl EventRouter {
         true
     }
 
-    /// Fires the topmost mounted modal overlay's `dismiss` action (RFC-0017:
-    /// `Escape` dismisses the topmost modal overlay). No-op when none is mounted.
-    fn dismiss_topmost_modal(&mut self, ctx: &mut ReactiveCtx) {
-        let Some(&i) = self.modal_scrims.last() else {
-            return;
+    /// The arrow, Home and End keys of a grid (RFC-0067). Returns whether the
+    /// key moved focus; one with nowhere to go is not used, so it reaches the
+    /// focused cell's `key_down`.
+    ///
+    /// A cell's column is counted among the cells of its row, enabled or not,
+    /// so a disabled day does not shift the days after it; a disabled cell is
+    /// never a target.
+    fn grid_key(&mut self, ctx: &mut ReactiveCtx, key: &str, focused: u32) -> bool {
+        let Some(group) = self.groups.iter().find(|g| g.has(focused)) else {
+            return false;
         };
-        let mut action = std::mem::replace(&mut self.handlers[i].action, Box::new(|_, _| {}));
-        action(ctx, None);
-        self.handlers[i].action = action;
+        let GroupKind::Grid { columns } = group.kind else {
+            return false;
+        };
+        let n = group.members.len();
+        let row_of = |i: usize| -> u32 {
+            if group.row == 0 && columns > 0 {
+                u32::try_from(i / usize::from(columns)).unwrap_or(u32::MAX)
+            } else {
+                group.rows.get(i).copied().unwrap_or(0)
+            }
+        };
+        let enabled = |i: usize| !self.disabled.contains(&group.members[i].0);
+        let Some(here) = group.members.iter().position(|&(m, _)| m == focused) else {
+            return false;
+        };
+        let row = row_of(here);
+        // Rows are contiguous runs of the members, in tree order.
+        let start = (0..=here).rev().take_while(|&i| row_of(i) == row).last();
+        let start = start.unwrap_or(here);
+        let end = (here..n).take_while(|&i| row_of(i) == row).last();
+        let end = end.unwrap_or(here);
+        let column = here - start;
+        let target = match key {
+            "ArrowRight" => (here + 1..n).find(|&i| enabled(i)),
+            "ArrowLeft" => (0..here).rev().find(|&i| enabled(i)),
+            "Home" => (start..=end).find(|&i| enabled(i)),
+            "End" => (start..=end).rev().find(|&i| enabled(i)),
+            "ArrowDown" | "ArrowUp" => {
+                let down = key == "ArrowDown";
+                // Row by row, away from this one, to the first that has an
+                // enabled cell at this column (its last, when it is shorter).
+                let mut found = None;
+                let mut at = if down { end + 1 } else { start };
+                while found.is_none() {
+                    let (lo, hi) = if down {
+                        if at >= n {
+                            break;
+                        }
+                        let r = row_of(at);
+                        let hi = (at..n).take_while(|&i| row_of(i) == r).last().unwrap_or(at);
+                        (at, hi)
+                    } else {
+                        if at == 0 {
+                            break;
+                        }
+                        let hi = at - 1;
+                        let r = row_of(hi);
+                        let lo = (0..=hi)
+                            .rev()
+                            .take_while(|&i| row_of(i) == r)
+                            .last()
+                            .unwrap_or(hi);
+                        (lo, hi)
+                    };
+                    let cell = (lo + column).min(hi);
+                    if enabled(cell) {
+                        found = Some(cell);
+                    }
+                    at = if down { hi + 1 } else { lo };
+                }
+                found
+            }
+            _ => None,
+        };
+        let Some(target) = target.filter(|&t| t != here) else {
+            return false;
+        };
+        let target = group.members[target].0;
+        self.steal_focus(ctx, Some(target), true);
+        true
     }
 
     /// Test/inspection accessor: the `(elem, kind, rect)` of every registered

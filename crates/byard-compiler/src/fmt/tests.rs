@@ -898,3 +898,28 @@ fn a_binding_keeps_its_word_and_one_space_in_a_declaration_and_a_call() {
     assert!(out.contains("Sw(bind on: a)"), "{out}");
     assert!(out.contains("F(bind text: b, bind valid: a)"), "{out}");
 }
+
+#[test]
+fn slot_blocks_and_states_of_named_elements_are_formatted_and_kept() {
+    // RFC-0062: `leading: { … }` is an argument holding elements, and
+    // `on field.focused + hover` a state block naming another element.
+    let out = fmt_stable(
+        "View M(){\nItem(\"a\",leading:{Icon(\"x\")#[ml:8]},trailing:{ when on { Text(\"t\") } })\n\
+         Box as field{}\nBox{on field.focused+hover{bg:0xFF0000}\non focus_within{bg:0x00FF00}}\n}",
+    );
+    assert!(out.contains("leading: {"), "{out}");
+    assert!(out.contains("on field.focused + hover {"), "{out}");
+    assert!(out.contains("on focus_within {"), "{out}");
+}
+
+#[test]
+fn context_provide_and_optional_parameters_format_stably() {
+    // RFC-0065.
+    let out = fmt_stable(
+        "context C{n:Int=1\nplace:Fn(Int)=none\nc:Color?=none}\n\
+         View V(color:Color?=none,bind sel:Int=0){\nprovide C(n:sel)\nText(\"x\")\n}",
+    );
+    assert!(out.contains("color: Color? = none"), "{out}");
+    assert!(out.contains("provide C(n: sel)"), "{out}");
+    assert!(out.contains("c: Color? = none"), "{out}");
+}

@@ -147,6 +147,8 @@ fn frame_in(fonts: &FontTable, family: Option<&str>) -> RenderFrame {
     frame.set_fonts(Arc::new(fonts.clone()));
     frame.push_text(TextLine {
         align: byard_core::frame::TextAlign::Start,
+        max_lines: 0,
+        ellipsis: false,
         x: 12.0,
         y: 90.0,
         text: "Handgloves".to_string(),

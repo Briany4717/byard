@@ -423,7 +423,7 @@ fn an_element_drawn_over_a_view_takes_the_press_first() {
     }
 }",
         // A ZStack centres its children: the box is in the middle.
-        (100.0, 70.0),
+        (200.0, 70.0),
     );
     assert_eq!(
         page, "page 1",
@@ -449,7 +449,7 @@ fn a_view_drawn_over_an_element_still_takes_the_press() {
         }
     }
 }",
-        (100.0, 70.0),
+        (200.0, 70.0),
     );
     assert_eq!(view, 1, "the view on top took the tap");
     assert_eq!(page, "page 0", "and the element under it did not see it");

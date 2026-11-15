@@ -11,6 +11,10 @@ use crate::syntax::ast_utils::{collect_locals_in_members, span_contains};
 const STYLE_PROPS: &[(&str, &str)] = &[
     ("width", "Int (logical pixels)"),
     ("height", "Int (logical pixels)"),
+    ("min_width", "Int (floor on the width)"),
+    ("max_width", "Int (ceiling on the width)"),
+    ("min_height", "Int (floor on the height)"),
+    ("max_height", "Int (ceiling on the height)"),
     ("gap", "Int (logical pixels spacing)"),
     ("p", "Len (padding on all sides)"),
     ("m", "Len (margin on all sides)"),
@@ -192,8 +196,8 @@ pub fn handle_completion(doc: &Document, pos: Position) -> Option<CompletionResp
     let mut items = Vec::new();
 
     let keywords = &[
-        "use", "var", "let", "fn", "inject", "for", "in", "when", "else", "style", "route", "tab",
-        "enum", "private",
+        "use", "var", "let", "fn", "inject", "provide", "context", "for", "in", "when", "else",
+        "style", "route", "tab", "enum", "private",
     ];
     for kw in keywords {
         items.push(CompletionItem {

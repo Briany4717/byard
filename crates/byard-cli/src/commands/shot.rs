@@ -45,8 +45,13 @@ pub enum Step {
     Tap(f32, f32),
     /// Press at a logical point and keep the button down (RFC-0056).
     Hold(f32, f32),
+    /// Let go of the pointer at a logical point (RFC-0063).
+    Release(f32, f32),
     /// Move the pointer to a logical point, pressing nothing (RFC-0056).
     Hover(f32, f32),
+    /// Press at the first point, move to the second in [`DRAG_MOVES`] steps,
+    /// a frame each, and let go there: a swipe, a scroll, a sheet pulled down.
+    Drag((f32, f32), (f32, f32)),
     /// Press a key.
     Key(Key),
     /// Type text.
@@ -79,7 +84,15 @@ impl Step {
                 .into_iter()
                 .map(|kind| pointer_event(kind, *x, *y, time_ms))
                 .collect(),
+            Self::Release(x, y) => vec![pointer_event(EventKind::PointerUp, *x, *y, time_ms)],
             Self::Hover(x, y) => vec![pointer_event(EventKind::PointerMove, *x, *y, time_ms)],
+            // Only the press: the moves and the release are frames of their
+            // own (`Scene::apply`), because the router joins the moves of one
+            // frame into one and a drag would arrive as a jump.
+            Self::Drag((x0, y0), _) => [EventKind::PointerMove, EventKind::PointerDown]
+                .into_iter()
+                .map(|kind| pointer_event(kind, *x0, *y0, time_ms))
+                .collect(),
             Self::Key(Key { name, mods }) => [EventKind::KeyDown, EventKind::KeyUp]
                 .into_iter()
                 .map(|kind| InputEvent {
@@ -107,6 +120,14 @@ impl Step {
         }
     }
 }
+
+/// How many moves a [`Step::Drag`] makes between the press and the release,
+/// evenly spaced and a frame apart, so a handler that reads travel sees a
+/// gesture and not a jump.
+const DRAG_MOVES: u16 = 8;
+
+/// A drag's two ends, press then release.
+pub type Drag = ((f32, f32), (f32, f32));
 
 /// A pointer event at a logical point, with no payload or modifiers.
 fn pointer_event(kind: EventKind, x: f32, y: f32, time_ms: u64) -> InputEvent {
@@ -270,6 +291,10 @@ pub struct SceneOptions<'a> {
     pub access: bool,
 }
 
+/// How long a frame waits for work on another thread before it draws
+/// without it.
+const BACKGROUND_WAIT: std::time::Duration = std::time::Duration::from_secs(30);
+
 impl Scene {
     /// Starts `view` of `project` and runs its first frame.
     pub fn new(
@@ -278,6 +303,9 @@ impl Scene {
         options: &SceneOptions<'_>,
     ) -> Result<Self, String> {
         let mut interp = Interpreter::new();
+        // `after` and `every` count the scene's own frames, not the real time
+        // they take to draw, as `App::shot` does.
+        interp.use_virtual_timers();
         if let Some(iso) = options.wall_clock {
             interp
                 .set_wall_clock(iso)
@@ -315,6 +343,8 @@ impl Scene {
 
     /// One frame: the events, a tick, a full render. 16 ms pass.
     fn frame_with(&mut self, events: &[InputEvent]) {
+        // A field the last frame asked for lands on this one, on any machine.
+        self.interp.wait_for_background_work(BACKGROUND_WAIT);
         self.interp.set_now_ms(self.now);
         self.interp.dispatch_events(events);
         self.interp.tick();
@@ -327,7 +357,8 @@ impl Scene {
         self.now += 16;
     }
 
-    /// Does one step: one frame, or for a wait, as many as the time takes.
+    /// Does one step: one frame; for a wait, as many as the time takes; for a
+    /// drag, a press, the moves and the release, a frame each.
     pub fn apply(&mut self, what: &Step) {
         if let Step::Wait(ms) = what {
             self.run_to(self.now + ms);
@@ -335,6 +366,16 @@ impl Scene {
         }
         let events = what.events(self.now);
         self.frame_with(&events);
+        if let Step::Drag((x0, y0), (x1, y1)) = what {
+            for i in 1..=DRAG_MOVES {
+                let t = f32::from(i) / f32::from(DRAG_MOVES);
+                let at = (x0 + (x1 - x0) * t, y0 + (y1 - y0) * t);
+                let moved = pointer_event(EventKind::PointerMove, at.0, at.1, u64::from(self.now));
+                self.frame_with(&[moved]);
+            }
+            let up = pointer_event(EventKind::PointerUp, *x1, *y1, u64::from(self.now));
+            self.frame_with(&[up]);
+        }
     }
 
     /// Runs frames until `at_ms` of app time has passed, then once more at
@@ -350,20 +391,34 @@ impl Scene {
     /// frames in a row ask for no more (no animation in flight, no timer or
     /// call waiting, nothing being measured), the ones that follow would draw
     /// what these drew, so the clock goes to where the loop would have ended,
-    /// on the same 16 ms grid. No input arrives in between, so no skipped
+    /// or to the next timer on the app clock, on the same 16 ms grid. No input arrives in between, so no skipped
     /// frame can be the one something happens in. `BYARD_SHOT_EVERY_FRAME`
     /// draws them all, which is how a test checks the two agree.
     fn run_to(&mut self, until: u32) {
         let mut still = 0_u32;
         while self.now < until {
             self.frame_with(&[]);
-            still = if self.interp.needs_another_frame() || self.interp.has_background_work() {
+            // A loop that never ends is a function of the clock, so it does not
+            // keep the frames in between from being skipped; anything that has
+            // to be stepped through does.
+            still = if self.interp.needs_another_frame_besides_loops()
+                || self.interp.has_background_work()
+            {
                 0
             } else {
                 still + 1
             };
             if self.skip_idle && still >= 2 && self.now < until {
-                self.now += (until - self.now).div_ceil(16) * 16;
+                // Up to `until`, or to the frame a waiting timer is due on,
+                // whichever comes first, so it fires when it would have.
+                let target = self
+                    .interp
+                    .next_virtual_timer_ms()
+                    .and_then(|due| u32::try_from(due).ok())
+                    .map_or(until, |due| due.min(until));
+                if target > self.now {
+                    self.now += (target - self.now).div_ceil(16) * 16;
+                }
             }
         }
     }

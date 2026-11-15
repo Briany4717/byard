@@ -108,6 +108,9 @@ fn collect_refs(members: &[Member], guarded: bool, out: &mut Vec<(Symbol, bool)>
             Member::Element(el) => {
                 out.push((el.name.clone(), guarded));
                 collect_refs(&el.children, guarded, out);
+                for slot in el.slot_members() {
+                    collect_refs(slot, guarded, out);
+                }
             }
             Member::When { then, els, .. } => {
                 collect_refs(then, true, out);

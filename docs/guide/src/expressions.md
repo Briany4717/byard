@@ -297,6 +297,9 @@ View Main() {
 error[ConstantCycle]: constants cannot read each other in a circle: gap → pad → gap
 ```
 
+A function may read a constant too, `private` or not (`fn bump(x: Int) -> Int => x + gap`), as it may call
+another function.
+
 A `var`, a parameter or a `let` inside a view that has the same name hides the constant in that
 view. A [package](packages.md) shares its constants with the apps that use it as `k.gap`.
 
@@ -445,6 +448,8 @@ use it.
 | `toFloat()` | `Int` | The `Float` |
 | `abs()` | `Int`, `Float` | The same kind |
 | `min(other)`, `max(other)` | `Int`, `Float` | The smaller or larger; `Float` if either is |
+| `sin()`, `cos()`, `sqrt()` | `Int`, `Float` | A `Float`; the angle is in radians, so `(90deg).sin()` is 1 |
+| `atan2(x)` | `Int`, `Float` | The angle of the point (x, y) in radians, `y.atan2(x)` |
 
 `round` takes a half away from zero: `(2.5).round()` is `3` and `(-2.5).round()` is
 `-3`. `floor` goes down (`(-2.5).floor()` is `-3`) and `ceil` up. `n.max(0)` keeps a

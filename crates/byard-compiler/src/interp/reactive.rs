@@ -64,6 +64,13 @@ impl ScopeId {
     const fn index(self) -> usize {
         self.index as usize
     }
+
+    /// An identity of this scope alone, for a node that has no uid of its own
+    /// but owns a scope no other does (a `Text`'s content, an `Image`'s source).
+    #[inline]
+    pub(crate) const fn key(self) -> u64 {
+        (1 << 63) | ((self.generation as u64) << 32) | self.index as u64
+    }
 }
 
 /// Identifies a `RenderFrame` field a value binding projects into. Opaque to
@@ -181,6 +188,12 @@ pub struct ReactiveCtx {
     /// Cumulative count of *effective* mark visits (a scope dirtied for the
     /// first time), to prove the cascade is idempotent and never exponential.
     mark_effective: u32,
+    /// The signals written since [`start_write_log`](Self::start_write_log),
+    /// `None` (and no cost beyond the check) when nobody is listening.
+    write_log: Option<Vec<SignalId>>,
+    /// What was read since [`start_read_log`](Self::start_read_log), `None`
+    /// when nobody is listening.
+    read_log: Option<(Vec<SignalId>, Vec<ScopeId>)>,
 }
 
 impl ReactiveCtx {
@@ -384,6 +397,9 @@ impl ReactiveCtx {
 
     /// Reads a signal, subscribing the current scope (if any) to it (§2).
     pub fn read_signal(&mut self, sig: SignalId) -> Value {
+        if let Some((signals, _)) = &mut self.read_log {
+            signals.push(sig);
+        }
         if let Some(s) = CURRENT_SCOPE.with(Cell::get) {
             self.subscribe_signal(sig, s);
             self.record_dep(s, Dep::Signal(sig));
@@ -394,6 +410,9 @@ impl ReactiveCtx {
     /// Reads a memo, subscribing the current scope to it and pulling it on
     /// demand if dirty (§6).
     pub fn read_memo(&mut self, m: ScopeId) -> Value {
+        if let Some((_, memos)) = &mut self.read_log {
+            memos.push(m);
+        }
         // A memo whose screen has been popped reads as nothing, never as the
         // scope that has since taken its slot (see [`ScopeId`]).
         if !self.is_live(m) {
@@ -433,8 +452,56 @@ impl ReactiveCtx {
     /// Writes a new value to a signal and runs the synchronous mark cascade
     /// (the mutation entry point).
     pub fn write_signal(&mut self, sig: SignalId, value: Value) {
+        if let Some(log) = &mut self.write_log {
+            log.push(sig);
+        }
         self.signals[sig.0 as usize].value = value;
         self.mark(sig);
+    }
+
+    /// Starts recording the signals and memos read, until
+    /// [`take_read_log`](Self::take_read_log).
+    pub fn start_read_log(&mut self) {
+        self.read_log = Some((Vec::new(), Vec::new()));
+    }
+
+    /// Stops recording and returns the signals and memos read.
+    pub fn take_read_log(&mut self) -> (Vec<SignalId>, Vec<ScopeId>) {
+        self.read_log.take().unwrap_or_default()
+    }
+
+    /// Starts recording which signals are written, until
+    /// [`take_write_log`](Self::take_write_log).
+    pub fn start_write_log(&mut self) {
+        self.write_log = Some(Vec::new());
+    }
+
+    /// Stops recording and returns the signals written since it started.
+    pub fn take_write_log(&mut self) -> Vec<SignalId> {
+        self.write_log.take().unwrap_or_default()
+    }
+
+    /// Whether the computation `scope` reads, however far down its memos go,
+    /// any of `sigs`.
+    #[must_use]
+    pub fn memo_reads_any(&self, scope: ScopeId, sigs: &[SignalId]) -> bool {
+        let mut stack = vec![scope];
+        let mut seen = 0_u32;
+        while let Some(s) = stack.pop() {
+            // A chain of memos is short; this bounds a pathological graph.
+            seen += 1;
+            if seen > 256 || !self.is_live(s) {
+                continue;
+            }
+            for dep in &self.scopes[s.index()].deps {
+                match dep {
+                    Dep::Signal(sig) if sigs.contains(sig) => return true,
+                    Dep::Signal(_) => {}
+                    Dep::Memo(m) => stack.push(*m),
+                }
+            }
+        }
+        false
     }
 
     /// Marks every subscriber of `sig` dirty (§4).

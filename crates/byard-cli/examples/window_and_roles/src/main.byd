@@ -1,0 +1,189 @@
+// RFC-0067: the window as a value, a spin button, a grid, a canvas text with a
+// text style, and a field with aligned text.
+//
+//   byard shot crates/byard-cli/examples/window_and_roles -o phone.png
+//   byard shot ... --size 760x520 -o tablet.png
+//   byard shot ... --key Tab --key Tab --key Tab --key Down --key Right -o grid_keys.png
+//   byard shot ... --key Tab --key Tab --key Tab --key PageDown -o grid_page.png
+//   byard shot ... --key Tab --key Up --key Up -o spin.png
+//   byard shot ... --a11y tree.txt -o phone.png
+//   byard shot ... --size 760x520 --a11y tree_tablet.txt -o tablet.png
+//
+// On a phone (under `md`, 600) the navigation is a bar under the page; from 600
+// wide it is a rail beside it, chosen by a `when` on `window.width`.
+
+View Rail() {
+    Column #[
+        width: 80,
+        bg: 0x1C2430,
+        p: 8,
+        gap: 8,
+        align: center,
+        a11y_role: navigation,
+        a11y_label: "Sections",
+    ] {
+        Button("Home") #[
+            width: 64,
+            height: 40,
+            p: (horizontal: 4),
+            bg: 0x2B3A67,
+            radius: 12,
+            color: 0xE7ECF2,
+            size: 12,
+        ] => {}
+        Button("Time") #[
+            width: 64,
+            height: 40,
+            p: (horizontal: 4),
+            bg: 0x2B3A67,
+            radius: 12,
+            color: 0xE7ECF2,
+            size: 12,
+        ] => {}
+        Button("Days") #[
+            width: 64,
+            height: 40,
+            p: (horizontal: 4),
+            bg: 0x2B3A67,
+            radius: 12,
+            color: 0xE7ECF2,
+            size: 12,
+        ] => {}
+    }
+}
+
+View Bar() {
+    Row #[
+        height: 64,
+        bg: 0x1C2430,
+        p: 12,
+        gap: 8,
+        align: center,
+        justify: around,
+        a11y_role: navigation,
+        a11y_label: "Sections",
+    ] {
+        Button("Home") #[
+            width: 96,
+            height: 40,
+            bg: 0x2B3A67,
+            radius: 12,
+            color: 0xE7ECF2,
+            size: 12,
+        ] => {}
+        Button("Time") #[
+            width: 96,
+            height: 40,
+            bg: 0x2B3A67,
+            radius: 12,
+            color: 0xE7ECF2,
+            size: 12,
+        ] => {}
+        Button("Days") #[
+            width: 96,
+            height: 40,
+            bg: 0x2B3A67,
+            radius: 12,
+            color: 0xE7ECF2,
+            size: 12,
+        ] => {}
+    }
+}
+
+View Main() {
+    var hour = 4
+    var hour_focus = false
+    var minute = "05"
+    var picked = 12
+    let ring = style { on focus_visible { border: 0xD0BCFF, border_width: 2 } }
+
+    Column #[grow: 1, bg: 0x14141C] {
+        Row #[grow: 1] {
+            when window.width >= md { Rail() }
+
+            Column #[grow: 1, p: 16, gap: 14] {
+                Text("window {window.width} x {window.height}") #[typo: body, color: 0x9AA3AE]
+
+                // A time: a spin button, a field with centred digits, a dial.
+                Row #[gap: 8, align: center] {
+                    Box #[
+                        ..ring,
+                        a11y_role: spin_button,
+                        a11y_label: "Hours",
+                        a11y_value: "{hour}",
+                        a11y_value_min: 1,
+                        a11y_value_max: 12,
+                        a11y_value_step: 1,
+                        focused: hour_focus,
+                        width: 72,
+                        height: 72,
+                        radius: 12,
+                        bg: 0x2B3A67,
+                        align: center,
+                        justify: center,
+                        key_down(k) => {
+                            if k == "ArrowUp" { hour = hour % 12 + 1 }
+                            if k == "ArrowDown" { hour = (hour + 10) % 12 + 1 }
+                        },
+                    ] {
+                        Text("{hour}") #[typo: hero, color: 0xE7ECF2]
+                    }
+                    Text(":") #[typo: hero, color: 0xE7ECF2]
+                    TextField #[
+                        bind: minute,
+                        a11y_label: "Minutes",
+                        width: 72,
+                        height: 72,
+                        radius: 12,
+                        bg: 0x1C2430,
+                        color: 0xE7ECF2,
+                        typo: hero,
+                        text_align: center,
+                        indicator: none,
+                    ]
+                    Canvas #[width: 72, height: 72] {
+                        circle(cx: 36, cy: 36, r: 34, stroke: 0x49454F, stroke_width: 2)
+                        text("12", x: 36, y: 12, typo: label, color: 0xE7ECF2, align: center)
+                        text("3", x: 62, y: 38, typo: label, color: 0xE7ECF2, align: center)
+                        text("6", x: 36, y: 58, typo: label, color: 0xE7ECF2, align: center)
+                        text("9", x: 10, y: 38, typo: label, color: 0xE7ECF2, align: center)
+                    }
+                }
+
+                // A month: one Tab stop, the arrows walk it, PageDown is ours.
+                Text("November 2026") #[typo: label, color: 0xE7ECF2]
+                Column #[gap: 4, a11y_role: grid, a11y_label: "November 2026"] {
+                    for week in [0, 1, 2] {
+                        Row #[gap: 4, a11y_role: row] {
+                            for day in [1, 2, 3, 4, 5, 6, 7] {
+                                Box #[
+                                    ..ring,
+                                    a11y_role: grid_cell,
+                                    a11y_label: "November {8 + week * 7 + day}",
+                                    a11y_selected: picked == 8 + week * 7 + day,
+                                    disabled: 8 + week * 7 + day == 16,
+                                    width: 36,
+                                    height: 36,
+                                    radius: 18,
+                                    align: center,
+                                    justify: center,
+                                    bg: (picked == 8 + week * 7 + day ? 0x6750A4 : 0x1C2430),
+                                    tap => picked = 8 + week * 7 + day,
+                                    key_down(k) => {
+                                        if k == "PageDown" { picked = picked + 7 }
+                                        if k == "PageUp" { picked = picked - 7 }
+                                    },
+                                ] {
+                                    Text("{8 + week * 7 + day}") #[typo: body, color: 0xE7ECF2]
+                                }
+                            }
+                        }
+                    }
+                }
+                Text("picked {picked}") #[typo: body, color: 0x9AA3AE]
+            }
+        }
+
+        when window.width < md { Bar() }
+    }
+}

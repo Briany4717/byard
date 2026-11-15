@@ -1,0 +1,19 @@
+[project]
+name = "window_and_roles"
+entry = "src/main.byd"
+
+# RFC-0067: the breakpoint `window.width >= md` compares against, the same one
+# `on width >= md` takes.
+[theme.breakpoints]
+md = 600
+
+# Text in declared fonts, so the picture and the tree's bounds are the same on
+# every machine. `hero` is a digit box's style, `label` a dial's.
+[assets.fonts]
+display = "../assets/fonts/SpaceGrotesk-Variable.ttf"
+body = "../assets/fonts/Manrope-Variable.ttf"
+
+[theme.typography]
+hero = { size = 32, family = "display", weight = "bold" }
+label = { size = 14, family = "body", weight = "medium" }
+body = { size = 14, family = "body" }

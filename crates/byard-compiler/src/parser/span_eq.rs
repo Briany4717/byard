@@ -110,10 +110,12 @@ impl SpanEq for Param {
             ty,
             default,
             bind,
+            optional,
             span: _,
         } = self;
         *name == other.name
             && *bind == other.bind
+            && *optional == other.optional
             && ty.span_eq(&other.ty)
             && default.span_eq(&other.default)
     }
@@ -167,9 +169,13 @@ impl SpanEq for RecordDecl {
             name,
             fields,
             private,
+            context,
             span: _,
         } = self;
-        *name == other.name && *private == other.private && fields.span_eq(&other.fields)
+        *name == other.name
+            && *private == other.private
+            && *context == other.context
+            && fields.span_eq(&other.fields)
     }
 }
 
@@ -209,8 +215,16 @@ impl SpanEq for EnumDecl {
 
 impl SpanEq for RecordField {
     fn span_eq(&self, other: &Self) -> bool {
-        let Self { name, ty, optional } = self;
-        *name == other.name && ty.span_eq(&other.ty) && *optional == other.optional
+        let Self {
+            name,
+            ty,
+            optional,
+            default,
+        } = self;
+        *name == other.name
+            && ty.span_eq(&other.ty)
+            && *optional == other.optional
+            && default.span_eq(&other.default)
     }
 }
 
@@ -288,6 +302,18 @@ impl SpanEq for Member {
                     span: _,
                 },
             ) => name == n2 && ty.span_eq(t2),
+            (
+                Self::Provide {
+                    ty,
+                    fields,
+                    span: _,
+                },
+                Self::Provide {
+                    ty: t2,
+                    fields: f2,
+                    span: _,
+                },
+            ) => ty.span_eq(t2) && fields.span_eq(f2),
             (Self::Element(a), Self::Element(b)) => a.span_eq(b),
             (
                 Self::For {
@@ -353,17 +379,17 @@ impl SpanEq for Member {
             (
                 Self::Timer {
                     every,
-                    dur_ms,
+                    dur,
                     action,
                     span: _,
                 },
                 Self::Timer {
                     every: e2,
-                    dur_ms: d2,
+                    dur: d2,
                     action: a2,
                     span: _,
                 },
-            ) => every == e2 && dur_ms == d2 && action.span_eq(a2),
+            ) => every == e2 && dur.span_eq(d2) && action.span_eq(a2),
             (
                 Self::Measure { action, span: _ },
                 Self::Measure {
@@ -456,11 +482,19 @@ impl SpanEq for StateBlock {
     fn span_eq(&self, other: &Self) -> bool {
         let Self {
             states,
+            remote,
             attrs,
             viewport,
             span: _,
         } = self;
-        *states == other.states && attrs.span_eq(&other.attrs) && viewport.span_eq(&other.viewport)
+        *states == other.states
+            && remote.len() == other.remote.len()
+            && remote
+                .iter()
+                .zip(&other.remote)
+                .all(|(a, b)| a.name == b.name && a.kind == b.kind)
+            && attrs.span_eq(&other.attrs)
+            && viewport.span_eq(&other.viewport)
     }
 }
 
@@ -534,6 +568,9 @@ impl SpanEq for Expr {
                 a.span_eq(b)
             }
             (Self::Tuple(a, _), Self::Tuple(b, _)) => a.span_eq(b),
+            (Self::SlotBlock { members: a, .. }, Self::SlotBlock { members: b, .. }) => {
+                a.span_eq(b)
+            }
             (
                 Self::Member {
                     base,
@@ -577,15 +614,26 @@ impl SpanEq for Expr {
                     params,
                     types,
                     body,
+                    slot,
                     span: _,
                 },
                 Self::Lambda {
                     params: p2,
                     types: t2,
                     body: b2,
+                    slot: s2,
                     span: _,
                 },
-            ) => params == p2 && types.span_eq(t2) && body.span_eq(b2),
+            ) => {
+                params == p2
+                    && types.span_eq(t2)
+                    && body.span_eq(b2)
+                    && match (slot, s2) {
+                        (Some(a), Some(b)) => a.span_eq(b),
+                        (None, None) => true,
+                        _ => false,
+                    }
+            }
             (
                 Self::Assign {
                     target,

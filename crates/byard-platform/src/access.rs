@@ -10,13 +10,13 @@
 use std::collections::HashMap;
 
 use accesskit::{
-    Action, ActionData, ActionRequest, Affine, Node, NodeId, Rect, Role, Toggled, TreeId, TreeInfo,
-    TreeUpdate,
+    Action, ActionData, ActionRequest, Affine, Live, Node, NodeId, Rect, Role, Toggled, TreeId,
+    TreeInfo, TreeUpdate,
 };
 use byard_core::PlatformHost;
 use byard_core::access::{
-    AccessAction, AccessActions, AccessFlags, AccessId, AccessNode, AccessRequest, AccessRole,
-    AccessTree, AccessValue,
+    AccessAction, AccessActions, AccessFlags, AccessId, AccessLive, AccessNode, AccessRequest,
+    AccessRole, AccessTree, AccessValue,
 };
 use winit::event_loop::{ActiveEventLoop, EventLoopProxy};
 use winit::window::Window;
@@ -82,12 +82,23 @@ fn role(role: AccessRole) -> Role {
         AccessRole::Navigation => Role::Navigation,
         AccessRole::Toolbar => Role::Toolbar,
         AccessRole::Heading => Role::Heading,
+        AccessRole::SpinButton => Role::SpinButton,
+        AccessRole::Grid => Role::Grid,
+        AccessRole::Row => Role::Row,
+        AccessRole::GridCell => Role::GridCell,
     }
 }
 
 /// One element as an AccessKit node, with its children as the tree gave them.
 fn node(n: &AccessNode, children: Vec<NodeId>) -> Node {
-    let mut out = Node::new(role(n.role));
+    // RFC-0064: AccessKit has a role of its own for a field of several lines.
+    let mut out = Node::new(
+        if n.role == AccessRole::TextInput && n.flags.contains(AccessFlags::MULTILINE) {
+            Role::MultilineTextInput
+        } else {
+            role(n.role)
+        },
+    );
     let b = n.bounds;
     out.set_bounds(Rect {
         x0: f64::from(b.x),
@@ -168,6 +179,16 @@ fn node(n: &AccessNode, children: Vec<NodeId>) -> Node {
         if n.actions.contains(ours) {
             out.add_action(theirs);
         }
+    }
+    // RFC-0066: a live region says what changes in it, and a node can name the
+    // one that describes it.
+    match n.live {
+        AccessLive::Off => {}
+        AccessLive::Polite => out.set_live(Live::Polite),
+        AccessLive::Assertive => out.set_live(Live::Assertive),
+    }
+    if let Some(target) = n.described_by {
+        out.set_described_by(vec![node_id(target)]);
     }
     if !children.is_empty() {
         out.set_children(children);
@@ -394,6 +415,8 @@ mod tests {
             bounds: FrameRect::new(10.0, 20.0, 30.0, 40.0),
             flags: AccessFlags::empty(),
             actions: AccessActions::empty(),
+            live: AccessLive::Off,
+            described_by: None,
         }
     }
 
@@ -447,10 +470,27 @@ mod tests {
             (R::Navigation, Role::Navigation),
             (R::Toolbar, Role::Toolbar),
             (R::Heading, Role::Heading),
+            (R::SpinButton, Role::SpinButton),
+            (R::Grid, Role::Grid),
+            (R::Row, Role::Row),
+            (R::GridCell, Role::GridCell),
         ];
         for (ours, theirs) in pairs {
             assert_eq!(role(ours), theirs);
         }
+    }
+
+    #[test]
+    fn a_live_region_and_a_description_reach_accesskit() {
+        let mut said = element(1, None, AccessRole::Label, "Saved");
+        said.live = AccessLive::Assertive;
+        let mut field = element(2, None, AccessRole::Group, "Field");
+        field.described_by = Some(AccessId(1));
+        let update = TreeSender::default()
+            .update(&tree(vec![said, field]), &window())
+            .expect("a first tree is always sent");
+        assert_eq!(find(&update, 1).live(), Some(Live::Assertive));
+        assert_eq!(find(&update, 2).described_by(), &[node_id(AccessId(1))]);
     }
 
     #[test]
@@ -617,6 +657,15 @@ mod tests {
         assert_eq!(*id, ROOT);
         assert_eq!(window_node.children().len(), 2);
         assert_eq!(update.nodes.len(), 1);
+    }
+
+    #[test]
+    fn a_multiline_field_is_a_multiline_text_input_to_accesskit() {
+        let single = element(0, None, AccessRole::TextInput, "Notes");
+        let mut multi = element(1, None, AccessRole::TextInput, "Notes");
+        multi.flags.insert(AccessFlags::MULTILINE);
+        assert_eq!(node(&single, Vec::new()).role(), Role::TextInput);
+        assert_eq!(node(&multi, Vec::new()).role(), Role::MultilineTextInput);
     }
 
     #[test]

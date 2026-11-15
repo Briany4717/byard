@@ -8,8 +8,8 @@
 //! carries it there), paging, the end-of-list event, and the elastic
 //! pull-to-refresh indicator.
 
-use super::Interpreter;
 use super::animation::pack_curve;
+use super::{Interpreter, RenderNode};
 use crate::interp::env::{SignalId, Value};
 use crate::parser::ast::{Attr, AttrKind};
 
@@ -131,6 +131,15 @@ pub(super) struct WindowSpec {
 /// the enclosing scroll viewport (RFC-0005): interaction follows the content
 /// to its *on-screen* position, and content scrolled out of the viewport
 /// stops being hittable, it is not visible, so it must not be tappable.
+/// `r` moved by the scroll shift, not clipped or inflated: where the element
+/// itself is drawn, which a pointer handler's `e.x` is relative to.
+pub(super) fn shifted_rect(
+    r: crate::interp::intrinsics::Rect,
+    shift: (f32, f32),
+) -> crate::interp::intrinsics::Rect {
+    crate::interp::intrinsics::Rect::new(r.x + shift.0, r.y + shift.1, r.w, r.h)
+}
+
 pub(super) fn scrolled_hit_rect(
     r: crate::interp::intrinsics::Rect,
     shift: (f32, f32),
@@ -285,10 +294,51 @@ impl Interpreter {
         })
     }
 
+    /// The transform a `ScrollView` child is drawn under: the one it inherits
+    /// with its own `translate`, `scale` and `rotate` composed in, so culling
+    /// looks at where it is drawn.
+    pub(super) fn child_drawn_transform(
+        &mut self,
+        child: &RenderNode,
+        child_id: byard_core::atlas::layout::AtlasNodeId,
+        inherited: byard_core::frame::Transform,
+    ) -> byard_core::frame::Transform {
+        let RenderNode::Box {
+            attrs,
+            env_snapshot,
+            ..
+        } = child
+        else {
+            return inherited;
+        };
+        let moves = attrs.iter().any(|a| {
+            matches!(a.name.as_str(), "translate" | "scale" | "rotate")
+                && matches!(a.kind, AttrKind::Prop { .. })
+        });
+        let Ok(Some(r)) = self.atlas.resolved_rect(child_id) else {
+            return inherited;
+        };
+        if !moves {
+            return inherited;
+        }
+        let env_base = self.env.len();
+        for (k, v) in env_snapshot {
+            self.env.push(k.clone(), v.clone());
+        }
+        let own = self.resolve_transform(
+            attrs,
+            crate::interp::intrinsics::Rect::new(r.x, r.y, r.width, r.height),
+        );
+        self.env.truncate(env_base);
+        inherited.compose(&own)
+    }
+
     /// Whether a `ScrollView` child's laid-out rectangle, mapped through the
     /// scroll-shifted `transform`, falls entirely outside `clip`, the emission-
     /// culling test (RFC-0005 §3.3). All four corners are transformed so a scaled
     /// ancestor is handled; an unknown rect is conservatively kept (never culled).
+    /// `transform` is the one the child is drawn under, its own included
+    /// ([`child_drawn_transform`](Self::child_drawn_transform)).
     pub(super) fn child_fully_clipped(
         &self,
         child_id: byard_core::atlas::layout::AtlasNodeId,
@@ -361,6 +411,18 @@ impl Interpreter {
             _ => Value::Float(f64::from(value)),
         };
         self.write_var(sig, v);
+    }
+
+    /// Whether a wheel of `(dx, dy)` pixels would move `t` on one of its
+    /// axes: not already at that end of its travel.
+    pub(super) fn can_nudge(&self, t: &ScrollTarget, dx: f32, dy: f32) -> bool {
+        let moves = |axis: Option<ScrollAxis>, delta: f32| {
+            axis.is_some_and(|a| {
+                let at = self.peek_scroll(a.sig);
+                ((at - delta).clamp(0.0, a.max) - at).abs() > 0.01
+            })
+        };
+        moves(t.x, dx) || moves(t.y, dy)
     }
 
     /// Nudges one scroll axis by `delta` logical px (wheel/trackpad), clamped to

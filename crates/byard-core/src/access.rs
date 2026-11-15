@@ -95,13 +95,23 @@ pub enum AccessRole {
     Toolbar,
     /// A title (RFC-0052).
     Heading,
+    /// A number with a range that the control changes in steps: the hour box of
+    /// a time picker (RFC-0067).
+    SpinButton,
+    /// A table of cells the arrow keys move between: a month of days
+    /// (RFC-0067).
+    Grid,
+    /// A row of a [`Grid`](Self::Grid) (RFC-0067).
+    Row,
+    /// One cell of a [`Grid`](Self::Grid) (RFC-0067).
+    GridCell,
 }
 
 impl AccessRole {
     /// The keywords `a11y_role:` accepts (RFC-0052 §2), each with the role it
     /// names. The one list the checker, [`from_keyword`](Self::from_keyword)
     /// and the tests share.
-    pub const KEYWORDS: [&'static str; 23] = [
+    pub const KEYWORDS: [&'static str; 27] = [
         "button",
         "toggle_button",
         "switch",
@@ -125,6 +135,10 @@ impl AccessRole {
         "group",
         "image",
         "heading",
+        "spin_button",
+        "grid",
+        "row",
+        "grid_cell",
     ];
 
     /// The role a `a11y_role:` keyword names, or `None` for a word outside the
@@ -155,6 +169,10 @@ impl AccessRole {
             "group" => Self::Group,
             "image" => Self::Image,
             "heading" => Self::Heading,
+            "spin_button" => Self::SpinButton,
+            "grid" => Self::Grid,
+            "row" => Self::Row,
+            "grid_cell" => Self::GridCell,
             _ => return None,
         })
     }
@@ -188,6 +206,10 @@ impl AccessRole {
             Self::Navigation => "Navigation",
             Self::Toolbar => "Toolbar",
             Self::Heading => "Heading",
+            Self::SpinButton => "SpinButton",
+            Self::Grid => "Grid",
+            Self::Row => "Row",
+            Self::GridCell => "GridCell",
         }
     }
 
@@ -210,6 +232,9 @@ impl AccessRole {
                 | Self::ToggleButton
                 | Self::MenuItem
                 | Self::Link
+                | Self::SpinButton
+                | Self::Grid
+                | Self::GridCell
         )
     }
 
@@ -228,6 +253,7 @@ impl AccessRole {
                 | Self::Tab
                 | Self::MenuItem
                 | Self::Link
+                | Self::GridCell
         )
     }
 }
@@ -263,6 +289,31 @@ pub enum AccessValue {
     },
 }
 
+/// How a node's changes are announced (RFC-0066 §4): a live region.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Hash)]
+pub enum AccessLive {
+    /// Changes are not announced on their own. The default.
+    #[default]
+    Off,
+    /// A change is said after what the reader is saying now.
+    Polite,
+    /// A change interrupts what the reader is saying.
+    Assertive,
+}
+
+impl AccessLive {
+    /// The word `a11y_live:` and the dump use; `None` for [`Off`](Self::Off),
+    /// which the dump leaves out.
+    #[must_use]
+    pub const fn name(self) -> Option<&'static str> {
+        match self {
+            Self::Off => None,
+            Self::Polite => Some("polite"),
+            Self::Assertive => Some("assertive"),
+        }
+    }
+}
+
 /// A node's state, as a set of flags (RFC-0042 §1).
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Hash)]
 pub struct AccessFlags(u16);
@@ -287,9 +338,11 @@ impl AccessFlags {
     /// The node can be expanded and is not (RFC-0052). `EXPANDED` and this
     /// are both statements; a node with neither is not expandable.
     pub const COLLAPSED: Self = Self(1 << 8);
+    /// A text field of several lines, where Enter is a line break (RFC-0064).
+    pub const MULTILINE: Self = Self(1 << 9);
 
     /// Every flag, in the order the dump writes them.
-    const ALL: [(Self, &'static str); 9] = [
+    const ALL: [(Self, &'static str); 10] = [
         (Self::FOCUSABLE, "focusable"),
         (Self::FOCUSED, "focused"),
         (Self::DISABLED, "disabled"),
@@ -299,6 +352,7 @@ impl AccessFlags {
         (Self::EXPANDED, "expanded"),
         (Self::COLLAPSED, "collapsed"),
         (Self::MODAL, "modal"),
+        (Self::MULTILINE, "multiline"),
     ];
 
     /// No flags.
@@ -390,6 +444,11 @@ pub struct AccessNode {
     pub flags: AccessFlags,
     /// What an assistive technology may ask of it.
     pub actions: AccessActions,
+    /// Whether a change to it is announced (RFC-0066 §4, `a11y_live`).
+    pub live: AccessLive,
+    /// The node that describes this one (RFC-0066 §5, `a11y_described_by`):
+    /// a tooltip's text, say. A reader says its name after this node's own.
+    pub described_by: Option<AccessId>,
 }
 
 /// The accessibility tree of one frame (RFC-0042 §1): the controls and the
@@ -456,6 +515,8 @@ impl AccessTree {
             }
             n.flags.hash(&mut h);
             n.actions.hash(&mut h);
+            n.live.hash(&mut h);
+            n.described_by.hash(&mut h);
         }
         h.finish()
     }
@@ -498,6 +559,23 @@ impl AccessTree {
             if let Some(value) = &n.value {
                 out.push_str(" = ");
                 write_value(&mut out, value);
+            }
+            if let Some(live) = n.live.name() {
+                let _ = write!(out, " live {live}");
+            }
+            if let Some(target) = n.described_by {
+                // By its name when it has one, so the dump reads as the reader
+                // would, and by its id when the target is gone or has none.
+                match self.node(target) {
+                    Some(AccessNode {
+                        name: Some(name), ..
+                    }) => {
+                        let _ = write!(out, " described_by {name:?}");
+                    }
+                    _ => {
+                        let _ = write!(out, " described_by #{}", target.0);
+                    }
+                }
             }
             if !n.flags.is_empty() {
                 out.push_str(" [");
@@ -682,6 +760,36 @@ impl AccessRequest {
             AccessAction::SetNumber(v) if allowed(AccessActions::SET_VALUE) => {
                 number(clamped(node, *v))
             }
+            // A spin button the control steps itself (RFC-0067) has no `change`
+            // to write a number to: the reader's Increment and Decrement are
+            // the Up and Down key it already handles, on the node.
+            AccessAction::Increment | AccessAction::Decrement
+                if node.role == AccessRole::SpinButton && !allowed(AccessActions::SET_VALUE) =>
+            {
+                let up = self.action == AccessAction::Increment;
+                let allowed_here = if up {
+                    AccessActions::INCREMENT
+                } else {
+                    AccessActions::DECREMENT
+                };
+                if !allowed(allowed_here) {
+                    return Vec::new();
+                }
+                let key = || {
+                    Some(InputPayload::Key(
+                        if up { "ArrowUp" } else { "ArrowDown" }.into(),
+                    ))
+                };
+                vec![
+                    event(
+                        EventKind::AccessFocus,
+                        (0.0, 0.0),
+                        Some(InputPayload::Element(self.target.0)),
+                    ),
+                    event(EventKind::KeyDown, centre, key()),
+                    event(EventKind::KeyUp, centre, key()),
+                ]
+            }
             AccessAction::Increment if allowed(AccessActions::INCREMENT) => {
                 number(stepped(node, 1.0))
             }
@@ -743,6 +851,8 @@ mod tests {
             bounds: Rect::new(10.0, 20.0, 30.0, 40.0),
             flags: AccessFlags::empty(),
             actions: AccessActions::empty(),
+            live: AccessLive::Off,
+            described_by: None,
         }
     }
 

@@ -874,6 +874,10 @@ pub struct DecoratedBox {
     /// border-radius, **gradients**, box-shadows"). `None` is the historical
     /// behaviour, a flat `base.color`.
     pub gradient: Option<Gradient>,
+    /// A gap in the top edge of the border, `[start, length]` in logical pixels
+    /// from the element's left edge (RFC-0064); a `length` of `0` is no gap,
+    /// and what every box that does not write one has.
+    pub border_gap: [f32; 2],
     /// Whether this decoration changed since the last tick.
     ///
     /// The encoder's analogue of [`TextLine::dirty`] for the `DecoratedBox`
@@ -904,6 +908,7 @@ impl Default for DecoratedBox {
             shadow_color: [0.0; 4],
             opacity: 1.0,
             gradient: None,
+            border_gap: [0.0; 2],
             dirty: false,
         }
     }
@@ -1699,6 +1704,14 @@ pub struct TextLine {
     /// How the run's lines sit inside its wrap width (RFC-0059). Part of the
     /// shape: a change re-shapes the run.
     pub align: TextAlign,
+    /// How many lines the run may take before it is cut (RFC-0064), `0` for
+    /// no limit. Part of the shape: a change re-shapes the run. A line with
+    /// `0` is shaped exactly as it was before this field existed.
+    pub max_lines: u16,
+    /// Whether the cut ends the last line in `…` (`overflow: ellipsis`) rather
+    /// than just stopping (`overflow: clip`). Read only when `max_lines` is
+    /// not `0`.
+    pub ellipsis: bool,
     /// Whether this line's content changed since the last tick.
     ///
     /// Set upstream by the Evaluator → Atlas → `RenderFrame` pipeline, never
@@ -1802,6 +1815,8 @@ pub struct RenderFrame {
     fills: Vec<CanvasFill>,
     /// Draw-order depths, parallel to `fills`.
     fill_depths: Vec<f32>,
+    /// The content clip each fill was drawn under, parallel to `fills`.
+    fill_clips: Vec<Option<u16>>,
 
     /// The per-frame shape-record pool every group head indexes into
     /// (RFC-0031 §S4). Cleared and refilled exactly like every other frame
@@ -2274,6 +2289,7 @@ impl RenderFrame {
         self.canvas_depths.clear();
         self.fills.clear();
         self.fill_depths.clear();
+        self.fill_clips.clear();
         self.clips.clear();
         self.clip_stack.clear();
         self.solid_clips.clear();
@@ -2412,6 +2428,15 @@ impl RenderFrame {
         self.instances_dirty.push(true);
         self.solid_depths.push(d);
         self.solid_clips.push(c);
+    }
+
+    /// Scales the alpha of the solid box at `index` by `factor`, for what is
+    /// pushed before the thing whose fade it follows is known (a modal's
+    /// scrim). Out of range does nothing.
+    pub fn scale_instance_alpha(&mut self, index: usize, factor: f32) {
+        if let Some(instance) = self.instances.get_mut(index) {
+            instance.color[3] *= factor;
+        }
     }
 
     /// Per-instance dirty state, parallel to [`instances`](Self::instances).
@@ -2591,8 +2616,10 @@ impl RenderFrame {
     pub fn push_fill(&mut self, mut fill: CanvasFill) {
         fill.transform = self.upright(fill.transform);
         let depth = self.next_depth();
+        let clip = self.active_clip();
         self.fills.push(fill);
         self.fill_depths.push(depth);
+        self.fill_clips.push(clip);
     }
 
     /// This frame's filled paths (RFC-0037).
@@ -2605,6 +2632,12 @@ impl RenderFrame {
     #[must_use]
     pub fn fill_depths(&self) -> &[f32] {
         &self.fill_depths
+    }
+
+    /// Per-fill clip index (parallel to [`fills`](Self::fills)).
+    #[must_use]
+    pub fn fill_clips(&self) -> &[Option<u16>] {
+        &self.fill_clips
     }
 
     /// Appends a [`CanvasShape`] (RFC-0020 Tier-1 shape command) to the frame.
@@ -3561,6 +3594,8 @@ mod paint_hash {
         t.weight.hash(&mut h);
         t.family.hash(&mut h);
         t.align.hash(&mut h);
+        t.max_lines.hash(&mut h);
+        t.ellipsis.hash(&mut h);
         if let Some(v) = &t.variations {
             for (tag, value) in v.iter() {
                 tag.hash(&mut h);
@@ -3598,6 +3633,7 @@ mod paint_hash {
             ],
         );
         f32s(&mut h, &d.border_color);
+        f32s(&mut h, &d.border_gap);
         f32s(&mut h, &d.shadow_color);
         // The gradient, whole. Not a chosen subset of its fields: `axis()` is
         // by construction *the four floats the shader reads*, so a gradient
@@ -4458,6 +4494,8 @@ mod motion_tests {
         f.push_instance(box_at(1.0, 1.0));
         f.push_text(TextLine {
             align: crate::frame::TextAlign::Start,
+            max_lines: 0,
+            ellipsis: false,
             x: 0.0,
             y: 0.0,
             text: "hi".to_string(),
@@ -4832,6 +4870,8 @@ mod motion_tests {
     fn line(text: &str) -> TextLine {
         TextLine {
             align: crate::frame::TextAlign::Start,
+            max_lines: 0,
+            ellipsis: false,
             x: 0.0,
             y: 0.0,
             text: text.to_string(),
@@ -4917,6 +4957,8 @@ mod paint_digest_tests {
     fn line(text: &str) -> TextLine {
         TextLine {
             align: crate::frame::TextAlign::Start,
+            max_lines: 0,
+            ellipsis: false,
             x: 0.0,
             y: 0.0,
             text: text.to_string(),
@@ -5002,6 +5044,8 @@ mod paint_digest_tests {
     fn a_line_that_changed_only_its_weight_or_family_is_repainted() {
         let heavier = TextLine {
             align: crate::frame::TextAlign::Start,
+            max_lines: 0,
+            ellipsis: false,
             weight: 700,
             ..line("a")
         };
@@ -5012,6 +5056,8 @@ mod paint_digest_tests {
 
         let other_face = TextLine {
             align: crate::frame::TextAlign::Start,
+            max_lines: 0,
+            ellipsis: false,
             family: Some(std::sync::Arc::from("Space Grotesk")),
             ..heavier
         };

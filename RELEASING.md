@@ -6,13 +6,13 @@ token or push a tag are done by hand.
 ## Before
 
 - `main` is green on all three platforms.
-- The swash fix is released upstream (dfrg/swash#149, #348). crates.io does
-  not apply the `[patch]` in `Cargo.toml`, so a published `byard` builds
-  against whatever swash crates.io has. When the release is out: delete
-  `third_party/swash` and the `[patch.crates-io]` entry, add
-  `swash = ">=<fixed version>"` to `byard-core`'s dependencies so no build can
-  resolve an older one, and run
-  `cargo test -p byard-core a_glyph_rasterizes_the_same_after_another_variable_font`.
+- Nothing waits on swash. Its variation-coordinate leak (dfrg/swash#149) is
+  worked around in Byard's own code, so a published `byard` draws variable
+  fonts correctly with whatever swash crates.io resolves. Watch the canary,
+  `cargo test -p byard-core swash_still_leaks_variation_coordinates`. The
+  `swash canary` workflow runs it every Monday against the newest swash on
+  crates.io: when it fails, swash has fixed the leak, and its message says what
+  to remove.
 - The workspace version in `Cargo.toml` (`[workspace.package]` and the
   internal crates in `[workspace.dependencies]`) is the one being released.
 - `CHANGELOG.md` has the version and its date under `[Unreleased]`, and the

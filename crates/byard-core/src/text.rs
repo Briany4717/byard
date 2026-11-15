@@ -282,6 +282,90 @@ impl TextMeasurer {
         register_into(self.font_system.db_mut(), bytes)
     }
 
+    /// The visual lines `text` is laid out in when wrapped to `width` logical
+    /// pixels (RFC-0064): the byte range of each, in order. A hard break (`\n`)
+    /// ends a line and is in none of the ranges; a soft break leaves the next
+    /// line starting where the last ended. Together the ranges cover every
+    /// byte but the breaks, and an empty line is an empty range, the one after
+    /// a final `\n` included.
+    ///
+    /// Shaped exactly as [`measure_wrapped`](Self::measure_wrapped) and the
+    /// paint pass shape a run, so the lines are the ones that are drawn. Not
+    /// memoised: the caller keeps what it asked for against its value.
+    #[must_use]
+    pub fn wrap_lines(
+        &mut self,
+        text: &str,
+        font_size: f32,
+        width: f32,
+        weight: u16,
+        family: Option<&str>,
+    ) -> Vec<(usize, usize)> {
+        // Where each hard line starts and ends.
+        let mut logical: Vec<(usize, usize)> = Vec::new();
+        let mut at = 0;
+        for piece in text.split('\n') {
+            logical.push((at, at + piece.len()));
+            at += piece.len() + 1;
+        }
+        if !is_drawable_size(font_size) {
+            return logical;
+        }
+        self.scratch.set_metrics_and_size(
+            &mut self.font_system,
+            Metrics::new(font_size, font_size * 1.2),
+            Some(width),
+            None,
+        );
+        self.scratch.set_text(
+            &mut self.font_system,
+            text,
+            &Attrs::new()
+                .family(family_of(family))
+                .weight(glyphon::Weight(weight)),
+            Shaping::Advanced,
+            None,
+        );
+        self.scratch
+            .shape_until_scroll(&mut self.font_system, false);
+        // The end of each visual line, per hard line, from its last glyph.
+        let mut ends: Vec<Vec<usize>> = vec![Vec::new(); logical.len()];
+        for run in self.scratch.layout_runs() {
+            let Some(hard) = ends.get_mut(run.line_i) else {
+                continue;
+            };
+            let base = logical[run.line_i].0;
+            if let Some(last) = run.glyphs.iter().map(|g| g.end).max() {
+                hard.push(base + last);
+            }
+        }
+        if text.len() > SCRATCH_RETAINS_UP_TO {
+            self.scratch.set_text(
+                &mut self.font_system,
+                "",
+                &Attrs::new(),
+                Shaping::Basic,
+                None,
+            );
+        }
+        let mut out = Vec::with_capacity(logical.len());
+        for ((start, end), cuts) in logical.into_iter().zip(ends) {
+            let mut from = start;
+            // Every visual line but the last ends where its last glyph does;
+            // the last runs to the end of the hard line, so a trailing space
+            // the shaper left off the glyphs is in it.
+            if let Some((_, soft)) = cuts.split_last() {
+                for &cut in soft {
+                    let cut = cut.clamp(from, end);
+                    out.push((from, cut));
+                    from = cut;
+                }
+            }
+            out.push((from, end));
+        }
+        out
+    }
+
     /// Shapes `text` through `cosmic-text` and returns its `(width, height)`,
     /// optionally bounded to `max_width` so it wraps.
     fn shape(
@@ -565,6 +649,50 @@ fn axis_weights_of(bytes: &[u8], index: u32) -> Vec<glyphon::fontdb::Weight> {
 mod tests {
     use super::*;
 
+    // ── the visual lines of a wrapped text (RFC-0064) ────────────────
+
+    #[test]
+    fn hard_breaks_end_lines_and_an_empty_line_is_an_empty_range() {
+        let mut m = TextMeasurer::new();
+        assert_eq!(m.wrap_lines("", 16.0, 300.0, 400, None), [(0, 0)]);
+        assert_eq!(
+            m.wrap_lines("a\n\nb", 16.0, 300.0, 400, None),
+            [(0, 1), (2, 2), (3, 4)]
+        );
+        assert_eq!(
+            m.wrap_lines("a\n", 16.0, 300.0, 400, None),
+            [(0, 1), (2, 2)],
+            "the line after a final break is there to put the caret on"
+        );
+    }
+
+    #[test]
+    fn a_long_line_wraps_into_lines_that_cover_it() {
+        let mut m = TextMeasurer::new();
+        let text = "the quick brown fox jumps over the lazy dog and keeps going";
+        let lines = m.wrap_lines(text, 16.0, 100.0, 400, None);
+        assert!(lines.len() > 2, "{lines:?}");
+        assert_eq!(lines[0].0, 0);
+        assert_eq!(lines.last().unwrap().1, text.len());
+        for pair in lines.windows(2) {
+            assert_eq!(pair[0].1, pair[1].0, "no gap, no overlap: {lines:?}");
+        }
+        // The same count the measurer's height says.
+        let (_, h) = m.measure_wrapped(text, 16.0, Some(100.0), 400, None);
+        assert!(
+            (h - f32::from(u16::try_from(lines.len()).unwrap()) * 19.2).abs() < 0.5,
+            "{h} for {lines:?}"
+        );
+    }
+
+    #[test]
+    fn a_text_ending_in_a_break_is_as_tall_as_its_lines() {
+        let mut m = TextMeasurer::new();
+        let (_, one) = m.measure_wrapped("a", 16.0, Some(100.0), 400, None);
+        let (_, two) = m.measure_wrapped("a\n", 16.0, Some(100.0), 400, None);
+        assert!((two - 2.0 * one).abs() < 0.5, "{one} {two}");
+    }
+
     /// A size of zero, below zero or not a number takes no room, where it used
     /// to panic inside `cosmic-text` ("line height cannot be 0").
     #[test]
@@ -796,76 +924,98 @@ mod tests {
     /// A glyph rasterizes to the same image whatever was rasterized before it.
     ///
     /// `swash` keeps one buffer of variation coordinates for every scaler its
-    /// context builds, and before the vendored fix it never cleared it: a
-    /// variable font scaled away from its default weight left its coordinates
-    /// behind, and the next variable font picked them up on every axis it did
-    /// not set itself. On macOS that turned the system font wider after any
+    /// context builds, never clears it, and `cosmic-text` sets only `wght`, so
+    /// a variable font scaled away from its default weight leaves its
+    /// coordinates behind and the next variable font drawn through the same
+    /// `SwashCache` picks them up on every other axis (dfrg/swash#149; the
+    /// crate on crates.io still has it, and a `[patch]` does not reach a
+    /// published `byard`). On macOS that turned the system font wider after any
     /// declared font was drawn bold, and `glyphon` then re-uploaded the wider
     /// images into slots sized for the narrow ones when its atlas grew, which
     /// is what cut every line of text into overlapping slivers.
     ///
-    /// Needs a system face with more than one axis, which is what macOS's
-    /// system font is; elsewhere it says so and returns.
+    /// So a line with a glyph from a font that has axes is drawn by
+    /// `VariationGlyphs`, never by the `SwashCache`. This draws a line the way
+    /// the pipeline does, deciding with the pipeline's own question, and checks
+    /// an icon-font glyph is the same before and after a bold Manrope one. With
+    /// the routing off both go through the cache and the second picks up the
+    /// first's weight as its `FILL`.
     #[test]
     fn a_glyph_rasterizes_the_same_after_another_variable_font() {
-        use glyphon::{Attrs, Buffer, Metrics, Shaping, SwashCache};
+        use crate::encoder::variation_glyphs::VariationGlyphs;
+        use glyphon::cosmic_text::SubpixelBin;
+        use glyphon::{Attrs, Buffer, Metrics, RasterizeCustomGlyphRequest, Shaping, SwashCache};
 
-        fn key_of(
-            fs: &mut FontSystem,
-            family: Family<'_>,
-            weight: u16,
-        ) -> glyphon::cosmic_text::CacheKey {
-            let mut b = Buffer::new(fs, Metrics::new(32.0, 38.0));
-            b.set_text(
-                fs,
-                "a",
-                &Attrs::new().family(family).weight(glyphon::Weight(weight)),
-                Shaping::Advanced,
-                None,
-            );
-            b.shape_until_scroll(fs, false);
-            let glyph = b.layout_runs().next().expect("one run").glyphs[0].clone();
-            glyph.physical((0.0, 0.0), 2.0).cache_key
+        struct Drawer {
+            fs: FontSystem,
+            glyphs: VariationGlyphs,
+            cache: SwashCache,
         }
-        fn dims(
-            sc: &mut SwashCache,
-            fs: &mut FontSystem,
-            key: glyphon::cosmic_text::CacheKey,
-        ) -> (u32, u32, Vec<u8>) {
-            let image = sc
-                .get_image_uncached(fs, key)
-                .expect("the glyph rasterizes");
-            (image.placement.width, image.placement.height, image.data)
+        impl Drawer {
+            /// The pixels of the first glyph of `text`, at scale 2.
+            fn draw(&mut self, family: &str, text: &str, weight: u16) -> Vec<u8> {
+                let scale = 2.0;
+                let mut b = Buffer::new(&mut self.fs, Metrics::new(32.0, 38.0));
+                b.set_text(
+                    &mut self.fs,
+                    text,
+                    &Attrs::new()
+                        .family(Family::Name(family))
+                        .weight(glyphon::Weight(weight)),
+                    Shaping::Advanced,
+                    None,
+                );
+                b.shape_until_scroll(&mut self.fs, false);
+                if self.glyphs.is_variable_line(&mut self.fs, &b) {
+                    let mut out = Vec::new();
+                    self.glyphs.build_text(
+                        &mut self.fs,
+                        &b,
+                        (0.0, 0.0),
+                        scale,
+                        0,
+                        &mut out,
+                        &mut Vec::new(),
+                    );
+                    let g = out[0];
+                    #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
+                    self.glyphs
+                        .rasterize(RasterizeCustomGlyphRequest {
+                            id: g.id,
+                            width: (g.width * scale).round() as u16,
+                            height: (g.height * scale).round() as u16,
+                            x_bin: SubpixelBin::new(g.left * scale).1,
+                            y_bin: SubpixelBin::new(g.top * scale).1,
+                            scale,
+                        })
+                        .expect("the glyph rasterizes")
+                        .data
+                } else {
+                    let glyph = b.layout_runs().next().expect("one run").glyphs[0].clone();
+                    let key = glyph.physical((0.0, 0.0), scale).cache_key;
+                    self.cache
+                        .get_image_uncached(&mut self.fs, key)
+                        .expect("the glyph rasterizes")
+                        .data
+                }
+            }
         }
 
-        let mut fs = FontSystem::new();
-        let system = key_of(&mut fs, Family::SansSerif, 400);
-        let axes = fs
-            .db()
-            .with_face_data(system.font_id, |data, index| {
-                ttf_parser::Face::parse(data, index).map_or(0, |f| f.variation_axes().len())
-            })
-            .unwrap_or(0);
-        if axes < 2 {
-            eprintln!("the system face has {axes} variation axes; this needs two, skipping");
-            return;
-        }
-
-        let mut sc = SwashCache::new();
-        let before = dims(&mut sc, &mut fs, system);
-        let display: Arc<[u8]> = Arc::from(DISPLAY);
-        let family = register_into(fs.db_mut(), &display).expect("the display face parses");
-        let bold = key_of(&mut fs, Family::Name(&family), 700);
-        let _ = dims(&mut sc, &mut fs, bold);
-        let after = dims(&mut sc, &mut fs, system);
-        assert_eq!(
-            (before.0, before.1),
-            (after.0, after.1),
-            "the system glyph changed size after a bold variable glyph"
-        );
+        let mut fs = new_font_system();
+        let icons = register_into(fs.db_mut(), &Arc::from(ICONS)).expect("the icon font parses");
+        let body = register_into(fs.db_mut(), &Arc::from(BODY)).expect("Manrope parses");
+        let mut d = Drawer {
+            fs,
+            glyphs: crate::encoder::variation_glyphs::VariationGlyphs::default(),
+            cache: SwashCache::new(),
+        };
+        let before = d.draw(&icons, "favorite", 400);
+        let bold = d.draw(&body, "a", 800);
+        let after = d.draw(&icons, "favorite", 400);
+        assert!(bold.iter().any(|&v| v > 0), "the bold glyph drew something");
         assert!(
-            before.2 == after.2,
-            "the system glyph changed pixels after a bold variable glyph"
+            before == after,
+            "the icon glyph changed after a bold variable glyph"
         );
     }
 

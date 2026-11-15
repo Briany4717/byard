@@ -170,6 +170,8 @@ fn static_decorated_box_survives_unrelated_incremental_text_frames() {
         });
         f.push_text(TextLine {
             align: byard_core::frame::TextAlign::Start,
+            max_lines: 0,
+            ellipsis: false,
             x: 40.0,
             y: 40.0,
             text: text.to_string(),

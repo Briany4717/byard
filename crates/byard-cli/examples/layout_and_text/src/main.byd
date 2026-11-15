@@ -1,0 +1,67 @@
+// Layout and text for components (RFC-0064): a chip set that wraps, a text capped
+// at two lines, a field of several lines, an outlined box with a notch for its
+// label, and the shadow presets up to Material's level 5.
+//
+//   byard shot crates/byard-cli/examples/layout_and_text -o layout.png --size 420x760
+//   byard shot crates/byard-cli/examples/layout_and_text --tap 60,270 --type " one two" --key Enter --type "three" -o typed.png --size 420x760
+
+View Chip(label: Str, tint: Int) {
+    Text(label) #[size: 13, color: 0x1D1B20, bg: tint, radius: 8, p: (6, 12), min_width: 48]
+}
+
+View Main() {
+    var notes = "Pack a field with a few lines of text that is long enough to wrap at the width of the field."
+
+    Column #[bg: 0x14141C, p: 20, gap: 12, grow: 1] {
+        Text("A row that wraps") #[color: 0x9AA0AC, size: 12]
+        Row #[wrap: true, gap: 8, row_gap: 8, bg: 0x1E1E2A, radius: 8, p: 10, width: 380] {
+            Chip("Bluegrass", 0xD0BCFF)
+            Chip("Jazz", 0xEFB8C8)
+            Chip("Folk", 0xCCC2DC)
+            Chip("Electronic dance", 0xD0BCFF)
+            Chip("Ambient", 0xEFB8C8)
+            Chip("Funk", 0xCCC2DC)
+            Chip("Classical", 0xD0BCFF)
+        }
+
+        Text("A text capped at two lines") #[color: 0x9AA0AC, size: 12]
+        Text("Supporting text of a list item can run on for as long as its author likes, and the item still keeps its two lines, with a mark where the rest was left out.")
+            #[color: 0xE6E0E9, size: 14, width: 380, max_lines: 2]
+
+        Text("A field of three lines, and one that grows") #[color: 0x9AA0AC, size: 12]
+        TextField #[bind: notes, lines: 3, width: 380, color: 0xFFFFFF, bg: 0x1E1E2A, radius: 8]
+        TextField #[
+            bind: notes,
+            min_lines: 1,
+            max_lines: 4,
+            width: 380,
+            color: 0xFFFFFF,
+            bg: 0x1E1E2A,
+            radius: 8,
+        ]
+
+        Text("An outlined box with a notch, on a card that is not the page colour") #[
+            color: 0x9AA0AC,
+            size: 12,
+        ]
+        Box #[bg: 0x2B2930, radius: 12, p: 16, width: 380] {
+            Box #[
+                border: 0xCAC4D0,
+                border_width: 1,
+                radius: 4,
+                height: 48,
+                width: 340,
+                border_gap: (12, 56),
+            ] {
+                Text("Label") #[color: 0xCAC4D0, size: 12, ml: 16, mt: -7]
+            }
+        }
+
+        Text("Elevation 3 to 5") #[color: 0x9AA0AC, size: 12]
+        Row #[gap: 24, p: (4, 8)] {
+            Box #[bg: 0xE6E0E9, width: 56, height: 56, radius: 16, shadow: "lg"] {}
+            Box #[bg: 0xE6E0E9, width: 56, height: 56, radius: 16, shadow: "xl"] {}
+            Box #[bg: 0xE6E0E9, width: 56, height: 56, radius: 16, shadow: "2xl"] {}
+        }
+    }
+}

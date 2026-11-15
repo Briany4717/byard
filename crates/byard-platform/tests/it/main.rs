@@ -6,6 +6,7 @@
 //! could run.
 
 mod backdrop_readback;
+mod border_gap_readback;
 mod canvas_fill_readback;
 mod canvas_shape_readback;
 mod clip_mask_readback;

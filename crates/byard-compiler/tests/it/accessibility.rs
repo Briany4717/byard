@@ -788,3 +788,21 @@ fn scrolling_a_node_into_view_scrolls_its_scroll_view() {
     assert_eq!(run.var("y"), Value::Int(20));
     assert_eq!(run.named("c").bounds.y, 60.0);
 }
+
+#[test]
+fn a_multiline_field_says_so_and_a_single_line_one_does_not() {
+    let multi = |attrs: &str| {
+        let run = Run::start(&format!(
+            r#"View Main() {{
+                var q = ""
+                TextField #[bind: q, placeholder: "Notes", width: 200{attrs}]
+            }}"#
+        ));
+        // The dump shows the flag, which is how a person reads it.
+        run.access().to_text().contains("multiline")
+    };
+    assert!(multi(", lines: 3"));
+    assert!(multi(", min_lines: 2, max_lines: 5"));
+    assert!(!multi(""));
+    assert!(!multi(", lines: 1"));
+}

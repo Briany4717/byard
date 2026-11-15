@@ -221,6 +221,8 @@ fn encode_one_frame() -> Option<SampleBlock> {
     });
     frame.push_text(byard_core::frame::TextLine {
         align: byard_core::frame::TextAlign::Start,
+        max_lines: 0,
+        ellipsis: false,
         x: 2.0,
         y: 40.0,
         text: "sub-scopes".to_string(),
@@ -368,6 +370,8 @@ fn a_steady_state_frame_creates_no_gpu_buffers() {
         }
         frame.push_text(byard_core::frame::TextLine {
             align: byard_core::frame::TextAlign::Start,
+            max_lines: 0,
+            ellipsis: false,
             x: 2.0,
             y: 40.0,
             text: "arena".to_string(),

@@ -245,6 +245,7 @@ impl Interpreter {
     pub(super) fn field_actions(
         &mut self,
         attrs: &[Attr],
+        bounds: crate::interp::intrinsics::Rect,
         names: &[&str],
     ) -> Vec<super::events::Action> {
         let mut out = Vec::new();
@@ -252,7 +253,17 @@ impl Interpreter {
             if let AttrKind::Event { payload, action } = &attr.kind {
                 if names.contains(&attr.name.as_str()) {
                     if let Ok(lowered) = self.lower_action(action, payload.clone()) {
-                        out.push(lowered);
+                        let kind = match attr.name.as_str() {
+                            "pointer_down" => Some(super::events::EventKind::PointerDown),
+                            "pointer_up" => Some(super::events::EventKind::PointerUp),
+                            _ => None,
+                        };
+                        out.push(match kind {
+                            Some(kind) if payload.is_some() => {
+                                self.with_pointer_value(lowered, kind, bounds)
+                            }
+                            _ => lowered,
+                        });
                     }
                 }
             }
@@ -260,14 +271,71 @@ impl Interpreter {
         out
     }
 
+    /// `builtin` preceded by the actions the element wrote for the event
+    /// `name`, which run first, from the one handler the router fires per
+    /// kind (RFC-0063 §3): how a built-in control keeps what is written on
+    /// it. Each is given the pointer value when it names one.
+    pub(super) fn composed(
+        &mut self,
+        attrs: &[Attr],
+        name: &str,
+        kind: super::events::EventKind,
+        bounds: crate::interp::intrinsics::Rect,
+        mut builtin: super::events::Action,
+    ) -> super::events::Action {
+        let mut user: Vec<super::events::Action> = Vec::new();
+        for attr in attrs {
+            if let AttrKind::Event { payload, action } = &attr.kind {
+                if attr.name.as_str() == name {
+                    if let Ok(lowered) = self.lower_action(action, payload.clone()) {
+                        user.push(if payload.is_some() {
+                            self.with_pointer_value(lowered, kind, bounds)
+                        } else {
+                            lowered
+                        });
+                    }
+                }
+            }
+        }
+        if user.is_empty() {
+            return builtin;
+        }
+        Box::new(move |ctx, p| {
+            for a in &mut user {
+                a(ctx, p);
+            }
+            builtin(ctx, p);
+        })
+    }
+
     pub(super) fn register_event_attrs(
         &mut self,
         attrs: &[Attr],
         hit_rect: crate::interp::intrinsics::Rect,
+        bounds: crate::interp::intrinsics::Rect,
         elem_idx: Option<u32>,
+    ) {
+        self.register_event_attrs_except(attrs, hit_rect, bounds, elem_idx, &[]);
+    }
+
+    /// [`register_event_attrs`](Self::register_event_attrs) leaving out the
+    /// events in `skip`, for a widget that composes those with its own.
+    ///
+    /// `bounds` is the element's own rectangle where it is drawn, which is
+    /// what a pointer handler's `e.x` is relative to (RFC-0063 §2).
+    pub(super) fn register_event_attrs_except(
+        &mut self,
+        attrs: &[Attr],
+        hit_rect: crate::interp::intrinsics::Rect,
+        bounds: crate::interp::intrinsics::Rect,
+        elem_idx: Option<u32>,
+        skip: &[&str],
     ) {
         for attr in attrs {
             if let AttrKind::Event { payload, action } = &attr.kind {
+                if skip.contains(&attr.name.as_str()) {
+                    continue;
+                }
                 let event_kind = match attr.name.as_str() {
                     "tap" | "click" => super::events::EventKind::Tap, // "click" is an alias (RFC-0012 §A)
                     "pointer_down" => super::events::EventKind::PointerDown,
@@ -289,10 +357,19 @@ impl Interpreter {
                     // RFC-0012 §A: the six modeled-but-previously-unexposed events.
                     "hover" => super::events::EventKind::Hover,
                     "pointer_enter" => super::events::EventKind::PointerEnter,
-                    "pointer_exit" => super::events::EventKind::PointerExit,
+                    // RFC-0066 §5: `pointer_leave` is the name that pairs with
+                    // `pointer_enter`; both are about the element and what is
+                    // inside it.
+                    "pointer_exit" | "pointer_leave" => super::events::EventKind::PointerExit,
+                    "focus_in" => super::events::EventKind::FocusIn,
+                    "focus_out" => super::events::EventKind::FocusOut,
                     "long_press" => super::events::EventKind::LongPress,
                     "double_tap" => super::events::EventKind::DoubleTap,
                     "secondary" => super::events::EventKind::Secondary,
+                    // RFC-0063: a press that moved past the tap slop.
+                    "drag_start" => super::events::EventKind::DragStart,
+                    "drag" => super::events::EventKind::Drag,
+                    "drag_end" => super::events::EventKind::DragEnd,
                     // RFC-0012 S2: `focus =>`/`blur =>` sugar over `focused_sig`'s
                     // edges, registered as ordinary handlers here; `steal_focus`
                     // fires them directly (see `interp::events::EventKind::Focus`).
@@ -301,12 +378,61 @@ impl Interpreter {
                     _ => continue,
                 };
                 if let Ok(closure) = self.lower_action(action, payload.clone()) {
+                    // RFC-0063: a handler that names the value is given the
+                    // pointer; one that does not is registered as it is.
+                    let closure = if payload.is_some() {
+                        self.with_pointer_value(closure, event_kind, bounds)
+                    } else {
+                        closure
+                    };
                     if let Some(idx) = elem_idx {
                         self.router.on(idx, hit_rect, event_kind, closure);
                     }
                 }
             }
         }
+    }
+
+    /// Wraps `inner` so that it is called with a `PointerEvent` (or, for a
+    /// drag event, a `DragEvent`) record (RFC-0063 §2): the pointer relative
+    /// to `bounds`, the ancestors' transform undone. Other kinds are returned
+    /// as they came.
+    pub(super) fn with_pointer_value(
+        &self,
+        mut inner: super::events::Action,
+        kind: super::events::EventKind,
+        bounds: crate::interp::intrinsics::Rect,
+    ) -> super::events::Action {
+        use super::events::EventKind as K;
+        let drag = match kind {
+            K::DragStart | K::Drag | K::DragEnd => true,
+            K::PointerDown
+            | K::PointerUp
+            | K::PointerMove
+            | K::PointerEnter
+            | K::PointerExit
+            | K::Hover => false,
+            _ => return inner,
+        };
+        let frame = self.router.current_frame();
+        let names = ["x", "y", "width", "height", "dx", "dy"].map(crate::symbol::Symbol::intern);
+        Box::new(move |ctx, _| {
+            let pos = super::events::CURRENT_EVENT_POS.with(std::cell::Cell::get);
+            let (px, py) = super::events::local_point(frame, pos);
+            let mut fields = vec![
+                (names[0].clone(), Value::Float(f64::from(px - bounds.x))),
+                (names[1].clone(), Value::Float(f64::from(py - bounds.y))),
+                (names[2].clone(), Value::Float(f64::from(bounds.w))),
+                (names[3].clone(), Value::Float(f64::from(bounds.h))),
+            ];
+            if drag {
+                let start = super::events::CURRENT_PRESS_POS.with(std::cell::Cell::get);
+                let (sx, sy) = super::events::local_point(frame, start);
+                fields.push((names[4].clone(), Value::Float(f64::from(px - sx))));
+                fields.push((names[5].clone(), Value::Float(f64::from(py - sy))));
+            }
+            inner(ctx, Some(&Value::Record(fields)));
+        })
     }
 
     /// Registers an element as focusable if it has a `focused:` prop attr,
@@ -324,6 +450,80 @@ impl Interpreter {
     ) {
         let role = self.declared_role(attrs);
         self.register_focusable_as(attrs, hit_rect, elem_idx, role);
+    }
+
+    /// What RFC-0066 adds to an element's focus, each read only when the element
+    /// writes it: `autofocus`, the crossings `pointer_enter`, `pointer_leave`,
+    /// `focus_in` and `focus_out` (they need the elements inside it), a write
+    /// to a bound `focused:` that moves focus, and a menu item that opens a
+    /// submenu.
+    pub(super) fn register_focus_extras(
+        &mut self,
+        attrs: &[Attr],
+        paint_attrs: &[Attr],
+        idx: u32,
+        atlas_node: byard_core::atlas::layout::AtlasNodeId,
+        role: Option<AccessRole>,
+    ) {
+        let mut crossing = false;
+        for attr in attrs {
+            match (attr.name.as_str(), &attr.kind) {
+                ("autofocus", AttrKind::Prop { .. }) => {
+                    if self.eval_bool_prop(paint_attrs, "autofocus") == Some(true) {
+                        self.router.mark_autofocus(idx);
+                    }
+                }
+                (
+                    "pointer_enter" | "pointer_exit" | "pointer_leave" | "focus_in" | "focus_out",
+                    AttrKind::Event { .. },
+                ) => crossing = true,
+                ("focused", AttrKind::Prop { .. }) => {
+                    // A write of `true` to the bound `var` moves focus here,
+                    // and of `false` takes it away. Where they agree with the
+                    // router, which writes the `var` itself, nothing is asked.
+                    if let Some(sig) = self.resolve_focused_sig(attrs) {
+                        let focused = self.router.is_focused(idx);
+                        match self.ctx.peek_signal(sig).as_bool() {
+                            Some(true) if !focused => self.focus_requests.push((idx, true)),
+                            Some(false) if focused => self.focus_requests.push((idx, false)),
+                            _ => {}
+                        }
+                    }
+                }
+                _ => {}
+            }
+        }
+        if crossing {
+            let mut inside = Vec::new();
+            self.collect_subtree(atlas_node, &mut inside);
+            self.router.listen_subtree(idx, inside);
+        }
+        if role == Some(AccessRole::MenuItem) {
+            if let Some(expanded) = self.eval_bool_prop(paint_attrs, "a11y_expanded") {
+                self.router.submenu_opener(idx, !expanded);
+            }
+        }
+    }
+
+    /// How many columns a grid's cells run in when its rows are not written as
+    /// `row` elements (RFC-0067): the tracks of a layout `Grid`'s `columns:`
+    /// template, `0` for anything else (the `row` elements are the rows, and a
+    /// grid with neither is one row).
+    pub(super) fn grid_columns(&mut self, element_name: &str, attrs: &[Attr]) -> u16 {
+        if element_name != "Grid" {
+            return 0;
+        }
+        self.eval_str_prop(attrs, "columns")
+            .and_then(|template| crate::interp::intrinsics::parse_grid_template(&template))
+            .map_or(0, |tracks| u16::try_from(tracks.len()).unwrap_or(u16::MAX))
+    }
+
+    /// The element indices of everything laid out inside `node`.
+    fn collect_subtree(&self, node: byard_core::atlas::layout::AtlasNodeId, out: &mut Vec<u32>) {
+        for child in self.atlas.children(node) {
+            out.extend(self.atlas.node_index(child));
+            self.collect_subtree(child, out);
+        }
     }
 
     /// The role an element's `a11y_role:` names, if it has one.
@@ -421,8 +621,22 @@ impl Interpreter {
         }
         let sig = self.focus_signal(attrs);
         self.router.focusable(idx, hit_rect, sig);
-        if matches!(role, Some(AccessRole::Tab | AccessRole::RadioButton)) {
-            self.router.group_member(idx);
+        if matches!(
+            role,
+            Some(
+                AccessRole::Tab
+                    | AccessRole::RadioButton
+                    | AccessRole::MenuItem
+                    | AccessRole::GridCell
+            )
+        ) {
+            // RFC-0063 §4: where Tab enters the group. Read only for a member
+            // of a group.
+            let selected = self.router.in_group()
+                && ["a11y_selected", "a11y_checked", "selected"]
+                    .iter()
+                    .any(|p| self.eval_bool_prop(attrs, p) == Some(true));
+            self.router.group_member(idx, selected);
         }
         if pressable
             || self
@@ -436,17 +650,7 @@ impl Interpreter {
     /// Whether a role puts an element with a `tap` into the Tab order
     /// (RFC-0052 §2).
     fn role_takes_focus(role: AccessRole) -> bool {
-        matches!(
-            role,
-            AccessRole::Button
-                | AccessRole::ToggleButton
-                | AccessRole::Switch
-                | AccessRole::CheckBox
-                | AccessRole::RadioButton
-                | AccessRole::Tab
-                | AccessRole::MenuItem
-                | AccessRole::Link
-        )
+        crate::interp::intrinsics::role_implies_focus(role)
     }
 
     /// Which of Space and Enter press an element with this role (RFC-0052 §3).
@@ -595,16 +799,38 @@ impl Interpreter {
                 _ => continue,
             };
             let (px, py) = ev.pos;
+            // RFC-0064: a multiline field under the pointer is the innermost
+            // thing there is, and takes the wheel while its text can still
+            // move that way. At either end it does not, and the event goes on
+            // to the scroll view around it.
+            let field = self
+                .wheel_fields
+                .iter()
+                .rev()
+                .find(|(r, _)| px >= r.x && px < r.x + r.w && py >= r.y && py < r.y + r.h)
+                .map(|(_, h)| h.clone());
+            if let Some(field) = field {
+                if field.scroll_text(&mut self.ctx, ev.delta.1 * step) {
+                    continue;
+                }
+            }
+            // The innermost scroll view under the pointer that can still move
+            // the way the wheel asks; when none can, the innermost, which has
+            // nothing to do but is the one the event is for.
+            let inside = |t: &&super::scroll::ScrollTarget| {
+                px >= t.rect.x
+                    && px < t.rect.x + t.rect.w
+                    && py >= t.rect.y
+                    && py < t.rect.y + t.rect.h
+            };
+            let (dx, dy) = (ev.delta.0 * step, ev.delta.1 * step);
             let Some(t) = self
                 .scroll_targets
                 .iter()
                 .rev()
-                .find(|t| {
-                    px >= t.rect.x
-                        && px < t.rect.x + t.rect.w
-                        && py >= t.rect.y
-                        && py < t.rect.y + t.rect.h
-                })
+                .filter(inside)
+                .find(|t| self.can_nudge(t, dx, dy))
+                .or_else(|| self.scroll_targets.iter().rev().find(inside))
                 .copied()
             else {
                 continue;
@@ -645,7 +871,11 @@ impl Interpreter {
                     if self.begin_nav_swipe(ev.pos) {
                         continue;
                     }
-                    let target = if self.router.claims_pointer(ev.pos) {
+                    let claimed = self.router.claims_pointer(ev.pos);
+                    // A press on something that only taps still scrolls the
+                    // view around it, once the pointer has travelled.
+                    let pending = claimed && self.router.press_only_taps(ev.pos);
+                    let target = if claimed && !pending {
                         None
                     } else {
                         self.scroll_targets
@@ -664,7 +894,7 @@ impl Interpreter {
                     if let Some(elem) = target.and_then(|t| t.elem) {
                         self.snap_anims.remove(&elem);
                     }
-                    self.scroll_drag = target.map(|t| ScrollDrag {
+                    let drag = target.map(|t| ScrollDrag {
                         start_pos: (px, py),
                         x: t.x.map(|a| self.capture_drag_axis(a)),
                         y: t.y.map(|a| self.capture_drag_axis(a)),
@@ -672,6 +902,13 @@ impl Interpreter {
                         pull_refresh: t.pull_refresh,
                         refreshing_sig: t.refreshing_sig,
                     });
+                    if pending {
+                        self.scroll_drag = None;
+                        self.pending_scroll = drag;
+                    } else {
+                        self.pending_scroll = None;
+                        self.scroll_drag = drag;
+                    }
                     // A fresh press cancels a pull view's retract spring and resets
                     // fling-velocity tracking so this gesture starts clean (RFC-0021).
                     if let Some(elem) = target.and_then(|t| t.elem) {
@@ -684,6 +921,14 @@ impl Interpreter {
                     if self.nav_swipe.is_some() {
                         self.drive_nav_swipe(ev.pos);
                         continue;
+                    }
+                    if let Some(p) = self.pending_scroll {
+                        let (dx, dy) = (ev.pos.0 - p.start_pos.0, ev.pos.1 - p.start_pos.1);
+                        if (dx * dx + dy * dy).sqrt() > crate::interp::events::TAP_SLOP {
+                            self.pending_scroll = None;
+                            self.scroll_drag = Some(p);
+                            self.router.cancel_press();
+                        }
                     }
                     if let Some(d) = self.scroll_drag {
                         if let Some(a) = d.x {
@@ -713,6 +958,7 @@ impl Interpreter {
                     // or springs back, the finger's progress hands straight
                     // over to the spring.
                     self.release_nav_swipe();
+                    self.pending_scroll = None;
                     // RFC-0021 snap: on release, settle the offset to the nearest
                     // page for a `snap: page` ScrollView (before clearing the drag).
                     if let Some(d) = self.scroll_drag {

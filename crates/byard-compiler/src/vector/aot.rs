@@ -301,6 +301,9 @@ fn walk_members(members: &[Member], visit: &mut impl FnMut(&ElementNode)) {
             Member::Element(el) => {
                 visit(el);
                 walk_members(&el.children, visit);
+                for slot in el.slot_members() {
+                    walk_members(slot, visit);
+                }
             }
             Member::For { body, .. } | Member::Route { body, .. } => walk_members(body, visit),
             Member::When { then, els, .. } => {
@@ -313,6 +316,7 @@ fn walk_members(members: &[Member], visit: &mut impl FnMut(&ElementNode)) {
             | Member::Let { .. }
             | Member::Fn { .. }
             | Member::Inject { .. }
+            | Member::Provide { .. }
             | Member::Lifecycle { .. }
             | Member::Timer { .. }
             | Member::Measure { .. }

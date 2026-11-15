@@ -78,6 +78,7 @@ impl Parser<'_> {
                         params: vec![sym],
                         types: vec![None],
                         body,
+                        slot: None,
                         span: self.span_from(span),
                     }
                 } else {
@@ -282,6 +283,7 @@ impl Parser<'_> {
             self.expect(&Token::RBrace, "'}' to close the responsive block");
             return Some(super::ast::StateBlock {
                 states: Vec::new(),
+                remote: Vec::new(),
                 attrs,
                 viewport: Some(viewport),
                 span: self.span_from(start),
@@ -291,12 +293,37 @@ impl Parser<'_> {
         // The `+`-joined state list. Every state must be known for the block to
         // apply; any unknown name is diagnosed (and the block dropped).
         let mut states = Vec::new();
+        let mut remote = Vec::new();
         let mut all_known = true;
         loop {
             let name_span = self.cur_span();
-            let name = self.expect_ident("an interaction state (e.g. hover, focused, checked)")?;
+            let mut name =
+                self.expect_ident("an interaction state (e.g. hover, focused, checked)")?;
+            // `field.focused` (RFC-0062): a state of the element tagged `as field`.
+            let mut target = None;
+            if matches!(self.cur(), Some(Token::Dot))
+                && matches!(self.peek2(), Some(Token::Ident(_)))
+            {
+                self.advance(); // .
+                target = Some(name);
+                name = self.expect_ident("an interaction state after the name")?;
+            }
+            let name_span = if target.is_some() {
+                self.span_from(name_span)
+            } else {
+                name_span
+            };
             if let Some(kind) = StyleStateKind::from_name(name.as_str()) {
-                states.push(kind);
+                if let Some(target) = target {
+                    remote.push(super::ast::RemoteState {
+                        name: target,
+                        kind,
+                        span: name_span,
+                        target: None,
+                    });
+                } else {
+                    states.push(kind);
+                }
             } else {
                 all_known = false;
                 let hint = crate::util::closest_match(
@@ -324,7 +351,7 @@ impl Parser<'_> {
         self.expect(&Token::RBrace, "'}' to close the state block");
         // Only yield a block when every state parsed, an unknown one is dropped
         // (the error is already recorded) rather than silently mis-applied.
-        if !all_known || states.is_empty() {
+        if !all_known || (states.is_empty() && remote.is_empty()) {
             return None;
         }
         // A disabled element is never hovered, pressed, focused or dragged, so a
@@ -350,6 +377,7 @@ impl Parser<'_> {
         }
         Some(super::ast::StateBlock {
             states,
+            remote,
             attrs,
             viewport: None,
             span: self.span_from(start),
@@ -474,6 +502,92 @@ impl Parser<'_> {
             self.parse_record()
         } else {
             self.parse_callback_block()
+        }
+    }
+
+    /// The value of a call's argument or attribute. A `{` there may open a
+    /// callback or the elements of a `Slot`, and which is up to the parameter
+    /// the callee declares, which the parser cannot see (a package's views
+    /// included). So the block is read both ways: as actions, and as the members
+    /// of an element's body. When only one reading is valid that is the node;
+    /// when both are, the actions are the expression and the elements ride along
+    /// for the call to choose (RFC-0062 §2); when neither is, the error says
+    /// what each expected.
+    pub(super) fn parse_arg_value(&mut self) -> Expr {
+        if !matches!(self.cur(), Some(Token::LBrace)) || self.at_record_literal() {
+            return self.parse_expr(0);
+        }
+        let start = (self.pos, self.errors.len());
+        let actions = self.parse_callback_block();
+        let actions_end = self.pos;
+        let actions_errors: Vec<_> = self.errors.drain(start.1..).collect();
+        self.pos = start.0;
+        let elements = self.parse_slot_block();
+        let elements_end = self.pos;
+        let elements_errors: Vec<_> = self.errors.drain(start.1..).collect();
+        match (actions_errors.is_empty(), elements_errors.is_empty()) {
+            (true, true) => {
+                self.pos = actions_end;
+                match (actions, elements) {
+                    (
+                        Expr::Lambda {
+                            params,
+                            types,
+                            body,
+                            span,
+                            ..
+                        },
+                        Expr::SlotBlock { members, .. },
+                    ) => Expr::Lambda {
+                        params,
+                        types,
+                        body,
+                        slot: Some(members),
+                        span,
+                    },
+                    (actions, _) => actions,
+                }
+            }
+            (true, false) => {
+                self.pos = actions_end;
+                actions
+            }
+            (false, true) => {
+                self.pos = elements_end;
+                elements
+            }
+            (false, false) => {
+                let first = |errors: &[crate::diagnostics::CompileError]| match errors.first() {
+                    Some(crate::diagnostics::CompileError::UnexpectedToken {
+                        expected, ..
+                    }) => expected.clone(),
+                    _ => "something else".to_string(),
+                };
+                let span =
+                    self.span_from(self.tokens.get(start.0).map_or(self.cur_span(), |t| t.1));
+                self.pos = actions_end.max(elements_end);
+                self.errors
+                    .push(crate::diagnostics::CompileError::BlockFitsNeither {
+                        span,
+                        as_actions: first(&actions_errors),
+                        as_elements: first(&elements_errors),
+                    });
+                Expr::Error(span)
+            }
+        }
+    }
+
+    /// `slot_block := "{" member* "}"`, the argument form of a `Slot`
+    /// parameter. The members are the ones an element's body holds, so
+    /// everything below it (resolution, checking, lowering, formatting) walks
+    /// what it already walks.
+    fn parse_slot_block(&mut self) -> Expr {
+        let start = self.cur_span();
+        self.advance(); // {
+        let members = self.parse_block_members();
+        Expr::SlotBlock {
+            members,
+            span: self.span_from(start),
         }
     }
 
@@ -810,6 +924,7 @@ impl Parser<'_> {
                     params: Vec::new(),
                     types: Vec::new(),
                     body,
+                    slot: None,
                     span: self.span_from(start),
                 };
             }
@@ -839,6 +954,7 @@ impl Parser<'_> {
                 params,
                 types,
                 body,
+                slot: None,
                 span: self.span_from(start),
             };
         }
@@ -875,6 +991,7 @@ impl Parser<'_> {
             types: vec![None; params.len()],
             params,
             body,
+            slot: None,
             span: self.span_from(start),
         }
     }
@@ -915,6 +1032,7 @@ impl Parser<'_> {
             types: vec![None; params.len()],
             params,
             body: Box::new(Expr::Block(stmts, span)),
+            slot: None,
             span,
         }
     }
@@ -969,7 +1087,7 @@ impl Parser<'_> {
             } else {
                 None
             };
-            let value = self.parse_expr(0);
+            let value = self.parse_arg_value();
             args.push(Arg {
                 name,
                 value,

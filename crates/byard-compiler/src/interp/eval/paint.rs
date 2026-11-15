@@ -14,6 +14,7 @@ use super::navigation::NavKind;
 use super::props::ShadowSpec;
 use super::scroll::{
     PULL_THRESHOLD, ScrollAxis, ScrollTarget, SnapAlign, SnapMode, WindowSpec, scrolled_hit_rect,
+    shifted_rect,
 };
 use super::states::{resolve_state_attrs, viewport_holds};
 use super::wiring::NativeTarget;
@@ -47,6 +48,7 @@ fn shadow_decorated(
         // A shadow cast is geometry, not fill: the element's own ramp belongs to
         // its surface, never to the blurred silhouette beneath it.
         gradient: None,
+        border_gap: [0.0; 2],
         dirty: true,
     }
 }
@@ -153,6 +155,13 @@ impl Interpreter {
         // Opacity decides nothing about where a press lands.
         hit.opacity = 1.0;
         let previous = self.router.set_hit_frame(hit);
+        // RFC-0066 §3: a leaving node is drawn and nothing else. It takes no
+        // input, is out of the Tab order and out of the accessibility tree.
+        let leaving = self.anim_slot.leave != 0;
+        let was_inert = leaving.then(|| self.router.set_inert(true));
+        if leaving && self.access.on {
+            self.access.hide();
+        }
         self.render_node_with_atlas_inner(
             node,
             atlas_node,
@@ -167,7 +176,48 @@ impl Interpreter {
             window,
             pools,
         );
+        if let Some(was) = was_inert {
+            self.router.set_inert(was);
+            if self.access.on {
+                self.access.unhide();
+            }
+        }
         self.router.restore_hit_frame(previous);
+    }
+
+    /// Makes the hit regions this element registers follow its own `translate`,
+    /// so a press lands where the element is drawn: a box moved 100 to the right
+    /// is pressed 100 to the right, as one inside a translated card already was.
+    /// `inherited` is the transform its ancestors compose.
+    ///
+    /// Only the translation. An element's own `scale` and `rotate` still leave
+    /// its own target alone (RFC-0011): a hover scale that grew the target would
+    /// push a pointer at the edge in and out of hover as it animated, and a
+    /// handler's `e.dx` and `e.x` stay in the element's laid-out units while it
+    /// is scaled (`on dragging { scale: 1.5 }`). An element that does not
+    /// translate keeps the frame it inherited, and costs nothing. The scroll
+    /// displacement is in the transform for paint but reaches the hit rects
+    /// another way, so it is taken out.
+    #[allow(clippy::float_cmp)]
+    fn hit_where_drawn(
+        &mut self,
+        own: &byard_core::frame::Transform,
+        inherited: &byard_core::frame::Transform,
+        scroll_shift: (f32, f32),
+    ) {
+        if own.translate == [0.0, 0.0] {
+            return;
+        }
+        let moved = byard_core::frame::Transform {
+            translate: own.translate,
+            ..byard_core::frame::Transform::IDENTITY
+        };
+        let mut hit = inherited.compose(&moved);
+        hit.translate[0] -= scroll_shift.0;
+        hit.translate[1] -= scroll_shift.1;
+        hit.opacity = 1.0;
+        // The wrapper around the node puts back the frame it replaced.
+        let _ = self.router.set_hit_frame(hit);
     }
 
     /// The body of [`render_node_with_atlas`](Self::render_node_with_atlas),
@@ -252,12 +302,14 @@ impl Interpreter {
                     let elem_idx = self.atlas.node_index(atlas_node);
                     let state = elem_idx
                         .map_or_else(crate::interp::events::StyleState::empty, |i| {
-                            self.router.style_state(i)
+                            self.element_style_state(i)
                         })
-                        .union(self.prop_style_state(attrs, None, ""));
-                    let attrs = resolve_state_attrs(attrs, state_blocks, state, &|c| {
-                        viewport_holds(c, self.viewport, &self.theme)
-                    });
+                        .union(self.prop_style_state(attrs, None, ""))
+                        .union(self.motion_state(Some(content.key()), state_blocks));
+                    let attrs =
+                        resolve_state_attrs(attrs, state_blocks, state, &self.elem_states, &|c| {
+                            viewport_holds(c, self.viewport, &self.theme)
+                        });
                     let attrs = self.pick_keywords(attrs);
                     let attrs = attrs.as_ref();
                     let text = match self.binding_value(*content) {
@@ -272,8 +324,14 @@ impl Interpreter {
                     // (RFC-0005 `Typo`, completed by RFC-0022).
                     let typo_size = self.eval_typo_size(attrs);
                     let size = self.text_font_size(attrs, typo_size);
+                    // The run's own `opacity`, folded with what it inherited.
+                    #[allow(clippy::cast_possible_truncation)]
+                    let text_opacity = inherited_opacity
+                        * self
+                            .eval_float_prop(attrs, "opacity")
+                            .map_or(1.0, |v| v as f32);
                     let mut rgba = super::intrinsics::color_rgba_auto(color);
-                    rgba[3] *= inherited_opacity;
+                    rgba[3] *= text_opacity;
                     // RFC-0011: the run's own transform, composed with its
                     // ancestors'. Scale and translate are baked into the baseline
                     // anchor and the font size (glyph extents scale from the
@@ -293,6 +351,7 @@ impl Interpreter {
                         ),
                     );
                     let transform = inherited_transform.compose(&own);
+                    self.hit_where_drawn(&own, &inherited_transform, scroll_shift);
                     let own_group = own.rotate.abs() > f32::EPSILON
                         && frame.begin_group_rotated(
                             1.0,
@@ -341,6 +400,14 @@ impl Interpreter {
                         Some("justify") => byard_core::frame::TextAlign::Justify,
                         _ => byard_core::frame::TextAlign::Start,
                     };
+                    // RFC-0064: the cap and what a cut looks like. Read only
+                    // when written; a run without `max_lines` is shaped as it
+                    // always was.
+                    let max_lines = self
+                        .text_max_lines(attrs)
+                        .map_or(0, |n| u16::try_from(n).unwrap_or(u16::MAX));
+                    let ellipsis =
+                        max_lines > 0 && Self::enum_prop(attrs, "overflow") != Some("clip");
                     let single_line = self.eval_bool_prop(attrs, "wrap") == Some(false);
                     let wrap_w = if single_line {
                         None
@@ -372,7 +439,7 @@ impl Interpreter {
                     {
                         if let Some(bg) = self.eval_color_prop(attrs, "bg") {
                             let mut fill = super::intrinsics::color_rgba_auto(bg);
-                            fill[3] *= inherited_opacity;
+                            fill[3] *= text_opacity;
                             let base = byard_core::BoxInstance {
                                 rect: [rect.x, rect.y, rect.width, rect.height],
                                 color: fill,
@@ -395,6 +462,8 @@ impl Interpreter {
                     frame.push_text_wrapped(
                         byard_core::TextLine {
                             align,
+                            max_lines,
+                            ellipsis,
                             x: anchor[0],
                             y: anchor[1],
                             text,
@@ -429,7 +498,20 @@ impl Interpreter {
                             scroll_shift,
                             cull_clip,
                         );
-                        self.register_event_attrs(attrs, hit_rect, elem_idx);
+                        let through = attrs.iter().any(|a| a.name.as_str() == "interactive")
+                            && self.eval_bool_prop(attrs, "interactive") == Some(false);
+                        if through {
+                            self.router.enter_pass_through();
+                        }
+                        self.register_event_attrs(
+                            attrs,
+                            hit_rect,
+                            shifted_rect(self_rect, scroll_shift),
+                            elem_idx,
+                        );
+                        if through {
+                            self.router.leave_pass_through();
+                        }
                     }
                 }
                 self.env.truncate(env_base);
@@ -445,7 +527,7 @@ impl Interpreter {
                 anchor_name,
                 measure: _,
                 clip_path,
-                uid: _,
+                uid,
                 inst: _,
             } => {
                 // RFC-0019 §2: restore the instance environment captured at lower
@@ -472,6 +554,9 @@ impl Interpreter {
                 let mut access_scope = access::Scope::default();
                 // Whether this box opened a tab list or radio group (RFC-0052).
                 let mut group_open = false;
+                // Whether this box is `interactive: false` (RFC-0066 §5), so the
+                // pointer goes through what it registers, to the way out.
+                let mut through_open = false;
                 // Likewise the composed paint transform children inherit (RFC-0011
                 // group transforms): this box's own transform ∘ its ancestors',
                 // set once the rect is known, else passed through unchanged.
@@ -493,15 +578,17 @@ impl Interpreter {
                     // been without them.
                     if let Some(name) = anchor_name {
                         let tl = inherited_transform.apply_point([rect.x, rect.y]);
-                        self.anchor_rects.insert(
-                            name.clone(),
-                            crate::interp::intrinsics::Rect::new(
-                                tl[0] + scroll_shift.0,
-                                tl[1] + scroll_shift.1,
-                                rect.width * inherited_transform.scale[0],
-                                rect.height * inherited_transform.scale[1],
-                            ),
+                        let landed = crate::interp::intrinsics::Rect::new(
+                            // The transform already carries the scroll and the
+                            // overlay's shift; adding `scroll_shift` as well,
+                            // which rides the same two, counted them twice.
+                            tl[0],
+                            tl[1],
+                            rect.width * inherited_transform.scale[0],
+                            rect.height * inherited_transform.scale[1],
                         );
+                        self.anchor_rects.insert(name.clone(), landed);
+                        self.anchor_uid_rects.insert(*uid, landed);
                     }
                     let elem_idx = self.atlas.node_index(atlas_node);
                     // RFC-0012 S5: a `disabled:` element still lays out and paints,
@@ -524,12 +611,23 @@ impl Interpreter {
                     // pointer/focus/drag mask so `on checked { … }` etc. resolve.
                     let paint_state = elem_idx
                         .map_or_else(crate::interp::events::StyleState::empty, |i| {
-                            self.router.style_state(i)
+                            self.element_style_state(i)
                         })
-                        .union(self.prop_style_state(attrs, *bound_sig, name.as_str()));
-                    let paint_attrs = resolve_state_attrs(attrs, state_blocks, paint_state, &|c| {
-                        viewport_holds(c, self.viewport, &self.theme)
-                    });
+                        .union(self.prop_style_state(attrs, *bound_sig, name.as_str()))
+                        .union(self.motion_state(Some(u64::from(*uid)), state_blocks));
+                    // RFC-0062: an element tagged `as name` publishes the states it
+                    // resolved, for the elements after it that name them. Before
+                    // its children paint, so a descendant sees this frame's.
+                    if self.remote_targets.contains(uid) {
+                        self.elem_states.insert(*uid, paint_state);
+                    }
+                    let paint_attrs = resolve_state_attrs(
+                        attrs,
+                        state_blocks,
+                        paint_state,
+                        &self.elem_states,
+                        &|c| viewport_holds(c, self.viewport, &self.theme),
+                    );
                     let paint_attrs = paint_attrs.as_ref();
                     // Resolve the paint-time transform once, up front, so it can
                     // be applied both to a plain container's `bg` fill *and* to
@@ -544,6 +642,7 @@ impl Interpreter {
                     let own_transform = self.resolve_transform(paint_attrs, current_rect);
                     let transform = inherited_transform.compose(&own_transform);
                     child_transform = transform;
+                    self.hit_where_drawn(&own_transform, &inherited_transform, scroll_shift);
                     let bg = self.eval_color_prop(paint_attrs, "bg");
                     let radii = self.resolve_radii(paint_attrs, "radius");
                     // RFC-0031 §S1: the corner profile `radii` are measured
@@ -566,6 +665,12 @@ impl Interpreter {
                     } else {
                         0.0
                     };
+                    // RFC-0064: a gap in the top edge of that border.
+                    let border_gap = if border_color.is_some() {
+                        self.resolve_border_gap(paint_attrs)
+                    } else {
+                        [0.0; 2]
+                    };
                     // `shadow` is a token (`sm`/`md`/`lg`) → an offset+blur drop
                     // shadow; any other non-empty value falls back to `md`.
                     // `shadow` (RFC-0011 custom shadows): a preset token, a
@@ -581,6 +686,9 @@ impl Interpreter {
                         * self
                             .eval_float_prop(paint_attrs, "opacity")
                             .map_or(1.0, |v| v as f32);
+                    if let Some(probe) = self.root_opacity.as_mut().filter(|p| p.is_nan()) {
+                        *probe = opacity;
+                    }
                     // RFC-0011 T4: a translucent box with children is faded as
                     // one picture rather than by multiplying its alpha into
                     // every primitive it contains. The difference is overlap:
@@ -661,6 +769,7 @@ impl Interpreter {
                                 base,
                                 border_width,
                                 border_color: border_rgba,
+                                border_gap,
                                 opacity,
                                 gradient,
                                 // Re-walked and re-emitted every tick;
@@ -685,6 +794,7 @@ impl Interpreter {
                                 },
                                 border_width,
                                 border_color: border_rgba,
+                                border_gap,
                                 opacity: 1.0,
                                 dirty: true,
                                 ..Default::default()
@@ -747,6 +857,15 @@ impl Interpreter {
                         cull_clip,
                     );
 
+                    // RFC-0066 §5: `interactive: false` takes the element and
+                    // everything in it out of hit-testing, so presses, hover and
+                    // the wheel go to what is under it. Read only when written.
+                    if attrs.iter().any(|a| a.name.as_str() == "interactive")
+                        && self.eval_bool_prop(paint_attrs, "interactive") == Some(false)
+                    {
+                        self.router.enter_pass_through();
+                        through_open = true;
+                    }
                     // RFC-0016: an element that styles `on hover`/`on pressed` but
                     // registers no handler still needs the engine to track the
                     // pointer over it, so register a bare hover/press hit region.
@@ -821,6 +940,7 @@ impl Interpreter {
                                 paint_attrs,
                                 current_rect,
                                 hit_rect,
+                                shifted_rect(current_rect, scroll_shift),
                                 elem_idx,
                                 transform,
                                 opacity,
@@ -837,7 +957,12 @@ impl Interpreter {
                                 || action.is_some();
 
                             if is_interactive {
-                                self.register_event_attrs(attrs, hit_rect, elem_idx);
+                                self.register_event_attrs(
+                                    attrs,
+                                    hit_rect,
+                                    shifted_rect(current_rect, scroll_shift),
+                                    elem_idx,
+                                );
 
                                 if let Some(action_expr) = action {
                                     if let Ok(action_closure) = self.lower_action(action_expr, None)
@@ -870,7 +995,7 @@ impl Interpreter {
                     // RFC-0052: its `a11y_role:` is read once, for the focus
                     // rule and for a tab list or radio group to open.
                     let declared = self.declared_role(attrs);
-                    if element_name == "Button" {
+                    if element_name == "Button" && declared != Some(AccessRole::MenuItem) {
                         if let Some(idx) = elem_idx.filter(|&i| {
                             self.router
                                 .has_handler(i, crate::interp::events::EventKind::Tap)
@@ -888,15 +1013,32 @@ impl Interpreter {
                     ) {
                         self.register_focusable_as(attrs, hit_rect, elem_idx, declared);
                     }
+                    if let Some(idx) = elem_idx {
+                        self.register_focus_extras(attrs, paint_attrs, idx, atlas_node, declared);
+                    }
                     if let Some(kind) = match declared {
                         Some(AccessRole::TabList) => Some(crate::interp::events::GroupKind::Tabs),
                         Some(AccessRole::RadioGroup) => {
                             Some(crate::interp::events::GroupKind::Radios)
                         }
+                        // RFC-0066 §2: a menu is an arrow group, down a column
+                        // and along a row for a menu bar.
+                        Some(AccessRole::Menu) => Some(crate::interp::events::GroupKind::Menu {
+                            horizontal: name.as_str() == "Row"
+                                || Self::enum_prop(attrs, "direction") == Some("row"),
+                        }),
+                        // RFC-0067: a grid is an arrow group of its cells, in
+                        // rows of its `row` elements, or of the tracks of a
+                        // layout `Grid` that has none.
+                        Some(AccessRole::Grid) => Some(crate::interp::events::GroupKind::Grid {
+                            columns: self.grid_columns(element_name, attrs),
+                        }),
                         _ => None,
                     } {
                         self.router.open_group(kind);
                         group_open = true;
+                    } else if declared == Some(AccessRole::Row) {
+                        self.router.next_row();
                     }
 
                     // RFC-0042: describe the box now that its handlers and
@@ -1041,7 +1183,8 @@ impl Interpreter {
                     // stays while the content scrolls under it. The header keeps its
                     // laid-out height; its descendants read `scroll_fraction` to
                     // interpolate their own size/opacity (RFC-0021 §4 mechanism).
-                    if let Some(frac_sig) = *bound_sig {
+                    if let Some(frac_sig) = (*bound_sig).filter(|_| self.collapse_header_on(attrs))
+                    {
                         let h_max = self
                             .atlas
                             .children(atlas_node)
@@ -1179,7 +1322,11 @@ impl Interpreter {
                     // slice. Advance the cursor past the skipped subtree so the
                     // remaining children stay aligned.
                     if let Some(clip) = child_clip {
-                        if this.child_fully_clipped(child_id, child_transform, clip) {
+                        // Where it is drawn, not only where it was laid out: its
+                        // own `translate` can bring it into view from a slot
+                        // that is off screen.
+                        let drawn = this.child_drawn_transform(child, child_id, child_transform);
+                        if this.child_fully_clipped(child_id, drawn, clip) {
                             // RFC-0042: its words still name the button it is in.
                             this.access_culled(child, pools);
                             *flat_idx += this.flat_len(child, pools);
@@ -1290,6 +1437,9 @@ impl Interpreter {
                 if group_open {
                     self.router.close_group();
                 }
+                if through_open {
+                    self.router.leave_pass_through();
+                }
                 // Close the RFC-0019 instance-env scope opened at the top of this
                 // arm (balanced with `env_base`), restoring the caller's env for
                 // the remaining siblings.
@@ -1313,12 +1463,16 @@ impl Interpreter {
                 let elem_idx = self.atlas.node_index(atlas_node);
                 let state = elem_idx
                     .map_or_else(crate::interp::events::StyleState::empty, |i| {
-                        self.router.style_state(i)
+                        self.element_style_state(i)
                     })
                     .union(self.prop_style_state(&p.attrs, None, ""));
-                let paint_attrs = resolve_state_attrs(&p.attrs, &p.state_blocks, state, &|c| {
-                    viewport_holds(c, self.viewport, &self.theme)
-                });
+                let paint_attrs = resolve_state_attrs(
+                    &p.attrs,
+                    &p.state_blocks,
+                    state,
+                    &self.elem_states,
+                    &|c| viewport_holds(c, self.viewport, &self.theme),
+                );
                 let paint_attrs = self.pick_keywords(paint_attrs);
                 let paint_attrs = paint_attrs.as_ref();
                 let own_transform = self.resolve_transform(paint_attrs, nav_rect);
@@ -1341,7 +1495,12 @@ impl Interpreter {
                 }
                 // `route_change` and any pointer handlers on the container.
                 let hit_rect = scrolled_hit_rect(nav_rect, scroll_shift, cull_clip);
-                self.register_event_attrs(&p.attrs, hit_rect, elem_idx);
+                self.register_event_attrs(
+                    &p.attrs,
+                    hit_rect,
+                    shifted_rect(nav_rect, scroll_shift),
+                    elem_idx,
+                );
                 // RFC-0042: tabs are a tab list; a stack's screens have no
                 // role of their own and their content is simply the tree's.
                 let host = p.kind == NavKind::Host;
@@ -1451,12 +1610,14 @@ impl Interpreter {
                         .atlas
                         .node_index(atlas_node)
                         .map_or_else(crate::interp::events::StyleState::empty, |i| {
-                            self.router.style_state(i)
+                            self.element_style_state(i)
                         })
-                        .union(self.prop_style_state(attrs, None, ""));
-                    let attrs = resolve_state_attrs(attrs, state_blocks, state, &|c| {
-                        viewport_holds(c, self.viewport, &self.theme)
-                    });
+                        .union(self.prop_style_state(attrs, None, ""))
+                        .union(self.motion_state(Some(src.key()), state_blocks));
+                    let attrs =
+                        resolve_state_attrs(attrs, state_blocks, state, &self.elem_states, &|c| {
+                            viewport_holds(c, self.viewport, &self.theme)
+                        });
                     let attrs = self.pick_keywords(attrs);
                     let attrs = attrs.as_ref();
                     let src_val = self
@@ -1528,12 +1689,14 @@ impl Interpreter {
                     let elem_idx = self.atlas.node_index(atlas_node);
                     let state = elem_idx
                         .map_or_else(crate::interp::events::StyleState::empty, |i| {
-                            self.router.style_state(i)
+                            self.element_style_state(i)
                         })
-                        .union(self.prop_style_state(attrs, None, ""));
-                    let paint_attrs = resolve_state_attrs(attrs, state_blocks, state, &|c| {
-                        viewport_holds(c, self.viewport, &self.theme)
-                    });
+                        .union(self.prop_style_state(attrs, None, ""))
+                        .union(self.motion_state(None, state_blocks));
+                    let paint_attrs =
+                        resolve_state_attrs(attrs, state_blocks, state, &self.elem_states, &|c| {
+                            viewport_holds(c, self.viewport, &self.theme)
+                        });
                     let paint_attrs = paint_attrs.as_ref();
 
                     // RFC-0019 §2: prop expressions resolve against the scope
@@ -1617,7 +1780,12 @@ impl Interpreter {
                         for (k, v) in env_snapshot {
                             self.env.push(k.clone(), v.clone());
                         }
-                        self.register_event_attrs(attrs, hit_rect, elem_idx);
+                        self.register_event_attrs(
+                            attrs,
+                            hit_rect,
+                            shifted_rect(view_rect, scroll_shift),
+                            elem_idx,
+                        );
                         if let Some(action_expr) = action {
                             if let (Ok(closure), Some(idx)) =
                                 (self.lower_action(action_expr, None), elem_idx)
@@ -1723,12 +1891,14 @@ impl Interpreter {
                     // reading paint properties. RFC-0024: fold in universal states.
                     let state = elem_idx
                         .map_or_else(crate::interp::events::StyleState::empty, |i| {
-                            self.router.style_state(i)
+                            self.element_style_state(i)
                         })
-                        .union(self.prop_style_state(attrs, None, ""));
-                    let paint_attrs = resolve_state_attrs(attrs, state_blocks, state, &|c| {
-                        viewport_holds(c, self.viewport, &self.theme)
-                    });
+                        .union(self.prop_style_state(attrs, None, ""))
+                        .union(self.motion_state(None, state_blocks));
+                    let paint_attrs =
+                        resolve_state_attrs(attrs, state_blocks, state, &self.elem_states, &|c| {
+                            viewport_holds(c, self.viewport, &self.theme)
+                        });
                     let paint_attrs = paint_attrs.as_ref();
 
                     // RFC-0019 §2: restore the instance environment so shape
@@ -1848,7 +2018,12 @@ impl Interpreter {
                         .any(|a| matches!(a.kind, AttrKind::Event { .. }))
                         || action.is_some();
                     if has_events {
-                        self.register_event_attrs(attrs, hit_rect, elem_idx);
+                        self.register_event_attrs(
+                            attrs,
+                            hit_rect,
+                            shifted_rect(canvas_rect, scroll_shift),
+                            elem_idx,
+                        );
                         if let Some(action_expr) = action {
                             if let Ok(closure) = self.lower_action(action_expr, None) {
                                 if let Some(idx) = elem_idx {

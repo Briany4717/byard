@@ -26,22 +26,58 @@ the transforms `translate`, `scale`, `rotate` and `origin`. Paint properties cha
 pixels inside a rectangle layout has already decided, so animating them costs no
 layout and runs on the GPU.
 
-It does not follow a *layout* property. `width`, `height`, `gap`, padding and the
-rest decide where other things go, so animating them would lay the screen out every
-frame. The checker refuses, and says what to do:
+It also follows the properties that size and space things: `width`, `height`, `gap`,
+padding (`p`, `pt`, `pr`, `pb`, `pl`) and margin (`m`, `mt`, `mr`, `mb`, `ml`, `mx`,
+`my`). These are real sizes, so what is laid out beside them moves too: a pressed
+button can widen while its neighbours narrow. They cost a layout pass for as long as
+they move, on the frames they move and for the part of the tree they reach; once they
+settle they cost nothing. A paragraph whose width moves is re-wrapped every frame, so
+for that, and for anything that should not push its neighbours, animate `scale`.
+
+```byld
+View Main() {
+    var wide = false
+    Box #[width: wide ? 200 : 80 with anim.spring(), height: 20, bg: 0x6750A4] {
+        on pressed { height: 28 with anim.spring() }
+    }
+}
+```
+
+A layout property inside `on pressed`, `on hover` and the other states moves its box
+like any other, and a held Space or Enter shows it as the pointer does. Mind that a
+state that moves the box away from the pointer ends itself: `on hover` that shrinks the
+box under the pointer's edge will flicker; `pressed` keeps until release.
+
+The rest of the layout properties have no motion, and the checker says which and why:
 
 ```byld,fails
 View Main() {
-    var wide = false
-    Box #[width: wide ? 200 : 80 with anim.spring(), height: 20] {}
+    var on = false
+    Box #[grow: on ? 2 : 1 with anim.spring(), height: 20] {}
 }
 ```
 
 ```diagnostic
-error[LayoutPropNotAnimatable]: `width` is a layout property and cannot be animated
+error[LayoutPropNotAnimatable]: `grow` is a layout property and cannot be animated with `with`: it is a share of the free space among siblings; animate the `width` or `height` it divides instead
 ```
 
-To grow or shrink something smoothly, animate its `scale`.
+### Corners and spacing, slot by slot
+
+A `radius`, `p` or `m` tuple takes any expression in each slot, a `?:` between a tuple
+and a number (or two tuples), and `with`, after which each slot moves on the curve by
+itself:
+
+```byld
+View Main() {
+    var open = false
+    var joined = false
+    Column {
+        Box #[radius: (open ? 4 : 20, 20, 20, open ? 4 : 20) with anim.spring(), width: 80, height: 40] {}
+        Box #[radius: joined ? (4, 4, 0, 0) : 4, width: 80, height: 40] {}
+        Row #[p: (8, open ? 16 : 8) with anim.spring()] {}
+    }
+}
+```
 
 `with` has the lowest precedence of the expression operators short of assignment, so
 `on ? a : b with anim.spring()` animates the whole choice.
@@ -297,8 +333,9 @@ View Main() {
 ```
 
 That is Material's indeterminate progress bar: two tracks of keyframes that loop.
-There must be at least two stops, in order, and `duration` is required. `loop: true`
-repeats it. Keyframes replace the value, so they are not written after `with`.
+There must be at least two stops and at most eight, in order, and `duration` is required.
+More than eight is `TooManyKeyframes`, wherever the sequence is written, a coordinate in a
+path body included. `loop: true` repeats it. Keyframes replace the value, so they are not written after `with`.
 
 ## Lists that arrive in turn
 
@@ -330,6 +367,42 @@ after the first. The rows are written once and each has its own timeline, so the
 can run at different points. `restart: entrance` replays the cascade each time the
 button changes `entrance`, which is how you run a start-up animation again without
 reloading.
+
+## Coming and going
+
+`on enter` and `on leave` are state blocks for how an element arrives and how it goes.
+They take paint attributes and `translate`, `scale`, `rotate` and `opacity`; a layout
+attribute is `LayoutInStateBlock`, and an element has one block of each.
+
+<!-- ignore: a piece of a larger view, with names it does not declare -->
+```byld,ignore
+when open {
+    Column #[opacity: 1.0 with t.springEffectsFast,
+             translate: (0, 0) with t.springSpatialFast] {
+        on enter { opacity: 0.0, translate: (0, 24) }
+        on leave { opacity: 0.0, translate: (0, 24) }
+        Text("Saved")
+    }
+}
+```
+
+`on enter` gives the values the element has on its first frame; from there it moves to its
+own with their `with`. A token, or `anim.stagger(t.springSpatialFast, 40ms, i)`, needs no
+`from:`: the start is written once, in the block. A `delay:` is waited out too, so
+`opacity: 1.0 with anim.ease(150ms, delay: 2s)` with `on enter { opacity: 0.0 }` stays
+hidden for two seconds. The way in takes the curve of the attribute, the way out the one
+written in `on leave` (`on leave { opacity: 0.0 with anim.ease(80ms) }`), so the two may
+have different speeds. `on leave` gives the values it goes to
+when a `when` turns false, a `for` loses a row or an overlay closes. It stays drawn until
+those motions end, and meanwhile takes no input, is out of the Tab order and is not in
+the accessibility tree. Shown again before it has gone, it turns round from where it is.
+A branch that has an `on leave` anywhere in it is kept whole; the rest of it stays as it
+was. Rows of a `for` are positional, so it is the last rows of the list that leave.
+Nothing is kept for an element that has neither block, and a loop that never ends does
+not keep a leaving element drawn.
+
+A test or a `byard shot` that expects the element gone must wait for its motion
+(`--wait`).
 
 ## A view you call more than once
 
@@ -373,7 +446,10 @@ One axis can be set alone: `translate.y: 4`. To pivot on the middle of the eleme
 spin wants, say `origin: center`.
 
 Transforms compose down the tree. A button inside a rotated card turns with it, and
-a tap on it lands where it is drawn. They apply to text too, and a rotated label
+a tap on it lands where it is drawn. So does a `translate` of the element
+itself: a box moved 100 to the right is pressed 100 to the right. Its own `scale` and
+`rotate` leave its own target where it was laid out, so a hover that scales it does not
+move the edge it is hovered by. They apply to text too, and a rotated label
 turns with its card. A `Clip` inside a rotated card is cut along the card's turned
 edges.
 

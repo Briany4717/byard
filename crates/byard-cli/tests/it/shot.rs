@@ -158,7 +158,7 @@ fn a_program_check_rejects_is_not_drawn() {
     std::fs::write(
         dir.join("main.byd"),
         "View Main() {\n    Box #[bg: 0xE8543F, width: 50, height: 40] {}\n}\n\
-         View Elsewhere() {\n    Box #[p: true ? (1, 2, 3, 4) : (5, 6, 7, 8)] {}\n}\n",
+         View Elsewhere() {\n    Box #[p: false ? (1, 2, 3, 4) : \"wide\"] {}\n}\n",
     )
     .unwrap();
     let png = dir.join("out.png");

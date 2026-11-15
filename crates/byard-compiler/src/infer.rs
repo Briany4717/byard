@@ -53,15 +53,19 @@ const STR_METHODS: [&str; 14] = [
 
 /// The methods an `Int` has (RFC-0048); `alpha` is a colour's, which is an
 /// `Int` too.
-const INT_METHODS: [&str; 5] = ["toFloat", "abs", "min", "max", "alpha"];
+const INT_METHODS: [&str; 9] = [
+    "toFloat", "abs", "min", "max", "alpha", "sin", "cos", "sqrt", "atan2",
+];
 
 /// The methods a `Float` has (RFC-0048).
-const FLOAT_METHODS: [&str; 6] = ["round", "floor", "ceil", "abs", "min", "max"];
+const FLOAT_METHODS: [&str; 10] = [
+    "round", "floor", "ceil", "abs", "min", "max", "sin", "cos", "sqrt", "atan2",
+];
 
 /// Names the engine puts in scope itself: the animation namespace
-/// (`anim.spring`), a collapsing header's `scroll_fraction`, and the `route`
-/// of the screen a navigation case draws.
-const BUILT_IN_NAMES: [&str; 3] = ["anim", "scroll_fraction", "route"];
+/// (`anim.spring`), a collapsing header's `scroll_fraction`, the `route`
+/// of the screen a navigation case draws, and the `window` (RFC-0067).
+const BUILT_IN_NAMES: [&str; 4] = ["anim", "scroll_fraction", "route", "window"];
 
 /// Functions the language itself provides: `untrack(expr)`, the
 /// `match(element)` width of an anchored overlay, the navigation actions
@@ -116,6 +120,10 @@ pub enum Ty {
     List(Box<Ty>),
     /// `Fn(params) -> ret`.
     Fn(Vec<Ty>, Option<Box<Ty>>),
+    /// `T?` (RFC-0065): a value that may be none. Only a parameter or a context
+    /// field has this type; reading one gives the `T` inside, after the check
+    /// that it was handled.
+    Optional(Box<Ty>),
     /// A named type the checker does not model further (e.g. `AppEnvironment`).
     Named(Symbol),
     /// A type Phase 2 cannot determine; permitted, never an error by itself.
@@ -133,6 +141,42 @@ pub struct Inference {
     pub bindings: Vec<(Symbol, Ty)>,
     /// The type of each top-level constant (RFC-0055), in declaration order.
     pub consts: Vec<(Symbol, Ty)>,
+}
+
+/// What the value a handler may name is, by event (RFC-0063 §2).
+enum EventValue {
+    /// A record of the given built-in type.
+    Record(&'static str),
+    /// The event carries no value; the string says what to write instead.
+    None(Option<&'static str>),
+    /// Any other event: a text, a number, a key, as the element defines it.
+    Other,
+}
+
+fn event_value(event: &str) -> EventValue {
+    match event {
+        "pointer_down" | "pointer_up" | "pointer_move" | "pointer_enter" | "pointer_exit"
+        | "hover" => EventValue::Record("PointerEvent"),
+        "drag_start" | "drag" | "drag_end" => EventValue::Record("DragEvent"),
+        // `tap` can come from a key, so it has no position.
+        "tap" | "click" | "double_tap" | "long_press" | "secondary" => {
+            EventValue::None(Some("pointer_down(e)"))
+        }
+        "focus" | "blur" => EventValue::None(None),
+        _ => EventValue::Other,
+    }
+}
+
+/// The fields of the built-in records, all `Float`: the value a pointer or drag
+/// handler is given (RFC-0063 §2), and the `window` (RFC-0067).
+fn event_record_fields(record: &str) -> Option<&'static [&'static str]> {
+    match record {
+        "PointerEvent" => Some(&["x", "y", "width", "height"]),
+        "DragEvent" => Some(&["x", "y", "width", "height", "dx", "dy"]),
+        // RFC-0067: the built-in `window`.
+        "Window" => Some(&["width", "height"]),
+        _ => None,
+    }
 }
 
 /// Runs the D9 checks and local inference over `views`.
@@ -177,6 +221,25 @@ pub fn check_views(views: &[ViewDecl]) -> Inference {
                 .collect()
         })
         .unwrap_or_default();
+    let record_decls = views
+        .first()
+        .map(|v| std::sync::Arc::clone(&v.records))
+        .unwrap_or_default();
+    let contexts: Contexts = record_decls
+        .iter()
+        .filter(|r| r.context)
+        .map(|r| {
+            let fields = r
+                .fields
+                .iter()
+                .map(|f| {
+                    let nullable = f.optional || f.default.as_ref().is_some_and(is_none);
+                    (f.name.clone(), f.ty.clone(), nullable)
+                })
+                .collect();
+            (r.name.clone(), fields)
+        })
+        .collect();
     let mut view_params: ViewParams<'_> = HashMap::new();
     let mut shared: HashSet<&Symbol> = HashSet::new();
     for view in views {
@@ -188,6 +251,30 @@ pub fn check_views(views: &[ViewDecl]) -> Inference {
         }
     }
     view_params.retain(|name, _| !shared.contains(name));
+    if record_decls.iter().any(|r| r.context) {
+        let mut checker = Checker {
+            errors: &mut out.errors,
+            bindings: &mut out.bindings,
+            env: HashMap::new(),
+            undo: Vec::new(),
+            origins: HashMap::new(),
+            fns: top_fns.clone(),
+            declared: HashSet::new(),
+            views: &names,
+            view_params: &view_params,
+            records: &records,
+            consts: &consts,
+            enums: &enums,
+            strict: true,
+            optional: HashSet::new(),
+            contexts: &contexts,
+            narrowed: Vec::new(),
+            provided: HashSet::new(),
+        };
+        for decl in record_decls.iter().filter(|r| r.context) {
+            checker.check_context_decl(decl);
+        }
+    }
     for view in views {
         let mut checker = Checker {
             errors: &mut out.errors,
@@ -203,6 +290,10 @@ pub fn check_views(views: &[ViewDecl]) -> Inference {
             consts: &consts,
             enums: &enums,
             strict: true,
+            optional: HashSet::new(),
+            contexts: &contexts,
+            narrowed: Vec::new(),
+            provided: HashSet::new(),
         };
         checker.check_view(view);
     }
@@ -230,6 +321,7 @@ fn check_top_fns(
     let no_view_params = HashMap::new();
     let no_records = HashMap::new();
     let no_consts = HashMap::new();
+    let no_contexts = HashMap::new();
     let mut checker = Checker {
         errors: &mut out.errors,
         bindings: &mut out.bindings,
@@ -237,7 +329,9 @@ fn check_top_fns(
         undo: Vec::new(),
         origins: HashMap::new(),
         fns: HashMap::new(),
-        declared: HashSet::new(),
+        // The constants are names a function may read, public or private;
+        // their types are not known yet (they may call these functions).
+        declared: consts.iter().map(|c| c.name.clone()).collect(),
         views: &no_views,
         view_params: &no_view_params,
         records: &no_records,
@@ -246,6 +340,10 @@ fn check_top_fns(
         // A name a shared function cannot reach is reported below, as
         // impurity, which says more than "unknown".
         strict: false,
+        optional: HashSet::new(),
+        contexts: &no_contexts,
+        narrowed: Vec::new(),
+        provided: HashSet::new(),
     };
     let mut top = HashMap::new();
     for decl in helpers {
@@ -353,6 +451,7 @@ fn check_consts(
     let no_views = HashSet::new();
     let no_view_params = HashMap::new();
     let no_records = HashMap::new();
+    let no_contexts = HashMap::new();
     for i in sequence {
         let decl = &consts[i];
         let (ty, impure) = {
@@ -372,6 +471,10 @@ fn check_consts(
                 // A name a shared constant cannot reach is reported below, as
                 // impurity, which says more than "unknown".
                 strict: false,
+                optional: HashSet::new(),
+                contexts: &no_contexts,
+                narrowed: Vec::new(),
+                provided: HashSet::new(),
             };
             let declared = decl.ty.as_ref().map(|t| checker.resolve_type(t));
             let found = if declared.is_some() {
@@ -476,13 +579,38 @@ struct Checker<'a> {
     /// may be a word the element understands (`align: center`), which only
     /// the element can judge.
     strict: bool,
+    /// The parameters of the view being checked that can be absent: `content`
+    /// and the ones declared `= none` (RFC-0062), the only names `none` may be
+    /// compared with.
+    optional: HashSet<Symbol>,
+    /// The program's contexts: field, declared type, whether it may be none
+    /// (RFC-0065).
+    contexts: &'a Contexts,
+    /// The paths (`color`, `s.color`) a `!= none` test or a `??` has made safe
+    /// to read, where the check is inside it.
+    narrowed: Vec<String>,
+    /// The contexts the view being checked provides, for `DuplicateProvide`.
+    provided: HashSet<Symbol>,
 }
+
+/// The program's contexts, by name: each field with its type, and whether it
+/// may be none (`T?`, or a default of `none`).
+type Contexts = HashMap<Symbol, Vec<(Symbol, Type, bool)>>;
 
 impl Checker<'_> {
     fn check_view(&mut self, view: &ViewDecl) {
         // View parameters must be annotated (D9).
+        self.optional.clear();
+        self.provided.clear();
+        self.narrowed.clear();
         for param in &view.params {
             self.check_param(param, "view parameter");
+            if param.name.as_str() == crate::interp::eval::RESERVED_CONTENT
+                || param.optional
+                || param.default.as_ref().is_some_and(is_none)
+            {
+                self.optional.insert(param.name.clone());
+            }
         }
         // Pre-collect `fn` return types so calls in any order can resolve them.
         for member in &view.body {
@@ -510,7 +638,7 @@ impl Checker<'_> {
         // A default is evaluated in the view's own scope, so a misspelt name or
         // enum case in one is told here rather than when a call leaves it out.
         for param in &view.params {
-            if let Some(default) = &param.default {
+            if let Some(default) = param.default.as_ref().filter(|d| !is_none(d)) {
                 self.value(default);
             }
         }
@@ -579,6 +707,37 @@ impl Checker<'_> {
         ty
     }
 
+    /// Whether the program itself (not the engine) has something called
+    /// `name` in scope.
+    fn knows_own(&self, name: &Symbol) -> bool {
+        self.env.contains_key(name)
+            || self.declared.contains(name)
+            || self.fns.contains_key(name)
+            || self.consts.contains_key(name)
+    }
+
+    /// Whether `e` is `window.width` or `window.height` of the built-in
+    /// `window` (RFC-0067).
+    fn is_window_extent(&self, e: &Expr) -> bool {
+        matches!(
+            e,
+            Expr::Member { base, field, .. }
+                if matches!(field.as_str(), "width" | "height")
+                    && matches!(base.as_ref(), Expr::Ident(n, _)
+                        if n.as_str() == "window" && !self.knows_own(n))
+        )
+    }
+
+    /// Whether a comparison is the window's size against a bare name nothing
+    /// declares, which is a breakpoint (RFC-0067).
+    fn window_breakpoint(&self, lhs: &Expr, rhs: &Expr) -> bool {
+        let bare = |e: &Expr| {
+            matches!(e, Expr::Ident(n, _)
+                if !matches!(n.as_str(), "true" | "false" | "none") && !self.knows(n))
+        };
+        (self.is_window_extent(lhs) && bare(rhs)) || (self.is_window_extent(rhs) && bare(lhs))
+    }
+
     /// Whether anything in scope is called `name`.
     fn knows(&self, name: &Symbol) -> bool {
         self.env.contains_key(name)
@@ -615,6 +774,40 @@ impl Checker<'_> {
         });
     }
 
+    /// The side of `a == b` that is not `none`, when the other is the word
+    /// `none` and nothing in the view is called that.
+    fn none_side<'e>(&self, a: &'e Expr, b: &'e Expr) -> Option<&'e Expr> {
+        let bare = |e: &Expr| is_none(e) && !self.env.contains_key(&Symbol::intern("none"));
+        match (bare(a), bare(b)) {
+            (false, true) => Some(a),
+            (true, false) => Some(b),
+            _ => None,
+        }
+    }
+
+    /// Reports a block of elements written where no `Slot` parameter takes it:
+    /// in the arguments of an element that is not a view of the program.
+    fn reject_slot_blocks(&mut self, el: &crate::parser::ast::ElementNode) {
+        let values = el
+            .content
+            .iter()
+            .map(|a| &a.value)
+            .chain(el.attrs.iter().filter_map(|a| match &a.kind {
+                AttrKind::Prop { value } => Some(value),
+                _ => None,
+            }));
+        for value in values {
+            if let Expr::SlotBlock { span, .. } = value {
+                self.errors.push(CompileError::SlotArgument {
+                    span: *span,
+                    name: String::new(),
+                    callee: String::new(),
+                    wants_slot: false,
+                });
+            }
+        }
+    }
+
     fn check_param(&mut self, param: &Param, what: &str) {
         // A binding is the caller's `var` (RFC-0051): it is written like one.
         let origin = if param.bind {
@@ -625,8 +818,26 @@ impl Checker<'_> {
         if param.bind || param.name.as_str() == "bind" {
             self.check_binding_param(param, what);
         }
+        // `T?` takes `= none` and nothing else; `= none` on anything but an
+        // optional, an `Fn` or a `Slot` has no way to be read (RFC-0065 §2).
+        let nullable_type = param.optional
+            || matches!(&param.ty, Some(Type::Function { .. }))
+            || is_slot_param(param)
+            || param.name.as_str() == crate::interp::eval::RESERVED_CONTENT;
+        if let Some(default) = &param.default {
+            if (param.optional && !is_none(default)) || (!nullable_type && is_none(default)) {
+                self.errors.push(CompileError::BadOptionalDefault {
+                    span: param.span,
+                    name: param.name.as_str().to_string(),
+                    none_needs_question: !param.optional,
+                });
+            }
+        }
         if let Some(ty) = &param.ty {
-            let resolved = self.resolve_type(ty);
+            let mut resolved = self.resolve_type(ty);
+            if param.optional {
+                resolved = Ty::Optional(Box::new(resolved));
+            }
             self.bind_from(param.name.clone(), resolved, origin);
         } else {
             // `content` is the child-block slot (RFC-0007 D-A): it holds the
@@ -642,16 +853,14 @@ impl Checker<'_> {
         }
     }
 
-    /// A binding parameter has no default, has a type, is not a callback, and
-    /// is not called `bind`; and only a view's parameter can be one
+    /// A binding parameter has a type, is not a callback, and is not called
+    /// `bind` (it may have a default, RFC-0065); and only a view's parameter can be one
     /// (RFC-0051 §1).
     fn check_binding_param(&mut self, param: &Param, what: &str) {
         let problem = if param.name.as_str() == "bind" {
             BindingProblem::Reserved
         } else if what != "view parameter" {
             BindingProblem::NotAView
-        } else if param.default.is_some() {
-            BindingProblem::Default
         } else if param.ty.is_none() {
             // `MissingAnnotation` says so already.
             return;
@@ -665,6 +874,218 @@ impl Checker<'_> {
             name: param.name.as_str().to_string(),
             problem,
         });
+    }
+
+    /// The declared context nearest in spelling to `name`, if any.
+    fn context_hint(&self, name: &Symbol) -> Option<String> {
+        crate::util::closest_match(name.as_str(), self.contexts.keys().map(Symbol::as_str))
+            .map(str::to_string)
+    }
+
+    /// `provide Name(field: value, …)` (RFC-0065 §1): the context exists, the
+    /// view provides it once, each field is one it declares and each value is
+    /// of its type.
+    fn check_provide(
+        &mut self,
+        ty: &Type,
+        fields: &[crate::parser::ast::Arg],
+        span: Span,
+        top_level: bool,
+    ) {
+        let Type::Named { name, .. } = ty else {
+            return;
+        };
+        if !top_level {
+            self.errors.push(CompileError::MisplacedProvide {
+                span,
+                name: name.as_str().to_string(),
+            });
+        }
+        let Some(declared) = self.contexts.get(name) else {
+            let hint = self.context_hint(name);
+            self.errors.push(CompileError::UnknownContext {
+                span,
+                name: name.as_str().to_string(),
+                hint,
+            });
+            for arg in fields {
+                self.value(&arg.value);
+            }
+            return;
+        };
+        if !self.provided.insert(name.clone()) {
+            self.errors.push(CompileError::DuplicateProvide {
+                span,
+                name: name.as_str().to_string(),
+            });
+        }
+        for arg in fields {
+            let found = arg
+                .name
+                .as_ref()
+                .and_then(|n| declared.iter().find(|(f, ..)| f == n));
+            let Some((field, field_ty, nullable)) = found else {
+                self.value(&arg.value);
+                let written = arg.name.as_ref().map_or("", Symbol::as_str);
+                let hint =
+                    crate::util::closest_match(written, declared.iter().map(|(f, ..)| f.as_str()))
+                        .map(str::to_string);
+                self.errors.push(CompileError::UnknownField {
+                    span: arg.value.span(),
+                    record: name.as_str().to_string(),
+                    name: written.to_string(),
+                    hint,
+                });
+                continue;
+            };
+            let value_ty = self.check_value_for(&arg.value, *nullable);
+            let wanted = plain_ty(field_ty);
+            if !assignable(&wanted, &value_ty) && !is_none(&arg.value) {
+                self.errors.push(CompileError::ArgumentTypeMismatch {
+                    span: arg.value.span(),
+                    callee: name.as_str().to_string(),
+                    name: field.as_str().to_string(),
+                    expected: ty_name(&wanted),
+                    found: ty_name(&value_ty),
+                });
+            }
+        }
+    }
+
+    /// Checks a context declaration once (RFC-0065 §1): every field has a
+    /// default, none is a `Slot`, the default reads only the program's own
+    /// names, and the name is not one the language keeps.
+    fn check_context_decl(&mut self, decl: &crate::parser::ast::RecordDecl) {
+        if decl.name.as_str() == "Theme" {
+            self.errors.push(CompileError::ReservedControllerName {
+                span: decl.span,
+                name: decl.name.as_str().to_string(),
+            });
+        }
+        for field in &decl.fields {
+            if matches!(&field.ty, Type::Named { name, .. } if name.as_str() == "Slot") {
+                self.errors.push(CompileError::BadContextField {
+                    span: decl.span,
+                    context: decl.name.as_str().to_string(),
+                    name: field.name.as_str().to_string(),
+                });
+            }
+            match &field.default {
+                None => self.errors.push(CompileError::ContextFieldNeedsDefault {
+                    span: decl.span,
+                    context: decl.name.as_str().to_string(),
+                    name: field.name.as_str().to_string(),
+                }),
+                Some(default) if !is_none(default) => {
+                    self.value(default);
+                }
+                Some(_) => {}
+            }
+        }
+    }
+
+    /// Checks `value`, an argument that may take an optional value: when it
+    /// may, a bare optional name passed on is not a read.
+    fn check_value_for(&mut self, value: &Expr, takes_optional: bool) -> Ty {
+        let passed_on = takes_optional.then(|| self.optional_path(value)).flatten();
+        if let Some(path) = &passed_on {
+            self.narrowed.push(path.clone());
+        }
+        let ty = self.check_expr(value);
+        if passed_on.is_some() {
+            self.narrowed.pop();
+        }
+        ty
+    }
+
+    /// The path (`color`, `s.color`) of `expr` when it names something that
+    /// may be none: an optional parameter, or an optional field of an
+    /// injected context.
+    fn optional_path(&self, expr: &Expr) -> Option<String> {
+        match expr {
+            Expr::Ident(name, _) => matches!(self.env.get(name), Some(Ty::Optional(_)))
+                .then(|| name.as_str().to_string()),
+            Expr::Member { base, field, .. } => {
+                let Expr::Ident(b, _) = base.as_ref() else {
+                    return None;
+                };
+                let Some(Ty::Named(ctx)) = self.env.get(b) else {
+                    return None;
+                };
+                let optional = self
+                    .contexts
+                    .get(ctx)?
+                    .iter()
+                    .any(|(f, _, nullable)| f == field && *nullable);
+                optional.then(|| format!("{}.{}", b.as_str(), field.as_str()))
+            }
+            _ => None,
+        }
+    }
+
+    /// The paths `cond` makes safe to read when it holds, and when it does not
+    /// (RFC-0065 §2): `x != none` and `x == none`, through `&&`, `||` and `!`.
+    fn narrowing(&self, cond: &Expr) -> (Vec<String>, Vec<String>) {
+        match cond {
+            Expr::Binary { op, lhs, rhs, .. } if matches!(op, BinOp::Eq | BinOp::Ne) => {
+                let path = self
+                    .none_side(lhs, rhs)
+                    .and_then(|other| self.optional_path(other));
+                match (path, op) {
+                    (Some(p), BinOp::Ne) => (vec![p], Vec::new()),
+                    (Some(p), _) => (Vec::new(), vec![p]),
+                    (None, _) => (Vec::new(), Vec::new()),
+                }
+            }
+            Expr::Binary {
+                op: BinOp::And,
+                lhs,
+                rhs,
+                ..
+            } => {
+                let (mut t, _) = self.narrowing(lhs);
+                t.extend(self.narrowing(rhs).0);
+                (t, Vec::new())
+            }
+            Expr::Binary {
+                op: BinOp::Or,
+                lhs,
+                rhs,
+                ..
+            } => {
+                let (_, mut f) = self.narrowing(lhs);
+                f.extend(self.narrowing(rhs).1);
+                (Vec::new(), f)
+            }
+            Expr::Unary {
+                op: UnOp::Not, rhs, ..
+            } => {
+                let (t, f) = self.narrowing(rhs);
+                (f, t)
+            }
+            _ => (Vec::new(), Vec::new()),
+        }
+    }
+
+    /// Runs `check` with `paths` safe to read.
+    fn narrowed_in<T>(&mut self, paths: Vec<String>, check: impl FnOnce(&mut Self) -> T) -> T {
+        let mark = self.narrowed.len();
+        self.narrowed.extend(paths);
+        let out = check(self);
+        self.narrowed.truncate(mark);
+        out
+    }
+
+    /// A read of the optional `path` of type `inner`: `NoneNotHandled` unless
+    /// it is safe here.
+    fn read_optional(&mut self, path: &str, inner: Ty, span: Span) -> Ty {
+        if !self.narrowed.iter().any(|p| p == path) {
+            self.errors.push(CompileError::NoneNotHandled {
+                span,
+                name: path.to_string(),
+            });
+        }
+        inner
     }
 
     fn check_members(&mut self, members: &[Member], top_level: bool) {
@@ -721,7 +1142,13 @@ impl Checker<'_> {
         for attr in attrs {
             tys.push(match &attr.kind {
                 AttrKind::Prop { value } => {
-                    if element.is_some_and(|e| takes_only_a_value(e, attr.name.as_str())) {
+                    if element.is_some_and(|e| self.views.contains(&Symbol::intern(e))) {
+                        // Words stay words (`align_self: center`).
+                        let was = std::mem::replace(&mut self.strict, false);
+                        let ty = self.check_value_for(value, true);
+                        self.strict = was;
+                        ty
+                    } else if element.is_some_and(|e| takes_only_a_value(e, attr.name.as_str())) {
                         self.value(value)
                     } else {
                         self.word(value)
@@ -732,6 +1159,30 @@ impl Checker<'_> {
                     Ty::Unknown
                 }
                 AttrKind::Event { payload, action } => {
+                    if let Some(name) = payload {
+                        // RFC-0063 §2: the value of a pointer or drag handler
+                        // is a typed record, one that carries none takes no
+                        // name.
+                        match event_value(attr.name.as_str()) {
+                            EventValue::Record(ty) => {
+                                let mark = self.undo.len();
+                                self.bind(it.clone(), Ty::Unknown);
+                                self.bind(name.clone(), Ty::Named(Symbol::intern(ty)));
+                                self.value(action);
+                                self.leave(mark);
+                                tys.push(Ty::Unknown);
+                                continue;
+                            }
+                            EventValue::None(hint) => {
+                                self.errors.push(CompileError::EventHasNoValue {
+                                    span: attr.span,
+                                    event: attr.name.as_str().to_string(),
+                                    hint: hint.map(str::to_string),
+                                });
+                            }
+                            EventValue::Other => {}
+                        }
+                    }
                     let mut names = vec![&it];
                     names.extend(payload.as_ref());
                     self.check_shadowed(action, &names);
@@ -756,6 +1207,7 @@ impl Checker<'_> {
         let mut positional = params.iter().filter(|p| {
             p.name.as_str() != crate::interp::eval::RESERVED_CONTENT
                 && !matches!(p.ty, Some(Type::Function { .. }))
+                && !is_slot_param(p)
                 && !p.bind
         });
         let named = |name: &Symbol| params.iter().find(|p| &p.name == name);
@@ -828,10 +1280,46 @@ impl Checker<'_> {
                     sole,
                     passed: String::new(),
                 }),
-                (false, false) => found.push((param, span, ty)),
+                (false, false) if is_slot_param(param) => {
+                    // `{}` is an empty slot; any other action block is not one.
+                    let given = match value {
+                        Expr::SlotBlock { .. } | Expr::Ident(..) => true,
+                        Expr::Lambda { params, body, .. } => {
+                            params.is_empty()
+                                && matches!(body.as_ref(), Expr::Block(s, _) if s.is_empty())
+                        }
+                        _ => false,
+                    };
+                    if !given {
+                        self.errors.push(CompileError::SlotArgument {
+                            span,
+                            name: param.name.as_str().to_string(),
+                            callee: callee.to_string(),
+                            wants_slot: true,
+                        });
+                    }
+                }
+                (false, false) if matches!(value, Expr::SlotBlock { .. }) => {
+                    self.errors.push(CompileError::SlotArgument {
+                        span,
+                        name: param.name.as_str().to_string(),
+                        callee: callee.to_string(),
+                        wants_slot: false,
+                    });
+                }
+                (false, false) => found.push((param, span, ty, value)),
             }
         }
-        for (param, span, ty) in found {
+        for (param, span, ty, value) in found {
+            // An optional value passed to a parameter that cannot be none.
+            if !param.optional && !param.bind {
+                if let Some(path) = self.optional_path(value) {
+                    if !self.narrowed.contains(&path) {
+                        self.errors
+                            .push(CompileError::NoneNotHandled { span, name: path });
+                    }
+                }
+            }
             let Some(declared) = param.ty.as_ref().map(plain_ty) else {
                 continue;
             };
@@ -1018,14 +1506,48 @@ impl Checker<'_> {
                 self.value(body);
                 self.leave(mark);
             }
-            Member::Inject { ty, name, .. } => {
+            Member::Inject { ty, name, span } => {
                 let resolved = self.resolve_type(ty);
+                // A name that is no context but is nearly one is a misspelt
+                // one. (A capability, a controller or `Theme` is resolved when
+                // the view runs.)
+                if let Type::Named { name: ctx, .. } = ty {
+                    if !self.contexts.contains_key(ctx) && ctx.as_str() != "Theme" {
+                        let hint = self.context_hint(ctx);
+                        if hint.is_some() {
+                            self.errors.push(CompileError::UnknownContext {
+                                span: *span,
+                                name: ctx.as_str().to_string(),
+                                hint,
+                            });
+                        }
+                    }
+                }
                 self.bind(name.clone(), resolved);
+            }
+            Member::Provide { ty, fields, span } => {
+                self.check_provide(ty, fields, *span, top_level);
             }
             Member::Element(el) => {
                 // What a view is called with is a value. An intrinsic's named
                 // argument may be one of its own words.
                 let is_view = self.views.contains(&el.name);
+                // A `{ … }` argument that reads as actions and as elements is
+                // settled by what the callee's parameter is (RFC-0062 §2).
+                let settled = if is_view {
+                    let params = self.view_params.get(&el.name).copied().unwrap_or(&[]);
+                    el.with_blocks_settled(
+                        |name| params.iter().any(|p| &p.name == name && is_slot_param(p)),
+                        |name| {
+                            params.iter().any(|p| {
+                                &p.name == name && matches!(p.ty, Some(Type::Function { .. }))
+                            })
+                        },
+                    )
+                } else {
+                    None
+                };
+                let el = settled.as_ref().unwrap_or(el);
                 let mut tys = Vec::with_capacity(el.content.len() + el.attrs.len());
                 for arg in &el.content {
                     let takes_a_value = arg.name.as_ref().is_some_and(|name| {
@@ -1036,7 +1558,9 @@ impl Checker<'_> {
                         .is_some_and(only_values)
                     });
                     tys.push(if is_view || arg.name.is_none() || takes_a_value {
-                        self.value(&arg.value)
+                        // A view may take an optional value as it is; whether
+                        // this one does is `check_view_args`'s to say.
+                        self.check_value_for(&arg.value, is_view)
                     } else {
                         self.word(&arg.value)
                     });
@@ -1046,6 +1570,7 @@ impl Checker<'_> {
                     self.check_view_args(el, &tys);
                 } else {
                     self.reject_bind_args(&el.content);
+                    self.reject_slot_blocks(el);
                     self.check_binds(el);
                 }
                 if let Some(action) = &el.action {
@@ -1083,14 +1608,19 @@ impl Checker<'_> {
                 cond, then, els, ..
             } => {
                 self.value(cond);
-                self.check_scoped(then, &[]);
+                let (when_true, when_false) = self.narrowing(cond);
+                self.narrowed_in(when_true, |s| s.check_scoped(then, &[]));
                 if let Some(els) = els {
-                    self.check_scoped(els, &[]);
+                    self.narrowed_in(when_false, |s| s.check_scoped(els, &[]));
                 }
             }
             // A lifecycle effect's body is an action, checked like any other
             // action expression; it declares no bindings of its own.
-            Member::Lifecycle { action, .. } | Member::Timer { action, .. } => {
+            Member::Lifecycle { action, .. } => {
+                self.value(action);
+            }
+            Member::Timer { dur, action, .. } => {
+                self.check_expr(dur);
                 self.value(action);
             }
             Member::Change {
@@ -1150,14 +1680,30 @@ impl Checker<'_> {
                 if sym.as_str() == "true" || sym.as_str() == "false" {
                     Ty::Bool
                 } else {
-                    if self.strict && !self.knows(sym) {
+                    // `none` is the word for a value that is not there; whether
+                    // it may be written is the parameter's to say.
+                    let bare_none = is_none(expr) && !self.env.contains_key(sym);
+                    if self.strict && !bare_none && !self.knows(sym) {
                         self.unknown_name(sym, *span);
                     }
-                    self.env
+                    let ty = self
+                        .env
                         .get(sym)
                         .or_else(|| self.consts.get(sym))
                         .cloned()
-                        .unwrap_or(Ty::Unknown)
+                        .unwrap_or_else(|| {
+                            // RFC-0067: the window's size, unless the program
+                            // names something `window`.
+                            if sym.as_str() == "window" && !self.knows_own(sym) {
+                                Ty::Named(Symbol::intern("Window"))
+                            } else {
+                                Ty::Unknown
+                            }
+                        });
+                    match ty {
+                        Ty::Optional(inner) => self.read_optional(sym.as_str(), *inner, *span),
+                        ty => ty,
+                    }
                 }
             }
             // A nested array only *checks* its elements, the homogeneity
@@ -1192,9 +1738,62 @@ impl Checker<'_> {
             }
             Expr::Binary {
                 op, lhs, rhs, span, ..
+            } if matches!(op, BinOp::Eq | BinOp::Ne) && self.none_side(lhs, rhs).is_some() => {
+                // `x == none` / `x != none` (RFC-0062): only a parameter that
+                // can be absent has something to say.
+                let other = self.none_side(lhs, rhs).unwrap_or(lhs);
+                match other {
+                    Expr::Ident(name, _) if self.optional.contains(name) => {}
+                    _ if self.optional_path(other).is_some() => {}
+                    Expr::Ident(name, _) => self.errors.push(CompileError::NoneNeedsOptional {
+                        span: *span,
+                        name: name.as_str().to_string(),
+                    }),
+                    _ => self.errors.push(CompileError::NoneNeedsOptional {
+                        span: *span,
+                        name: "this value".to_string(),
+                    }),
+                }
+                Ty::Bool
+            }
+            Expr::Binary {
+                op, lhs, rhs, span, ..
             } => {
-                let l = self.value(lhs);
-                let r = self.value(rhs);
+                // `x ?? d` is the way to read an optional `x`; the right of
+                // `x != none && …` and of `x == none || …` may read it.
+                let (l, r) = match op {
+                    BinOp::Otherwise => {
+                        let safe: Vec<String> = self.optional_path(lhs).into_iter().collect();
+                        let l = self.narrowed_in(safe, |s| s.value(lhs));
+                        (l, self.value(rhs))
+                    }
+                    BinOp::And | BinOp::Or => {
+                        let (when_true, when_false) = self.narrowing(lhs);
+                        let safe = if *op == BinOp::And {
+                            when_true
+                        } else {
+                            when_false
+                        };
+                        let l = self.value(lhs);
+                        (l, self.narrowed_in(safe, |s| s.value(rhs)))
+                    }
+                    // `window.width >= md` (RFC-0067): a name beside the
+                    // window's size is a breakpoint, whose being declared is
+                    // the project's to say, so it is a number here.
+                    BinOp::Lt | BinOp::Le | BinOp::Gt | BinOp::Ge | BinOp::Eq | BinOp::Ne
+                        if self.window_breakpoint(lhs, rhs) =>
+                    {
+                        let side = |s: &mut Self, e: &Expr| {
+                            if s.is_window_extent(e) {
+                                s.value(e)
+                            } else {
+                                Ty::Float
+                            }
+                        };
+                        (side(self, lhs), side(self, rhs))
+                    }
+                    _ => (self.value(lhs), self.value(rhs)),
+                };
                 if matches!(op, BinOp::Eq | BinOp::Ne) {
                     self.check_shorthand(&l, rhs);
                     self.check_shorthand(&r, lhs);
@@ -1216,8 +1815,9 @@ impl Checker<'_> {
                 cond, then, els, ..
             } => {
                 self.value(cond);
-                let t = self.check_expr(then);
-                let e = self.check_expr(els);
+                let (when_true, when_false) = self.narrowing(cond);
+                let t = self.narrowed_in(when_true, |s| s.check_expr(then));
+                let e = self.narrowed_in(when_false, |s| s.check_expr(els));
                 if t == e { t } else { Ty::Unknown }
             }
             Expr::Index { base, index, .. } => {
@@ -1245,7 +1845,14 @@ impl Checker<'_> {
                 if field.as_str() == "len" && matches!(b, Ty::List(_) | Ty::Str) {
                     Ty::Int
                 } else if let Ty::Named(record) = &b {
-                    self.record_field(record, field, *span)
+                    let ty = self.record_field(record, field, *span);
+                    match (ty, self.optional_path(expr)) {
+                        (Ty::Optional(inner), Some(path)) => {
+                            self.read_optional(&path, *inner, *span)
+                        }
+                        (Ty::Optional(inner), None) => *inner,
+                        (ty, _) => ty,
+                    }
                 } else {
                     Ty::Unknown
                 }
@@ -1297,6 +1904,13 @@ impl Checker<'_> {
                 }
                 Ty::Unknown
             }
+            // The elements a call hands to a `Slot`, checked in the caller's
+            // scope. Whether it is *a call's argument* is `check_view_args`'s
+            // and `reject_slot_blocks`'s to say.
+            Expr::SlotBlock { members, .. } => {
+                self.check_scoped(members, &[]);
+                Ty::Named(Symbol::intern("Slot"))
+            }
             Expr::Let {
                 name,
                 ty,
@@ -1328,9 +1942,15 @@ impl Checker<'_> {
                 cond, then, els, ..
             } => {
                 self.value(cond);
-                for branch in std::iter::once(then).chain(els) {
+                let (when_true, when_false) = self.narrowing(cond);
+                for (i, branch) in std::iter::once(then).chain(els).enumerate() {
                     let mark = self.undo.len();
-                    self.value(branch);
+                    let safe = if i == 0 {
+                        when_true.clone()
+                    } else {
+                        when_false.clone()
+                    };
+                    self.narrowed_in(safe, |s| s.value(branch));
                     self.leave(mark);
                 }
                 Ty::Unknown
@@ -1402,12 +2022,42 @@ impl Checker<'_> {
     /// an `UnknownField` for a field it does not have. Any other named type
     /// (a controller, a theme) is not modelled, so nothing is claimed.
     fn record_field(&mut self, record: &Symbol, field: &Symbol, span: Span) -> Ty {
+        // RFC-0063: the value of a pointer or drag handler, unless the
+        // program declares a record of the same name.
+        if !self.records.contains_key(record) {
+            if let Some(fields) = event_record_fields(record.as_str()) {
+                if fields.contains(&field.as_str()) {
+                    return Ty::Float;
+                }
+                let hint = crate::util::closest_match(field.as_str(), fields.iter().copied())
+                    .map(str::to_string);
+                let len = u32::try_from(field.as_str().len()).unwrap_or(0);
+                self.errors.push(CompileError::UnknownField {
+                    span: Span::new(span.end.saturating_sub(len).max(span.start), span.end),
+                    record: record.as_str().to_string(),
+                    name: field.as_str().to_string(),
+                    hint,
+                });
+                return Ty::Unknown;
+            }
+        }
         let Some(fields) = self.records.get(record) else {
             return Ty::Unknown;
         };
         if let Some((_, ty)) = fields.iter().find(|(name, _)| name == field) {
             let ty = ty.clone();
-            return self.resolve_type(&ty);
+            let resolved = self.resolve_type(&ty);
+            // A context field that may be none (RFC-0065).
+            let optional = self.contexts.get(record).is_some_and(|c| {
+                c.iter().any(|(f, t, nullable)| {
+                    f == field && *nullable && !matches!(t, Type::Function { .. })
+                })
+            });
+            return if optional {
+                Ty::Optional(Box::new(resolved))
+            } else {
+                resolved
+            };
         }
         let hint = crate::util::closest_match(
             field.as_str(),
@@ -1572,7 +2222,8 @@ impl Checker<'_> {
             // Text read as a number may be nothing, which `??` defaults; the
             // checker has no optional type, so (as for `find`) it is the type
             // it is when it is a value (RFC-0048 §5).
-            (Ty::Str | Ty::Int, "toFloat") => Ty::Float,
+            (Ty::Str | Ty::Int, "toFloat")
+            | (Ty::Int | Ty::Float, "sin" | "cos" | "sqrt" | "atan2") => Ty::Float,
             (Ty::Int | Ty::Float, "min" | "max") => {
                 let other = args
                     .first()
@@ -1736,7 +2387,8 @@ impl Checker<'_> {
                     return Ty::Unknown;
                 }
                 match name.as_str() {
-                    "Int" => Ty::Int,
+                    // A colour is an integer (RFC-0065 writes `Color?`).
+                    "Int" | "Color" => Ty::Int,
                     "Float" => Ty::Float,
                     "Str" => Ty::Str,
                     "Bool" => Ty::Bool,
@@ -1762,12 +2414,22 @@ impl Checker<'_> {
     }
 }
 
+/// Whether `e` is the word `none` (RFC-0062).
+fn is_none(e: &Expr) -> bool {
+    matches!(e, Expr::Ident(n, _) if n.as_str() == "none")
+}
+
+/// Whether a parameter is declared `: Slot` (RFC-0062).
+fn is_slot_param(p: &Param) -> bool {
+    matches!(&p.ty, Some(Type::Named { name, .. }) if name.as_str() == "Slot")
+}
+
 /// The type a written [`Type`] names, without the checks `resolve_type` makes
 /// (the declaration was checked where it was written).
 fn plain_ty(ty: &Type) -> Ty {
     match ty {
         Type::Named { name, args, .. } => match name.as_str() {
-            "Int" => Ty::Int,
+            "Int" | "Color" => Ty::Int,
             "Float" => Ty::Float,
             "Str" => Ty::Str,
             "Bool" => Ty::Bool,
@@ -1820,6 +2482,7 @@ fn ty_name(t: &Ty) -> String {
         Ty::Bool => "Bool".to_string(),
         Ty::List(e) => format!("List<{}>", ty_name(e)),
         Ty::Fn(..) => "Fn".to_string(),
+        Ty::Optional(t) => format!("{}?", ty_name(t)),
         Ty::Named(n) => n.as_str().to_string(),
         Ty::Unknown => "?".to_string(),
     }
@@ -1912,6 +2575,7 @@ fn member_span(member: &Member) -> Span {
         | Member::Let { span, .. }
         | Member::Fn { span, .. }
         | Member::Inject { span, .. }
+        | Member::Provide { span, .. }
         | Member::For { span, .. }
         | Member::When { span, .. }
         | Member::Route { span, .. }

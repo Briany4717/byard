@@ -871,9 +871,9 @@ fn a_zstack_child_with_a_size_of_its_own_keeps_it() {
 }
 
 #[test]
-fn a_zstack_with_no_filling_child_lays_out_as_it_always_did() {
-    // The stack's column is as wide as its widest child, packed at the start:
-    // a centred child is centred in that column, not in the whole stack.
+fn a_zstack_with_no_filling_child_centres_in_the_whole_stack() {
+    // `alignment` defaults to `center`, and a stack wider than its widest child
+    // centres the child in the stack, not in a column as wide as the child.
     let app = App::new(
         "View Main() { Column #[width: 400, p: 20] { \
          ZStack #[width: 300, height: 60, bg: 0xCCCCCC] { \
@@ -882,7 +882,7 @@ fn a_zstack_with_no_filling_child_lays_out_as_it_always_did() {
     let stack = app.boxed(300.0, 60.0);
     let child = app.boxed(100.0, 20.0);
     assert!(
-        approx(child.rect[0], stack.rect[0]),
+        approx(child.rect[0], stack.rect[0] + 100.0),
         "{:?} in {:?}",
         child.rect,
         stack.rect

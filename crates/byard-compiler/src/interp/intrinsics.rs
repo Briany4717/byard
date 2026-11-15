@@ -193,9 +193,43 @@ const ALIGN2D: &[&str] = &[
     "end",
 ];
 
+/// The attributes a view call may carry besides its parameters (RFC-0062 §4):
+/// the ones a parent reads from its child, applied to the view's root element.
+pub(crate) const VIEW_CALL_LAYOUT: &[&str] = &[
+    "width",
+    "height",
+    "min_width",
+    "max_width",
+    "min_height",
+    "max_height",
+    "m",
+    "mx",
+    "my",
+    "mt",
+    "mr",
+    "mb",
+    "ml",
+    "grow",
+    "shrink",
+    "basis",
+    "align_self",
+];
+
+/// Whether `name` is an attribute that takes part in layout, which is computed
+/// before states are resolved (RFC-0062 §5).
+pub(crate) fn is_layout_attribute(name: &str) -> bool {
+    name == "basis" || LAYOUT.iter().any(|(n, _)| *n == name)
+}
+
 const LAYOUT: &[(&str, PropDef)] = &[
     ("width", lay(PropType::Int)),
     ("height", lay(PropType::Int)),
+    // RFC-0064: bounds on the size layout settles on. Static, like every
+    // layout attribute.
+    ("min_width", lay(PropType::Int)),
+    ("max_width", lay(PropType::Int)),
+    ("min_height", lay(PropType::Int)),
+    ("max_height", lay(PropType::Int)),
     ("gap", lay(PropType::Int)),
     ("p", lay(PropType::Len)),
     ("m", lay(PropType::Len)),
@@ -244,6 +278,9 @@ const DECORATION: &[(&str, PropDef)] = &[
     ("outline_offset", pnt(PropType::Int)),
     ("overlay", pnt(PropType::Color)),
     ("shadow", pnt(PropType::Str)),
+    // RFC-0064: a gap in the top edge of the border, `(start, length)` in px
+    // from the element's left edge, for a label that sits in the outline.
+    ("border_gap", pnt(PropType::Vec2)),
     // RFC-0001 §3.1: the `DecoratedBox` pipeline's declared remit includes
     // gradients. `gradient` is a named tuple (validated at lower time, like
     // `shadow`); `gradient_offset` is an ordinary number, so it animates through
@@ -321,6 +358,8 @@ const TEXT_PROPS: &[(&str, PropDef)] = &[
     ("align", lay(PropType::Enum(ALIGN))),
     ("wrap", lay(PropType::Bool)),
 ];
+/// RFC-0064: the cap on a `Text`'s lines and what the cut looks like.
+const OVERFLOW: &[&str] = &["ellipsis", "clip"];
 
 const POINTER_EVENTS: &[&str] = &[
     "tap",
@@ -330,11 +369,22 @@ const POINTER_EVENTS: &[&str] = &[
     "pointer_move",
     "pointer_enter",
     "pointer_exit",
+    // RFC-0066 §5: `pointer_leave` is `pointer_exit` by the name that pairs
+    // with `pointer_enter`; `focus_in` and `focus_out` are the same crossings
+    // for keyboard focus. All four are about the element and what is inside it.
+    "pointer_leave",
+    "focus_in",
+    "focus_out",
     "hover",
     "long_press",
     "double_tap",
     "secondary",
     "wheel",
+    // RFC-0063: a press that has moved past the tap slop, delivered to the
+    // element it began on.
+    "drag_start",
+    "drag",
+    "drag_end",
     // `focus =>`/`blur =>` sugar (RFC-0012 S2) makes *any* interactive
     // element focusable on demand (`register_focusable` creates a fresh
     // internal `focused_sig` when `focused:` wasn't given), so, unlike
@@ -428,6 +478,21 @@ fn add_universal(m: &mut HashMap<&'static str, PropDef>) {
     // a misspelling is a check error with the closest word.
     m.insert("a11y_role", pnt(PropType::Enum(&AccessRole::KEYWORDS)));
     m.insert("a11y_value", pnt(PropType::Str));
+    // RFC-0063: what a reader says after the name, a field's supporting or
+    // error text.
+    m.insert("a11y_description", pnt(PropType::Str));
+    // RFC-0066 §4: whether a change is announced, what describes the element,
+    // and the range of a value. Paint class like the rest: nothing here moves
+    // anything.
+    m.insert("a11y_live", pnt(PropType::Enum(A11Y_LIVE)));
+    m.insert("a11y_described_by", pnt(PropType::Str));
+    for range in ["a11y_value_min", "a11y_value_max", "a11y_value_step"] {
+        m.insert(range, pnt(PropType::Float));
+    }
+    // RFC-0066 §1 and §5: the element focus goes to when its overlay opens, and
+    // an element the pointer passes through.
+    m.insert("autofocus", pnt(PropType::Bool));
+    m.insert("interactive", pnt(PropType::Bool));
     for flag in [
         "a11y_checked",
         "a11y_mixed",
@@ -446,6 +511,103 @@ fn events_from(focusable: bool, extra: &[&'static str]) -> HashSet<&'static str>
     }
     s.extend(extra.iter().copied());
     s
+}
+
+/// Whether a role puts an element with a `tap` into the Tab order (RFC-0052
+/// §2): the roles marked "focus implied".
+#[must_use]
+pub fn role_implies_focus(role: AccessRole) -> bool {
+    matches!(
+        role,
+        AccessRole::Button
+            | AccessRole::ToggleButton
+            | AccessRole::Switch
+            | AccessRole::CheckBox
+            | AccessRole::RadioButton
+            | AccessRole::Tab
+            | AccessRole::MenuItem
+            | AccessRole::Link
+            // RFC-0067: a cell of a grid is pressed and reached as a tab is.
+            | AccessRole::GridCell
+            // A list item you can tap opens something, as a row in a settings
+            // list does; one without a `tap` stays out, like the others.
+            | AccessRole::ListItem
+    )
+}
+
+/// The words `a11y_live:` takes (RFC-0066 §4).
+const A11Y_LIVE: &[&str] = &["polite", "assertive", "off"];
+
+/// Whether an `a11y_role:` value can be a role that implies focus. A keyword
+/// is read as it is; a `?:` counts if either branch can be one; anything the
+/// checker cannot read (a `let`, a parameter) is given the benefit of the
+/// doubt, as the run-time rule decides it (RFC-0063 §1).
+fn role_value_may_take_focus(value: &Expr) -> bool {
+    let word = match value {
+        Expr::Ident(sym, _) => Some(sym.as_str()),
+        Expr::StrLit(parts, _) => match parts.as_slice() {
+            [StrPart::Text(s)] => Some(s.as_str()),
+            _ => return true,
+        },
+        Expr::Ternary { then, els, .. } => {
+            return role_value_may_take_focus(then) || role_value_may_take_focus(els);
+        }
+        _ => return true,
+    };
+    // A bare word that is no role is reported on its own; here it is just not
+    // one that takes focus. A name the program binds is a value.
+    word.and_then(AccessRole::from_keyword)
+        .is_some_and(role_implies_focus)
+}
+
+/// Whether an `a11y_role:` value can be a role with a value that has a range:
+/// a `slider`, a `spin_button` or a `progress_bar`. As [`role_value_may_take_focus`], a value the
+/// checker cannot read is given the benefit of the doubt.
+fn role_value_may_have_range(value: &Expr) -> bool {
+    let word = match value {
+        Expr::Ident(sym, _) => Some(sym.as_str()),
+        Expr::StrLit(parts, _) => match parts.as_slice() {
+            [StrPart::Text(s)] => Some(s.as_str()),
+            _ => return true,
+        },
+        Expr::Ternary { then, els, .. } => {
+            return role_value_may_have_range(then) || role_value_may_have_range(els);
+        }
+        _ => return true,
+    };
+    // A word that is no keyword is a name the program binds, or is reported on
+    // its own; it is not this check's to refuse.
+    word.and_then(AccessRole::from_keyword).is_none_or(|r| {
+        matches!(
+            r,
+            AccessRole::Slider | AccessRole::ProgressBar | AccessRole::SpinButton
+        )
+    })
+}
+
+/// Whether the attributes make the element a stop in the Tab order, so that
+/// the keyboard reaches it and `key_down`/`key_up` can ever run (RFC-0063 §1):
+/// a `focus` or `blur` handler, a `focused:` binding, or a `tap` with a role
+/// that implies focus.
+fn focus_reachable(attrs: &[Attr]) -> bool {
+    let mut tap = false;
+    let mut role_focus = false;
+    for a in attrs {
+        match &a.kind {
+            AttrKind::Event { .. } => match a.name.as_str() {
+                "focus" | "blur" => return true,
+                "tap" | "click" => tap = true,
+                _ => {}
+            },
+            AttrKind::Prop { value } => match a.name.as_str() {
+                "focused" => return true,
+                "a11y_role" => role_focus = role_value_may_take_focus(value),
+                _ => {}
+            },
+            AttrKind::Spread { .. } => {}
+        }
+    }
+    tap && role_focus
 }
 
 /// Parses a `Grid` `columns:`/`rows:` template string (RFC-0018) into engine
@@ -621,7 +783,15 @@ fn lookup_intrinsic(name: &str) -> Option<Intrinsic> {
     };
     Some(match name {
         "Box" => container(true),
-        "Column" | "Row" => container(false),
+        "Column" => container(false),
+        // RFC-0064: only a row wraps, and `row_gap` is the space between its
+        // lines.
+        "Row" => {
+            let mut row = container(false);
+            row.props.insert("wrap", lay(PropType::Bool));
+            row.props.insert("row_gap", lay(PropType::Int));
+            row
+        }
         "Spacer" => Intrinsic {
             arity: 0,
             content: None,
@@ -646,6 +816,13 @@ fn lookup_intrinsic(name: &str) -> Option<Intrinsic> {
                 &[
                     ("width", lay(PropType::Int)),
                     ("height", lay(PropType::Int)),
+                    ("min_width", lay(PropType::Int)),
+                    ("max_width", lay(PropType::Int)),
+                    ("min_height", lay(PropType::Int)),
+                    ("max_height", lay(PropType::Int)),
+                    ("max_lines", lay(PropType::Int)),
+                    ("overflow", pnt(PropType::Enum(OVERFLOW))),
+                    ("opacity", pnt(PropType::Float)),
                     ("basis", lay(PropType::Int)),
                     ("p", lay(PropType::Len)),
                     ("m", lay(PropType::Len)),
@@ -689,6 +866,11 @@ fn lookup_intrinsic(name: &str) -> Option<Intrinsic> {
         "TextField" => {
             let mut props = props_from(&[LAYOUT, DECORATION, EFFECTS, TEXT_PROPS, TRANSFORM]);
             props.insert("placeholder", lay(PropType::Str));
+            // RFC-0064: more than one line. `lines` is a fixed count; the
+            // other two let the field grow with its content between them.
+            for k in ["lines", "min_lines", "max_lines"] {
+                props.insert(k, lay(PropType::Int));
+            }
             props.insert("value", lay(PropType::Str));
             props.insert("bind", lay(PropType::Str));
             props.insert("focused", pnt(PropType::Bool));
@@ -700,6 +882,11 @@ fn lookup_intrinsic(name: &str) -> Option<Intrinsic> {
             // `line` (the default) or `none`, for a field whose design draws
             // its own indicator.
             props.insert("indicator", pnt(PropType::Enum(&["line", "none"])));
+            // RFC-0067: where the text sits in the content box.
+            props.insert(
+                "text_align",
+                pnt(PropType::Enum(&["start", "center", "end"])),
+            );
             Intrinsic {
                 arity: 0,
                 content: None,
@@ -1150,6 +1337,7 @@ fn describe_member(m: &Member) -> String {
         Member::Let { .. } => "a `let` declaration".to_string(),
         Member::Fn { .. } => "a `fn` declaration".to_string(),
         Member::Inject { .. } => "an `inject` declaration".to_string(),
+        Member::Provide { .. } => "a `provide` declaration".to_string(),
         Member::For { .. } => "a `for` loop".to_string(),
         Member::When { .. } => "a `when` block".to_string(),
         Member::Style { .. } => "a `style` block".to_string(),
@@ -1177,6 +1365,7 @@ fn member_span(m: &Member) -> crate::diagnostics::Span {
         | Member::Let { span, .. }
         | Member::Fn { span, .. }
         | Member::Inject { span, .. }
+        | Member::Provide { span, .. }
         | Member::For { span, .. }
         | Member::When { span, .. }
         | Member::Route { span, .. }
@@ -1262,6 +1451,69 @@ pub fn validate_element_in(
         }
     }
 
+    // RFC-0063 §5: a layout container is in the accessibility tree only when
+    // it has a role (or a `tap`, which makes it a button), so a label or
+    // description written on one that has neither would be read by nothing.
+    if matches!(name, "Box" | "Column" | "Row" | "Grid" | "ZStack" | "Clip")
+        && el.action.is_none()
+        && !attrs.iter().any(|a| {
+            matches!(a.kind, AttrKind::Spread { .. })
+                || (matches!(a.kind, AttrKind::Event { .. })
+                    && matches!(a.name.as_str(), "tap" | "click"))
+                || (matches!(a.kind, AttrKind::Prop { .. }) && a.name.as_str() == "a11y_role")
+        })
+    {
+        for attr in attrs {
+            if matches!(attr.kind, AttrKind::Prop { .. })
+                && matches!(attr.name.as_str(), "a11y_label" | "a11y_description")
+            {
+                errs.push(CompileError::A11yNeedsRole {
+                    span: attr.span,
+                    element: name.to_string(),
+                    attr: attr.name.as_str().to_string(),
+                });
+            }
+        }
+    }
+
+    // RFC-0066 §1: `autofocus` names where focus goes, so it needs somewhere
+    // focus can go.
+    if let Some(at) = attrs
+        .iter()
+        .find(|a| a.name.as_str() == "autofocus" && matches!(a.kind, AttrKind::Prop { .. }))
+    {
+        if !info.focusable && !focus_reachable(attrs) {
+            errs.push(CompileError::AutofocusNeedsFocus {
+                span: at.span,
+                element: name.to_string(),
+            });
+        }
+    }
+    // RFC-0066 §4: a range is the range of a value, which a slider and a
+    // progress bar have. A role the checker cannot read (a `let`, a parameter)
+    // is given the benefit of the doubt, as `focus_reachable` gives it.
+    if name != "Slider" {
+        let role = attrs.iter().find_map(|a| match &a.kind {
+            AttrKind::Prop { value } if a.name.as_str() == "a11y_role" => Some(value),
+            _ => None,
+        });
+        let has_value = role.is_some_and(role_value_may_have_range);
+        if !has_value {
+            for attr in attrs.iter().filter(|a| {
+                matches!(a.kind, AttrKind::Prop { .. })
+                    && matches!(
+                        a.name.as_str(),
+                        "a11y_value_min" | "a11y_value_max" | "a11y_value_step"
+                    )
+            }) {
+                errs.push(CompileError::AttributeNeedsRole {
+                    span: attr.span,
+                    attr: attr.name.as_str().to_string(),
+                });
+            }
+        }
+    }
+
     // Rule 8, children on a childless intrinsic.
     if !info.children && !el.children.is_empty() {
         errs.push(CompileError::UnexpectedChildren {
@@ -1277,6 +1529,24 @@ pub fn validate_element_in(
         let prop_def = info.props.get(an).copied();
         let prop_ty = prop_def.map(|d| d.ty);
         let is_event = info.events.contains(an);
+
+        // RFC-0063 §1: a key event is accepted on any element the keyboard
+        // can reach, not only on the built-in controls that are focusable by
+        // default. On one it cannot, the error says how to make it reachable.
+        if !is_event
+            && prop_ty.is_none()
+            && KEY_EVENTS.contains(&an)
+            && matches!(attr.kind, AttrKind::Event { .. })
+        {
+            if !focus_reachable(attrs) {
+                errs.push(CompileError::KeyNeedsFocus {
+                    span: attr.span,
+                    element: name.to_string(),
+                    name: an.to_string(),
+                });
+            }
+            continue;
+        }
 
         if prop_ty.is_none() && !is_event {
             // Rule 4, unknown attribute.
@@ -1322,12 +1592,13 @@ pub fn validate_element_in(
             // name list, so `align` on a `Column` and `align` on a `Text` are
             // answered separately and an attribute cannot be added without an
             // answer.
-            let is_layout = def.class == AttrClass::Layout;
+            let is_layout = def.class == AttrClass::Layout && !layout_motion(an);
             if an == "gradient" {
                 check_animated_gradient(value, &mut errs);
             }
             // RFC-0010: `value with anim.*(…)`, reject an animation on a layout
-            // property (it can't animate on the GPU), otherwise validate every
+            // property that has no motion (RFC-0061 lists the ones that do, and
+            // `layout_motion` is the list), otherwise validate every
             // curve in the (possibly nested) chain and type-check the innermost
             // target value. The chain walk matters: `(x with a) with b` must not
             // let its inner curve or value slip past unchecked.
@@ -1388,12 +1659,178 @@ pub fn validate_element_in(
         }
     }
 
+    check_combinations(name, attrs, &mut errs);
     errs
 }
 
-/// Whether `name` is a layout-affecting attribute, one whose value feeds Taffy
-/// and so cannot be GPU-animated (RFC-0010 §"Layout properties"). Covers the
-/// [`LAYOUT`] group plus the container `direction`.
+/// The integer a literal is, or `None` for anything else.
+fn int_literal(value: &Expr) -> Option<i64> {
+    match value {
+        Expr::IntLit(n, _) => Some(*n),
+        _ => None,
+    }
+}
+
+/// Whether `value` is the literal `false`.
+fn is_false(value: &Expr) -> bool {
+    matches!(value, Expr::Ident(s, _) if s.as_str() == "false")
+}
+
+/// RFC-0064: attributes that mean nothing without, or against, another. Each
+/// is reported at the attribute that is out of place, with what to write.
+fn check_combinations(name: &str, attrs: &[Attr], errs: &mut Vec<CompileError>) {
+    let prop = |n: &str| {
+        attrs.iter().find_map(|a| match &a.kind {
+            AttrKind::Prop { value } if a.name.as_str() == n && a.axis.is_none() => {
+                Some((a, value))
+            }
+            _ => None,
+        })
+    };
+    let mut bad = |at: &Attr, message: String| {
+        errs.push(CompileError::InvalidAttributeCombination {
+            span: at.span,
+            message,
+        });
+    };
+    // A count below one is meaningless wherever it is written.
+    let counts: &[&str] = match name {
+        "Text" => &["max_lines"],
+        "TextField" => &["lines", "min_lines", "max_lines"],
+        _ => &[],
+    };
+    for &c in counts {
+        if let Some((at, v)) = prop(c) {
+            if int_literal(v).is_some_and(|n| n < 1) {
+                bad(at, format!("`{c}` counts lines, so it is 1 or more"));
+            }
+        }
+    }
+    match name {
+        "Row" => {
+            if let Some((at, _)) = prop("row_gap") {
+                if prop("wrap").is_none_or(|(_, v)| is_false(v)) {
+                    bad(
+                        at,
+                        "`row_gap` is the space between wrapped lines: add `wrap: true` to the row, or drop it"
+                            .to_string(),
+                    );
+                }
+            }
+        }
+        "Text" => {
+            if let Some((at, _)) = prop("overflow") {
+                if prop("max_lines").is_none() {
+                    bad(
+                        at,
+                        "`overflow` says how a cut looks, and nothing is cut without `max_lines`: add `max_lines: n`"
+                            .to_string(),
+                    );
+                }
+            }
+            if let (Some((at, _)), Some((_, w))) = (prop("max_lines"), prop("wrap")) {
+                if is_false(w) {
+                    bad(
+                        at,
+                        "`max_lines` caps the lines of text that wraps, and `wrap: false` is one line: drop `wrap: false`"
+                            .to_string(),
+                    );
+                }
+            }
+        }
+        "TextField" => {
+            if let Some((at, _)) = prop("lines") {
+                for other in ["min_lines", "max_lines"] {
+                    if prop(other).is_some() {
+                        bad(
+                            at,
+                            format!(
+                                "`lines` fixes the height and `{other}` lets it grow: write one or the other"
+                            ),
+                        );
+                        break;
+                    }
+                }
+            }
+            // RFC-0067: the lines of a multiline field are laid out by their
+            // own pass, which sets them from the start.
+            if let Some((at, value)) = prop("text_align") {
+                let from_start = matches!(value, Expr::Ident(s, _) if s.as_str() == "start");
+                let one_line = prop("lines").is_none_or(|(_, v)| int_literal(v) == Some(1))
+                    && prop("min_lines").is_none_or(|(_, v)| int_literal(v) == Some(1))
+                    && prop("max_lines").is_none_or(|(_, v)| int_literal(v) == Some(1));
+                if !from_start && !one_line {
+                    bad(
+                        at,
+                        "`text_align` places the text of a one-line field; the lines of a field with `lines`, `min_lines` or `max_lines` start at its left: drop `text_align` or the lines"
+                            .to_string(),
+                    );
+                }
+            }
+            if let (Some((_, lo)), Some((at, hi))) = (prop("min_lines"), prop("max_lines")) {
+                if let (Some(lo), Some(hi)) = (int_literal(lo), int_literal(hi)) {
+                    if lo > hi {
+                        bad(
+                            at,
+                            format!("`max_lines` ({hi}) is below `min_lines` ({lo})"),
+                        );
+                    }
+                }
+            }
+        }
+        _ => {}
+    }
+    if let Some((at, value)) = prop("border_gap") {
+        let pair = match value {
+            Expr::Tuple(args, _) => args.len() == 2 && args.iter().all(|a| a.name.is_none()),
+            Expr::IntLit(..) | Expr::FloatLit(..) | Expr::StrLit(..) => false,
+            _ => true,
+        };
+        if !pair {
+            errs.push(CompileError::AttributeTypeMismatch {
+                span: value.span(),
+                expected: "a pair `(start, length)` of pixels".to_string(),
+            });
+        } else if prop("border").is_none() {
+            bad(
+                at,
+                "`border_gap` is a gap in the border, and there is no `border`: add `border: <colour>`"
+                    .to_string(),
+            );
+        }
+    }
+}
+
+/// The layout properties that take `with` (RFC-0061): the sizes, the gap, and the
+/// padding and margin families, in every spelling the language accepts.
+///
+/// A second column to the class table, not a second table: a layout property
+/// added to `LAYOUT` is refused by the checker until it is listed here. Each
+/// name is a length that layout reads through the evaluator, where a `with` is
+/// sampled; the rest (`grow`, the keywords, the text shaping props, the grid
+/// placements) have no in-between or no reader that would sample one.
+#[must_use]
+pub fn layout_motion(name: &str) -> bool {
+    matches!(
+        name,
+        "width"
+            | "height"
+            | "gap"
+            | "p"
+            | "pt"
+            | "pr"
+            | "pb"
+            | "pl"
+            | "m"
+            | "mt"
+            | "mr"
+            | "mb"
+            | "ml"
+            | "mx"
+            | "my"
+    )
+}
+
 /// Whether an animation appears **anywhere** inside `value`, a `with` clause or
 /// an `anim.keyframes(…)` call, at any depth (RFC-0010 §"Layout properties").
 ///
@@ -1418,6 +1855,7 @@ fn animated_anywhere(value: &Expr) -> bool {
         | Expr::Ident(..)
         | Expr::ClassRef(..)
         | Expr::StyleValue { .. }
+        | Expr::SlotBlock { .. }
         // A controller call is a statement, never a property value, so it can
         // never carry a layout animation.
         | Expr::ControllerCall { .. }
@@ -1880,6 +2318,8 @@ fn shape_geometry(name: &str) -> (ShapeParams, ShapeParams) {
                 ("color", PropType::Color),
                 ("size", PropType::Float),
                 ("align", PropType::Enum(&["start", "center", "end"])),
+                // RFC-0067: a theme text style, as on a `Text`.
+                ("typo", PropType::Typo),
             ],
         ),
         _ => (&[], &[]),
@@ -2336,6 +2776,7 @@ fn validate_canvas_body(members: &[Member], errs: &mut Vec<CompileError>, theme:
             Member::Let { span, .. } => push_non_shape(errs, *span, "let"),
             Member::Fn { span, .. } => push_non_shape(errs, *span, "fn"),
             Member::Inject { span, .. } => push_non_shape(errs, *span, "inject"),
+            Member::Provide { span, .. } => push_non_shape(errs, *span, "provide"),
             Member::Style { span, .. } => push_non_shape(errs, *span, "style"),
             Member::Route { kind, span, .. } => push_non_shape(errs, *span, kind.as_str()),
             Member::Lifecycle { span, .. } => push_non_shape(errs, *span, "on mount"),
@@ -2514,14 +2955,21 @@ pub fn validate_shape(el: &ElementNode, theme: Option<&Theme>) -> Vec<CompileErr
     // RFC-0020 §2 Tier 2 is fill-only in v1: stroking a `path` is rejected
     // rather than silently ignored (never-silent, RFC-0002 D4 spirit).
     if shape == "path" {
-        let strokes = [
-            "stroke",
-            "stroke_width",
-            "cap",
-            "join",
-            "dash",
-            "dash_offset",
-        ];
+        // A path with a body is stroked as a mesh (`stroke`, `stroke_width`,
+        // `cap`, `join`); a dash is not, and neither is a `d:` path, which is
+        // baked as a fill.
+        let strokes: &[&str] = if el.children.is_empty() {
+            &[
+                "stroke",
+                "stroke_width",
+                "cap",
+                "join",
+                "dash",
+                "dash_offset",
+            ]
+        } else {
+            &["dash", "dash_offset"]
+        };
         if el.content.iter().any(|a| {
             a.name
                 .as_ref()

@@ -165,9 +165,11 @@ fn collect_name_spans_in_members(members: &[Member], target_name: &str, out: &mu
             Member::Expr(expr) => {
                 collect_name_spans_in_expr(expr, target_name, out);
             }
-            Member::Lifecycle { action, .. }
-            | Member::Timer { action, .. }
-            | Member::Measure { action, .. } => {
+            Member::Timer { dur, action, .. } => {
+                collect_name_spans_in_expr(dur, target_name, out);
+                collect_name_spans_in_expr(action, target_name, out);
+            }
+            Member::Lifecycle { action, .. } | Member::Measure { action, .. } => {
                 collect_name_spans_in_expr(action, target_name, out);
             }
             Member::Change {
@@ -178,7 +180,7 @@ fn collect_name_spans_in_members(members: &[Member], target_name: &str, out: &mu
                 }
                 collect_name_spans_in_expr(action, target_name, out);
             }
-            Member::Style { .. } => {}
+            Member::Provide { .. } | Member::Style { .. } => {}
         }
     }
 }
@@ -279,6 +281,7 @@ fn collect_name_spans_in_expr(expr: &Expr, target_name: &str, out: &mut Vec<Span
                 collect_name_spans_in_expr(els, target_name, out);
             }
         }
+        Expr::SlotBlock { members, .. } => collect_name_spans_in_members(members, target_name, out),
         Expr::Unary { rhs, .. } => {
             collect_name_spans_in_expr(rhs, target_name, out);
         }

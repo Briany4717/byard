@@ -940,3 +940,31 @@ fn a_retained_frame_is_byte_identical_to_a_forced_full_rebuild() {
         "the retained path placed or shaped text differently"
     );
 }
+
+// ── 6. A moving size stays on the retained path (RFC-0061) ─────────────────
+
+#[test]
+fn a_moving_width_is_laid_out_on_the_retained_path_and_stops_when_settled() {
+    let (mut interp, tree) = build_from(
+        "View Probe() { var wide = false \
+         Row #[width: 400, height: 100] { \
+           Box #[width: wide ? 200 : 100 with anim.linear(1000), height: 40, bg: 0x00FF00] {} \
+           Box #[width: 50, height: 40, bg: 0x0000FF] {} } }",
+    );
+    interp.set_now_ms(0);
+    let _warmup = frame(&mut interp, &tree);
+    flip_bool(&mut interp, "wide");
+    for t in [100_u32, 500, 900] {
+        interp.set_now_ms(t);
+        let (_f, counts) = frame(&mut interp, &tree);
+        assert_eq!(counts.clears, 0, "t={t}: a moving size must not rebuild");
+        assert_eq!(counts.retained_recomputes, 1, "t={t}");
+        assert!(interp.has_active_animations(), "t={t}");
+    }
+    interp.set_now_ms(2000);
+    let _ = frame(&mut interp, &tree);
+    assert!(!interp.has_active_animations(), "settled: frames stop");
+    interp.set_now_ms(2100);
+    let (_f, counts) = frame(&mut interp, &tree);
+    assert_eq!((counts.clears, counts.full_computes), (0, 0));
+}

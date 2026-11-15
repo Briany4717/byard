@@ -153,7 +153,18 @@ impl Interpreter {
             let Ok(Some(rect)) = self.atlas.resolved_rect(*node) else {
                 continue;
             };
-            let size = (rect.width.to_bits(), rect.height.to_bits());
+            let (x, y) = self
+                .atlas
+                .local_offset(*node)
+                .ok()
+                .flatten()
+                .unwrap_or((rect.x, rect.y));
+            let size = (
+                rect.width.to_bits(),
+                rect.height.to_bits(),
+                x.to_bits(),
+                y.to_bits(),
+            );
             let Some(slot) = self.measures.get_mut(*index as usize) else {
                 continue;
             };
@@ -163,6 +174,7 @@ impl Interpreter {
             if slot.fired_frame == frame || slot.last == Some(size) {
                 continue;
             }
+            let first = slot.last.is_none();
             let flipped_back = slot.prev == Some(size);
             slot.prev = slot.last;
             slot.last = Some(size);
@@ -173,8 +185,21 @@ impl Interpreter {
             let payload = Value::Record(vec![
                 (Symbol::intern("w"), Value::Float(f64::from(rect.width))),
                 (Symbol::intern("h"), Value::Float(f64::from(rect.height))),
+                (Symbol::intern("x"), Value::Float(f64::from(x))),
+                (Symbol::intern("y"), Value::Float(f64::from(y))),
             ]);
+            if first {
+                self.ctx.start_write_log();
+            }
             (action.borrow_mut())(&mut self.ctx, Some(&payload));
+            if first {
+                let written = self.ctx.take_write_log();
+                if self.first_measure_seq != frame {
+                    self.first_measure_written.clear();
+                }
+                self.first_measure_seq = frame;
+                self.first_measure_written.extend(written);
+            }
             self.measure_fired = true;
             if let Some(span) = warn {
                 self.perf_warnings
@@ -222,6 +247,7 @@ pub(super) fn children(expr: &Expr) -> Vec<&Expr> {
         | Expr::AngleLit(..)
         | Expr::Ident(..)
         | Expr::ClassRef(..)
+        | Expr::SlotBlock { .. }
         | Expr::Error(_) => Vec::new(),
         Expr::StrLit(parts, _) => parts
             .iter()

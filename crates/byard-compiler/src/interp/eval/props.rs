@@ -43,11 +43,12 @@ const KEYWORD_ATTRS: &[&str] = &[
     "snap_align",
     "transition",
     "indicator",
+    "overflow",
     "blur_quality",
     "morph_mode",
 ];
 
-/// A preset shadow (`sm`, `md`, `lg`): an offset and a blur, with an alpha that
+/// A preset shadow (`sm`, `md`, `lg`, `xl`, `2xl`): an offset and a blur, with an alpha that
 /// scales gently with size (`sm` 0x44 to `lg` 0x66).
 fn shadow_preset(dy: f32, blur: f32) -> ShadowSpec {
     #[allow(clippy::cast_possible_truncation)]
@@ -75,6 +76,34 @@ pub(super) fn spacing_value(v: &Value) -> Option<f32> {
         Value::Float(f) => Some(*f as f32),
         _ => None,
     }
+}
+
+/// A tuple of lengths that exists only as a value (a `?:` that chose one, a
+/// name bound to one) written back as the literal tuple the syntactic readers
+/// take, at `span`. `None` when `value` is no tuple or holds something that is
+/// not a number, which the caller reports as the type error it is.
+///
+/// This is what lets `radius: c ? (4, 4, 0, 0) : 4`, `p: c ? (4, 30) : 10` and
+/// their `with` forms share the arity, naming and conflict rules of the tuple
+/// written out, instead of a second copy of them (RFC-0061).
+fn tuple_expr_of(value: &Value, span: Span) -> Option<Expr> {
+    let Value::Tuple(items) = value else {
+        return None;
+    };
+    let mut args = Vec::with_capacity(items.len());
+    for (name, item) in items {
+        let literal = match item {
+            Value::Int(n) => Expr::IntLit(*n, span),
+            Value::Float(f) => Expr::FloatLit(*f, span),
+            _ => return None,
+        };
+        args.push(Arg {
+            name: name.clone(),
+            value: literal,
+            bind: false,
+        });
+    }
+    Some(Expr::Tuple(args, span))
 }
 
 /// Reads an already-evaluated two-axis value (`(x, y)` positional or
@@ -209,6 +238,33 @@ impl Interpreter {
         })
     }
 
+    /// The identity of the element `name:` points at by the name its `as`
+    /// gave it, as an `anchor_to: tip` or an `a11y_described_by: tip` does
+    /// (RFC-0066 §5). The name is looked up where the attribute is written, so
+    /// two instances of a view each reach their own element. `None` when the
+    /// attribute is absent or is not a bare name an `as` declared, which is
+    /// the string form.
+    pub(super) fn element_ref(&self, attrs: &[Attr], name: &str) -> Option<u32> {
+        attrs.iter().find_map(|a| {
+            if a.name.as_str() != name {
+                return None;
+            }
+            let AttrKind::Prop {
+                value: Expr::Ident(sym, _),
+            } = &a.kind
+            else {
+                return None;
+            };
+            match self
+                .env
+                .lookup(&Symbol::intern(&format!("@{}", sym.as_str())))
+            {
+                Some(Value::Int(uid)) => u32::try_from(*uid).ok(),
+                _ => None,
+            }
+        })
+    }
+
     pub(super) fn eval_float_prop(&mut self, attrs: &[Attr], name: &str) -> Option<f64> {
         attrs.iter().find_map(|a| {
             if a.name.as_str() == name {
@@ -223,6 +279,16 @@ impl Interpreter {
             }
             None
         })
+    }
+
+    /// Whether a `ScrollView`'s `collapse_header` is on now: the literal
+    /// `true`, or a value that is `true` (`collapse_header: top != none`).
+    pub(super) fn collapse_header_on(&mut self, attrs: &[Attr]) -> bool {
+        match Self::enum_prop(attrs, "collapse_header") {
+            Some("true") => true,
+            Some("false") => false,
+            _ => self.eval_bool_prop(attrs, "collapse_header") == Some(true),
+        }
     }
 
     pub(super) fn eval_bool_prop(&mut self, attrs: &[Attr], name: &str) -> Option<bool> {
@@ -384,9 +450,9 @@ impl Interpreter {
                 // animatable (`LayoutPropNotAnimatable`), so skipping the
                 // rest removes wasted work without changing behaviour.
                 let val = match attr.name.as_str() {
-                    "width" | "height" | "gap" | "grow" | "basis" | "pt" | "padding_top"
-                    | "padding-top" | "pr" | "padding_right" | "padding-right" | "pb"
-                    | "padding_bottom" | "padding-bottom" | "pl" | "padding_left"
+                    "width" | "height" | "gap" | "row_gap" | "wrap" | "grow" | "basis" | "pt"
+                    | "padding_top" | "padding-top" | "pr" | "padding_right" | "padding-right"
+                    | "pb" | "padding_bottom" | "padding-bottom" | "pl" | "padding_left"
                     | "padding-left" | "mt" | "margin_top" | "margin-top" | "mr"
                     | "margin_right" | "margin-right" | "mb" | "margin_bottom"
                     | "margin-bottom" | "ml" | "margin_left" | "margin-left" | "mx"
@@ -428,6 +494,10 @@ impl Interpreter {
                         if let Some(v) = val_to_f32(&val) {
                             style.gap = v;
                         }
+                    }
+                    "row_gap" if element_name == "Row" => style.row_gap = val_to_f32(&val),
+                    "wrap" if element_name == "Row" => {
+                        style.wrap = matches!(val, Value::Bool(true));
                     }
                     "p" | "padding" => {
                         style.padding = self.resolve_spacing(value, "p");
@@ -519,6 +589,14 @@ impl Interpreter {
                 }
             }
         }
+        // A `Clip` is a window onto content with a size of its own: its children
+        // are laid out at their own width, at any width of the window, and cut
+        // off, not squeezed to it (a label sliding open must not be measured at
+        // the width it has reached). A child fills it only if it asks
+        // (`align_self: stretch`), and an `align` the author wrote still wins.
+        if element_name == "Clip" && !attrs.iter().any(|a| a.name.as_str() == "align") {
+            style.align = Align::Start;
+        }
         // A `ScrollView` that grows is a window onto its content, not a
         // container sized by it. Its content (a 500-row list is thousands of px
         // tall) must not make it, or the column around it, ask for that much
@@ -555,6 +633,23 @@ impl Interpreter {
     fn resolve_spacing(&mut self, expr: &Expr, prop: &str) -> byard_core::atlas::layout::Spacing {
         use byard_core::atlas::layout::Spacing;
         match expr {
+            // RFC-0061: `p: (8, open ? 16 : 8) with curve` moves each side on
+            // its own motion. The value under the `with` is read by the rules
+            // below, as if it stood alone, and then animated side by side.
+            Expr::Animated { value, anim, span } => {
+                let target = self.resolve_spacing(value, prop);
+                let [top, right, bottom, left] = self.animate_quad(
+                    [target.top, target.right, target.bottom, target.left],
+                    anim,
+                    *span,
+                );
+                Spacing {
+                    top,
+                    right,
+                    bottom,
+                    left,
+                }
+            }
             Expr::Tuple(args, span) => {
                 let any_named = args.iter().any(|a| a.name.is_some());
                 let all_named = args.iter().all(|a| a.name.is_some());
@@ -576,6 +671,10 @@ impl Interpreter {
                 let val = self.eval_pure(other);
                 if let Some(v) = spacing_value(&val) {
                     Spacing::all(v)
+                } else if let Some(tuple) = tuple_expr_of(&val, other.span()) {
+                    // A `?:` (or a name) that is a tuple of lengths: the same
+                    // forms, read from the value instead of from the syntax.
+                    self.resolve_spacing(&tuple, prop)
                 } else {
                     self.errors.push(CompileError::AttributeTypeMismatch {
                         span: other.span(),
@@ -772,6 +871,9 @@ impl Interpreter {
                 "sm" => vec![shadow_preset(1.0, 3.0)],
                 "md" => vec![shadow_preset(3.0, 8.0)],
                 "lg" => vec![shadow_preset(6.0, 16.0)],
+                // Material elevation levels 4 and 5 (RFC-0064).
+                "xl" => vec![shadow_preset(8.0, 20.0)],
+                "2xl" => vec![shadow_preset(12.0, 28.0)],
                 "none" | "" => Vec::new(),
                 other => {
                     self.report_not_a_shadow(span, &format!("the word `{other}`"));
@@ -800,7 +902,7 @@ impl Interpreter {
             self.errors.push(CompileError::AttributeTypeMismatch {
                 span,
                 expected: format!(
-                    "a shadow: a preset (\"sm\", \"md\", \"lg\"), a tuple like \
+                    "a shadow: a preset (\"sm\", \"md\", \"lg\", \"xl\", \"2xl\"), a tuple like \
                      `(y: 2, blur: 4, color: 0x33000000)`, or a list of them, `()` for none \
                      (found {found})"
                 ),
@@ -1121,7 +1223,22 @@ impl Interpreter {
         let AttrKind::Prop { value } = &attr.kind else {
             return [0.0; 4];
         };
+        self.radii_of(value, name)
+    }
+
+    /// The four corner radii a `radius` value stands for (RFC-0061): a number
+    /// for all four, a tuple of four, a `?:` between either, or any of them
+    /// followed by `with`, which moves each corner on a motion of its own.
+    fn radii_of(&mut self, value: &Expr, name: &str) -> [f32; 4] {
         match value {
+            Expr::Animated {
+                value: target,
+                anim,
+                span,
+            } => {
+                let target = self.radii_of(target, name);
+                self.animate_quad(target, anim, *span)
+            }
             Expr::Tuple(args, span) => {
                 if args.iter().any(|a| a.name.is_some()) {
                     self.errors.push(CompileError::ConflictingSpacingField {
@@ -1161,6 +1278,8 @@ impl Interpreter {
                 let val = self.eval_pure(other);
                 if let Some(v) = spacing_value(&val) {
                     [v; 4]
+                } else if let Some(tuple) = tuple_expr_of(&val, other.span()) {
+                    self.radii_of(&tuple, name)
                 } else {
                     self.errors.push(CompileError::AttributeTypeMismatch {
                         span: other.span(),
@@ -1178,6 +1297,28 @@ impl Interpreter {
     /// `frame.rs` for why). `rect` is the element's own laid-out rect,
     /// logical pixels, needed to resolve a token/fractional `origin` into an
     /// absolute pivot.
+    /// The `border_gap: (start, length)` of an element, `[0, 0]` (no gap) when
+    /// it writes none or writes something that is not a pair of numbers (the
+    /// checker said so already).
+    pub(super) fn resolve_border_gap(&mut self, attrs: &[Attr]) -> [f32; 2] {
+        let Some(value) = attrs.iter().find_map(|a| match &a.kind {
+            AttrKind::Prop { value } if a.name.as_str() == "border_gap" => Some(value),
+            _ => None,
+        }) else {
+            return [0.0; 2];
+        };
+        let Value::Tuple(fields) = self.eval_pure(value) else {
+            return [0.0; 2];
+        };
+        match fields.as_slice() {
+            [(_, a), (_, b)] => match (spacing_value(a), spacing_value(b)) {
+                (Some(start), Some(len)) if len > 0.0 => [start, len],
+                _ => [0.0; 2],
+            },
+            _ => [0.0; 2],
+        }
+    }
+
     pub(super) fn resolve_transform(
         &mut self,
         attrs: &[Attr],

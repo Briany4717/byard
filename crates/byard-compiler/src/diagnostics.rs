@@ -144,6 +144,52 @@ pub enum CompileError {
         /// The closest recognized attribute, if any.
         hint: Option<String>,
     },
+    /// A `key_down` or `key_up` on an element the keyboard cannot reach, so
+    /// the handler could never run (RFC-0063 §1).
+    KeyNeedsFocus {
+        /// Source range of the attribute.
+        span: Span,
+        /// The element it was written on.
+        element: String,
+        /// `key_down` or `key_up`.
+        name: String,
+    },
+    /// `autofocus` on an element nothing can focus (RFC-0066 §1): focus would
+    /// never go there, so the attribute would do nothing.
+    AutofocusNeedsFocus {
+        /// Source range of the attribute.
+        span: Span,
+        /// The element it was written on.
+        element: String,
+    },
+    /// A range attribute (`a11y_value_min`, `a11y_value_max`, `a11y_value_step`)
+    /// on an element whose role has no value to give a range to (RFC-0066 §4).
+    AttributeNeedsRole {
+        /// Source range of the attribute.
+        span: Span,
+        /// The attribute.
+        attr: String,
+    },
+    /// `a11y_label` or `a11y_description` on a layout container that is not in
+    /// the accessibility tree, so nothing would read it (RFC-0063 §5).
+    A11yNeedsRole {
+        /// Source range of the attribute.
+        span: Span,
+        /// The element it was written on.
+        element: String,
+        /// The attribute.
+        attr: String,
+    },
+    /// A handler named a value for an event that carries none, `tap(e)`
+    /// (RFC-0063 §2): the name would read as empty.
+    EventHasNoValue {
+        /// Source range of the attribute.
+        span: Span,
+        /// The event.
+        event: String,
+        /// What to write instead, if there is something.
+        hint: Option<String>,
+    },
     /// An attribute used the wrong separator for its kind, a property given
     /// `=>`, or an event given `:` (RFC-0003 D4-bis).
     WrongAttributeSeparator {
@@ -507,6 +553,15 @@ pub enum CompileError {
         /// Human-readable description of the conflict.
         message: String,
     },
+    /// Two attributes of one element that disagree, or one that means nothing
+    /// without another: `row_gap` without `wrap`, `overflow` without
+    /// `max_lines`, `lines` with `min_lines` (RFC-0064).
+    InvalidAttributeCombination {
+        /// Source range of the attribute that is out of place.
+        span: Span,
+        /// What is wrong and what to write instead.
+        message: String,
+    },
     /// A user-`View` call supplied more positional content arguments than the
     /// callee declares parameters (RFC-0007 §6).
     ViewArityMismatch {
@@ -602,10 +657,10 @@ pub enum CompileError {
         /// The closest known curve name, if any.
         hint: Option<String>,
     },
-    /// A `with` clause attached an animation to a layout-affecting property
-    /// (`width`/`height`/`p`/`m`/`gap`/…), which cannot animate on the GPU
-    /// because it would require a per-frame relayout (RFC-0010 §"Layout
-    /// properties").
+    /// A `with` clause attached an animation to a layout property that has no
+    /// motion: a keyword, a text shaping property, a flex share or a grid
+    /// placement. The sizes, the gap, and the padding and margin families do
+    /// move (RFC-0061); the message says why this one cannot.
     LayoutPropNotAnimatable {
         /// Source range of the animated attribute.
         span: Span,
@@ -1186,8 +1241,92 @@ pub enum CompileError {
         /// The parameter it names.
         name: String,
     },
-    /// A binding parameter that cannot be one: it has a default, no type, is a
-    /// callback, or is called `bind` (RFC-0051).
+    /// A value given to a `Slot` parameter, or a block of elements given to a
+    /// parameter that is not one, or a block anywhere but a call's arguments
+    /// (RFC-0062).
+    SlotArgument {
+        /// Source range of the argument.
+        span: Span,
+        /// The parameter, or empty for a block outside a call.
+        name: String,
+        /// The callee, or empty for a block outside a call.
+        callee: String,
+        /// Whether the parameter is a slot (a value was given) or not (a block was).
+        wants_slot: bool,
+    },
+    /// A `{ … }` argument that is neither a callback (a list of actions) nor a
+    /// block of elements (RFC-0062 §2). Which one it is depends on the
+    /// parameter it is given to, so both readings are tried and this says what
+    /// each expected.
+    BlockFitsNeither {
+        /// Source range of the block.
+        span: Span,
+        /// What reading it as actions expected at the first mistake.
+        as_actions: String,
+        /// What reading it as elements expected at the first mistake.
+        as_elements: String,
+    },
+    /// A layout attribute in a state block that names another element's
+    /// states or `focus_within` (RFC-0062 §5): states change what is painted,
+    /// and layout has been computed before them.
+    LayoutInStateBlock {
+        /// Source range of the attribute.
+        span: Span,
+        /// The attribute.
+        name: String,
+        /// The state the block is for, as written.
+        state: String,
+    },
+    /// `none` compared with something that did not declare it (RFC-0062): only
+    /// a parameter written `= none`, or `content`, can be absent.
+    NoneNeedsOptional {
+        /// Source range of the comparison.
+        span: Span,
+        /// What it was compared to, as written.
+        name: String,
+    },
+    /// A `let` written inside an element's braces. A `let` goes at the top of the
+    /// view, or inside a `when` or `for` body.
+    LetInElementBody {
+        /// Source range of the `let`.
+        span: Span,
+        /// The name it declares.
+        name: String,
+        /// The element it is in.
+        element: String,
+    },
+    /// `on name.state` where no element tagged `as name` comes before it
+    /// (RFC-0062), or an `anchor_to` or `a11y_described_by` that names one
+    /// (RFC-0066 §5).
+    UnknownStateTarget {
+        /// Source range of `name.state`, or of the name.
+        span: Span,
+        /// The name.
+        name: String,
+        /// The closest declared name.
+        hint: Option<String>,
+        /// The attribute that named it (`anchor_to`, `a11y_described_by`), when
+        /// it was not a state block.
+        attr: Option<String>,
+    },
+    /// `anchor_to: "name"`, a text looked up in the whole window, where the name
+    /// itself would reach this view's own element (RFC-0066 §5). A warning.
+    AnchorToText {
+        /// Source range of the text.
+        span: Span,
+        /// The name it holds.
+        name: String,
+    },
+    /// Two `on enter` (or two `on leave`) blocks on one element (RFC-0066 §3):
+    /// an element has one way of arriving and one of going.
+    DuplicateStateBlock {
+        /// Source range of the second block.
+        span: Span,
+        /// `enter` or `leave`.
+        state: String,
+    },
+    /// A binding parameter that cannot be one: it has no type, is a callback,
+    /// or is called `bind` (RFC-0051; a default is allowed since RFC-0065).
     BadBindingParam {
         /// Source range of the parameter.
         span: Span,
@@ -1236,6 +1375,68 @@ pub enum CompileError {
         /// The reserved name.
         name: String,
     },
+    /// A value that may be none (`color: Color?`) read where a value is wanted,
+    /// outside `??` and a `!= none` branch (RFC-0065 §2).
+    NoneNotHandled {
+        /// Source range of the read.
+        span: Span,
+        /// The name read.
+        name: String,
+    },
+    /// A view provides one context twice (RFC-0065 §1).
+    DuplicateProvide {
+        /// Source range of the second `provide`.
+        span: Span,
+        /// The context.
+        name: String,
+    },
+    /// `provide`, or `inject`, of a name that is no context (RFC-0065 §1).
+    UnknownContext {
+        /// Source range of the name.
+        span: Span,
+        /// The name as written.
+        name: String,
+        /// The closest context the program declares, if any.
+        hint: Option<String>,
+    },
+    /// A context field with no default: every field has one, so an `inject`
+    /// with no provider above has something to read (RFC-0065 §1).
+    ContextFieldNeedsDefault {
+        /// Source range of the field.
+        span: Span,
+        /// The context.
+        context: String,
+        /// The field.
+        name: String,
+    },
+    /// `provide` written somewhere other than the top of a view's body
+    /// (RFC-0065 §1): it gives values to everything the view draws, so it
+    /// cannot depend on a `when` or a `for`.
+    MisplacedProvide {
+        /// Source range of the `provide`.
+        span: Span,
+        /// The context.
+        name: String,
+    },
+    /// An optional parameter (`T?`) with a default that is not `none`, or
+    /// `= none` on a parameter that is not optional (RFC-0065 §2).
+    BadOptionalDefault {
+        /// Source range of the parameter.
+        span: Span,
+        /// The parameter.
+        name: String,
+        /// `= none` was written without the `?`.
+        none_needs_question: bool,
+    },
+    /// A context field of a type a context cannot hold: a `Slot` (RFC-0065 §1).
+    BadContextField {
+        /// Source range of the field.
+        span: Span,
+        /// The context.
+        context: String,
+        /// The field.
+        name: String,
+    },
 }
 
 /// What a control's `bind:` was given in place of a `var`.
@@ -1257,8 +1458,6 @@ pub enum BindTarget {
 /// What is wrong with the declaration of a binding parameter.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum BindingProblem {
-    /// It has a default value.
-    Default,
     /// It has no type.
     NoType,
     /// Its type is `Fn(...)`.
@@ -1296,6 +1495,13 @@ impl CompileError {
             | Self::UnknownThemeToken { span, .. }
             | Self::UnknownView { span, .. }
             | Self::UnknownAttribute { span, .. }
+            | Self::KeyNeedsFocus { span, .. }
+            | Self::A11yNeedsRole { span, .. }
+            | Self::AutofocusNeedsFocus { span, .. }
+            | Self::AttributeNeedsRole { span, .. }
+            | Self::DuplicateStateBlock { span, .. }
+            | Self::AnchorToText { span, .. }
+            | Self::EventHasNoValue { span, .. }
             | Self::WrongAttributeSeparator { span, .. }
             | Self::ArityMismatch { span, .. }
             | Self::AttributeTypeMismatch { span, .. }
@@ -1330,6 +1536,7 @@ impl CompileError {
             | Self::PathStrokeUnsupported { span }
             | Self::DynamicStyleForbidden { span }
             | Self::ConflictingSpacingField { span, .. }
+            | Self::InvalidAttributeCombination { span, .. }
             | Self::ViewArityMismatch { span, .. }
             | Self::UnknownParam { span, .. }
             | Self::MissingParam { span, .. }
@@ -1366,6 +1573,19 @@ impl CompileError {
             | Self::BindNeedsName { span, .. }
             | Self::BindOutsideViewCall { span, .. }
             | Self::BadBindingParam { span, .. }
+            | Self::BadContextField { span, .. }
+            | Self::NoneNotHandled { span, .. }
+            | Self::DuplicateProvide { span, .. }
+            | Self::UnknownContext { span, .. }
+            | Self::ContextFieldNeedsDefault { span, .. }
+            | Self::MisplacedProvide { span, .. }
+            | Self::BadOptionalDefault { span, .. }
+            | Self::SlotArgument { span, .. }
+            | Self::NoneNeedsOptional { span, .. }
+            | Self::BlockFitsNeither { span, .. }
+            | Self::LayoutInStateBlock { span, .. }
+            | Self::LetInElementBody { span, .. }
+            | Self::UnknownStateTarget { span, .. }
             | Self::ArgumentTypeMismatch { span, .. }
             | Self::KeywordAsName { span, .. }
             | Self::MixedTernaryPrecedence { span, .. }
@@ -1417,6 +1637,13 @@ impl CompileError {
             | Self::UnknownThemeToken { span, .. }
             | Self::UnknownView { span, .. }
             | Self::UnknownAttribute { span, .. }
+            | Self::KeyNeedsFocus { span, .. }
+            | Self::A11yNeedsRole { span, .. }
+            | Self::AutofocusNeedsFocus { span, .. }
+            | Self::AttributeNeedsRole { span, .. }
+            | Self::DuplicateStateBlock { span, .. }
+            | Self::AnchorToText { span, .. }
+            | Self::EventHasNoValue { span, .. }
             | Self::WrongAttributeSeparator { span, .. }
             | Self::ArityMismatch { span, .. }
             | Self::AttributeTypeMismatch { span, .. }
@@ -1451,6 +1678,7 @@ impl CompileError {
             | Self::PathStrokeUnsupported { span }
             | Self::DynamicStyleForbidden { span }
             | Self::ConflictingSpacingField { span, .. }
+            | Self::InvalidAttributeCombination { span, .. }
             | Self::ViewArityMismatch { span, .. }
             | Self::UnknownParam { span, .. }
             | Self::MissingParam { span, .. }
@@ -1487,6 +1715,19 @@ impl CompileError {
             | Self::BindNeedsName { span, .. }
             | Self::BindOutsideViewCall { span, .. }
             | Self::BadBindingParam { span, .. }
+            | Self::BadContextField { span, .. }
+            | Self::NoneNotHandled { span, .. }
+            | Self::DuplicateProvide { span, .. }
+            | Self::UnknownContext { span, .. }
+            | Self::ContextFieldNeedsDefault { span, .. }
+            | Self::MisplacedProvide { span, .. }
+            | Self::BadOptionalDefault { span, .. }
+            | Self::SlotArgument { span, .. }
+            | Self::NoneNeedsOptional { span, .. }
+            | Self::BlockFitsNeither { span, .. }
+            | Self::LayoutInStateBlock { span, .. }
+            | Self::LetInElementBody { span, .. }
+            | Self::UnknownStateTarget { span, .. }
             | Self::ArgumentTypeMismatch { span, .. }
             | Self::KeywordAsName { span, .. }
             | Self::MixedTernaryPrecedence { span, .. }
@@ -1540,6 +1781,13 @@ impl CompileError {
             Self::UnknownThemeToken { .. } => "UnknownThemeToken",
             Self::UnknownView { .. } => "UnknownView",
             Self::UnknownAttribute { .. } => "UnknownAttribute",
+            Self::KeyNeedsFocus { .. } => "KeyNeedsFocus",
+            Self::A11yNeedsRole { .. } => "A11yNeedsRole",
+            Self::AutofocusNeedsFocus { .. } => "AutofocusNeedsFocus",
+            Self::AttributeNeedsRole { .. } => "AttributeNeedsRole",
+            Self::DuplicateStateBlock { .. } => "DuplicateStateBlock",
+            Self::AnchorToText { .. } => "AnchorToText",
+            Self::EventHasNoValue { .. } => "EventHasNoValue",
             Self::WrongAttributeSeparator { .. } => "WrongAttributeSeparator",
             Self::ArityMismatch { .. } => "ArityMismatch",
             Self::AttributeTypeMismatch { .. } => "AttributeTypeMismatch",
@@ -1574,6 +1822,7 @@ impl CompileError {
             Self::PathStrokeUnsupported { .. } => "PathStrokeUnsupported",
             Self::DynamicStyleForbidden { .. } => "DynamicStyleForbidden",
             Self::ConflictingSpacingField { .. } => "ConflictingSpacingField",
+            Self::InvalidAttributeCombination { .. } => "InvalidAttributeCombination",
             Self::ViewArityMismatch { .. } => "ViewArityMismatch",
             Self::UnknownParam { .. } => "UnknownParam",
             Self::MissingParam { .. } => "MissingParam",
@@ -1610,6 +1859,19 @@ impl CompileError {
             Self::BindNeedsName { .. } => "BindNeedsName",
             Self::BindOutsideViewCall { .. } => "BindOutsideViewCall",
             Self::BadBindingParam { .. } => "BadBindingParam",
+            Self::BadContextField { .. } => "BadContextField",
+            Self::NoneNotHandled { .. } => "NoneNotHandled",
+            Self::DuplicateProvide { .. } => "DuplicateProvide",
+            Self::UnknownContext { .. } => "UnknownContext",
+            Self::ContextFieldNeedsDefault { .. } => "ContextFieldNeedsDefault",
+            Self::MisplacedProvide { .. } => "MisplacedProvide",
+            Self::BadOptionalDefault { .. } => "BadOptionalDefault",
+            Self::SlotArgument { .. } => "SlotArgument",
+            Self::NoneNeedsOptional { .. } => "NoneNeedsOptional",
+            Self::BlockFitsNeither { .. } => "BlockFitsNeither",
+            Self::LayoutInStateBlock { .. } => "LayoutInStateBlock",
+            Self::LetInElementBody { .. } => "LetInElementBody",
+            Self::UnknownStateTarget { .. } => "UnknownStateTarget",
             Self::ArgumentTypeMismatch { .. } => "ArgumentTypeMismatch",
             Self::KeywordAsName { .. } => "KeywordAsName",
             Self::MixedTernaryPrecedence { .. } => "MixedTernaryPrecedence",
@@ -1652,6 +1914,7 @@ impl CompileError {
                 | Self::UncheckableInject { .. }
                 | Self::MixedTernaryPrecedence { .. }
                 | Self::IconNameNotStatic { .. }
+                | Self::AnchorToText { .. }
         )
     }
 
@@ -1744,6 +2007,50 @@ impl CompileError {
             }
             Self::UnknownAttribute { name, hint, .. } => {
                 with_hint(format!("unknown attribute `{name}`"), hint.as_deref())
+            }
+            Self::KeyNeedsFocus { element, name, .. } => format!(
+                "`{name}` needs an element the keyboard can reach, and a `{element}` written \
+                 like this is not one; give it a `focus => …` handler, or an `a11y_role` that \
+                 takes focus (button, toggle_button, switch, checkbox, radio, tab, menu_item, \
+                 link) together with a `tap`"
+            ),
+            Self::AutofocusNeedsFocus { element, .. } => format!(
+                "`autofocus` names the element focus goes to, and a `{element}` written \
+                 like this cannot take focus; give it a `focus => …` handler, a `focused:` \
+                 binding, or an `a11y_role` that takes focus (button, toggle_button, switch, \
+                 checkbox, radio, tab, menu_item, link) together with a `tap`"
+            ),
+            Self::AttributeNeedsRole { attr, .. } => format!(
+                "`{attr}` is the range of a value, and only a `slider`, a `spin_button` or a \
+                 `progress_bar` has one: add `a11y_role: slider` (or `spin_button`, \
+                 `progress_bar`) to this element, or drop the attribute"
+            ),
+            Self::AnchorToText { name, .. } => format!(
+                "`anchor_to: \"{name}\"` is looked up among every `as` in the window, so two \
+                 copies of a view share one name; write `anchor_to: {name}` to point at the \
+                 element tagged `as {name}` in this view"
+            ),
+            Self::DuplicateStateBlock { state, .. } => format!(
+                "an element has one `on {state}` block: write the values together in the \
+                 first one"
+            ),
+            Self::A11yNeedsRole { element, attr, .. } => format!(
+                "`{attr}` on a `{element}` is read by nothing: a layout container is in \
+                 the accessibility tree only with a role; give it an `a11y_role` (button, \
+                 group, list_item, …), or put the {} on the control or `Text` inside",
+                if attr == "a11y_label" {
+                    "label"
+                } else {
+                    "description"
+                }
+            ),
+            Self::EventHasNoValue { event, hint, .. } => {
+                let base =
+                    format!("`{event}` carries no value to name; write `{event} => …` without one");
+                match hint {
+                    Some(h) => format!("{base} (for a position, use `{h}`)"),
+                    None => base,
+                }
             }
             Self::WrongAttributeSeparator {
                 name,
@@ -1921,14 +2228,16 @@ impl CompileError {
                  measured size is for"
             ),
             Self::PathStrokeUnsupported { .. } => {
-                "`path` renders fills only; stroke it with `arc`/`line`/`bezier` \
-                 or outline the `d` data"
+                "a `path(d: …)` renders fills only, and no path takes `dash`: write the \
+                 path as a body (`path(stroke: …) { move(…) … }`) to stroke it, or use \
+                 `arc`/`line`/`bezier` for a dashed line"
                     .to_string()
             }
             Self::DynamicStyleForbidden { .. } => {
                 "a `style` block cannot read a `var` (styles are static in Phase 2)".to_string()
             }
             Self::ConflictingSpacingField { message, .. }
+            | Self::InvalidAttributeCombination { message, .. }
             | Self::InvalidAnimation { message, .. }
             | Self::Project { message, .. } => message.clone(),
             Self::ViewArityMismatch {
@@ -1941,9 +2250,13 @@ impl CompileError {
             ),
             Self::UnknownParam {
                 name, callee, hint, ..
-            } => with_hint(
-                format!("`{callee}` has no parameter `{name}`"),
-                hint.as_deref(),
+            } => format!(
+                "{}; a view call also takes the layout attributes {}",
+                with_hint(
+                    format!("`{callee}` has no parameter `{name}`"),
+                    hint.as_deref()
+                ),
+                crate::interp::intrinsics::VIEW_CALL_LAYOUT.join(", ")
             ),
             Self::MissingParam { name, callee, .. } => {
                 format!("missing required argument `{name}` for view `{callee}`")
@@ -1984,8 +2297,8 @@ impl CompileError {
                 with_hint(format!("unknown animation curve `{name}`"), hint.as_deref())
             }
             Self::LayoutPropNotAnimatable { prop, .. } => format!(
-                "`{prop}` is a layout property and cannot be animated with `with` \
-                 (it would relayout every frame); animate a `scale` transform instead"
+                "`{prop}` is a layout property and cannot be animated with `with`: {}",
+                layout_prop_reason(prop)
             ),
             Self::NotAStyle { .. } => "`..` can only spread a `style { … }` value".to_string(),
             Self::UnknownStyleState { name, hint, .. } => with_hint(
@@ -2172,12 +2485,118 @@ impl CompileError {
                 "`bind {name}: …` passes a binding to a view of the program; a function, a \
                  tuple or a built-in takes a plain `{name}: …`"
             ),
-            Self::BadBindingParam { name, problem, .. } => match problem {
-                BindingProblem::Default => format!(
-                    "binding `{name}` cannot have a default value: it is the caller's `var`, \
-                     so there is nothing for a default to stand in for. Make it a plain \
-                     parameter, or keep a `var` of your own in the view"
+            Self::SlotArgument {
+                name,
+                callee,
+                wants_slot,
+                ..
+            } => {
+                if callee.is_empty() {
+                    "a block of elements `{ … }` is the argument of a `Slot` parameter; \
+                     it means nothing anywhere else"
+                        .to_string()
+                } else if *wants_slot {
+                    format!(
+                        "`{name}` of `{callee}` is a `Slot`: give it a block of elements, \
+                         `{name}: {{ … }}`, not a value"
+                    )
+                } else {
+                    format!(
+                        "`{name}` of `{callee}` is not a `Slot`: a block of elements goes to \
+                         a parameter declared `{name}: Slot`"
+                    )
+                }
+            }
+            Self::BlockFitsNeither {
+                as_actions,
+                as_elements,
+                ..
+            } => format!(
+                "this block is neither actions nor elements. As the actions of an `Fn` \
+                 parameter it expected {as_actions}; as the elements of a `Slot` parameter \
+                 it expected {as_elements}"
+            ),
+            Self::LayoutInStateBlock { name, state, .. } => format!(
+                "`{name}` is a layout attribute, and layout is computed before states: a \
+                 block on `{state}` only changes what is painted. Use `translate` or \
+                 `scale` to move or resize it on screen, or a `var` to change the layout"
+            ),
+            Self::NoneNeedsOptional { name, .. } => format!(
+                "`{name}` cannot be compared with `none`: only a parameter declared with \
+                 `= none` (`on_tap: Fn() = none`, `icon: Slot = none`), or `content`, can be \
+                 absent"
+            ),
+            Self::UnknownStateTarget {
+                name,
+                hint,
+                attr: Some(attr),
+                ..
+            } => with_hint(
+                format!(
+                    "`{attr}: {name}` names no element: tag the element with `as {name}` \
+                     in this view (or give a text, for the window-wide name of an `as`)"
                 ),
+                hint.as_deref(),
+            ),
+            Self::LetInElementBody { name, element, .. } => format!(
+                "`let {name}` is written inside `{element}`, where it would be ignored: put it \
+                 at the top of the view, or inside a `when` or `for` body"
+            ),
+            Self::UnknownStateTarget { name, hint, .. } => with_hint(
+                format!(
+                    "no element in this view is tagged `as {name}`: tag the element \
+                     whose states this block follows with `as {name}`"
+                ),
+                hint.as_deref(),
+            ),
+            Self::NoneNotHandled { name, .. } => format!(
+                "`{name}` may be none here. Give it a value for when it is: `{name} ?? fallback`, \
+                 or read it where it is known, inside `when {name} != none {{ … }}` or \
+                 `{name} != none ? a : b`"
+            ),
+            Self::DuplicateProvide { name, .. } => format!(
+                "this view already provides `{name}`: write one `provide {name}(…)` with every \
+                 field you set"
+            ),
+            Self::UnknownContext { name, hint, .. } => with_hint(
+                format!(
+                    "`{name}` is not a context: declare it with `context {name} {{ … }}`, or \
+                     name a capability, a controller or `Theme`"
+                ),
+                hint.as_deref(),
+            ),
+            Self::ContextFieldNeedsDefault { context, name, .. } => format!(
+                "field `{name}` of context `{context}` needs a default: write \
+                 `{name}: Type = value`, so a view with no provider above it has something to read"
+            ),
+            Self::MisplacedProvide { name, .. } => format!(
+                "`provide {name}` goes at the top of a view's body, not inside a `when`, a `for` \
+                 or an element: it gives values to everything the view draws"
+            ),
+            Self::BadOptionalDefault {
+                name,
+                none_needs_question,
+                ..
+            } => {
+                if *none_needs_question {
+                    format!(
+                        "`{name}` defaults to `none`, so its type has to allow it: write \
+                         `{name}: T? = none`. (`none` stands in for a callback or a slot only \
+                         with `Fn(…)` and `Slot`)"
+                    )
+                } else {
+                    format!(
+                        "the default of `{name}` can only be `none`: a `T?` parameter may be \
+                         left out. For a default value, drop the `?` and write \
+                         `{name}: T = value`"
+                    )
+                }
+            }
+            Self::BadContextField { context, name, .. } => format!(
+                "field `{name}` of context `{context}` is a `Slot`: a context holds values and \
+                 `Fn` callbacks. A block of elements goes to a parameter declared `: Slot`"
+            ),
+            Self::BadBindingParam { name, problem, .. } => match problem {
                 BindingProblem::NoType => {
                     format!("binding `{name}` needs a type: write `bind {name}: Type`")
                 }
@@ -2330,6 +2749,31 @@ impl CompileError {
             headline = self.headline(),
             col1 = col + 1,
         )
+    }
+}
+/// Why a layout property has no motion, for `LayoutPropNotAnimatable`
+/// (RFC-0061), and what to animate instead.
+fn layout_prop_reason(prop: &str) -> &'static str {
+    match prop {
+        "align" | "justify" | "align_self" | "alignment" | "direction" | "anchor" | "axis"
+        | "anchor_edge" | "anchor_align" => {
+            "it is a keyword, and there is nothing between two keywords to move through; \
+             animate `width`, `height`, `gap`, a padding or a margin instead"
+        }
+        "size" | "typo" | "weight" | "font" | "wrap" => {
+            "it changes how the text is shaped, which would be redone every frame; \
+             animate a `scale` transform instead"
+        }
+        "grow" | "shrink" | "basis" => {
+            "it is a share of the free space among siblings; animate the `width` or \
+             `height` it divides instead"
+        }
+        "col" | "row" | "col_span" | "row_span" | "col_gap" | "row_gap" | "columns" | "rows"
+        | "at" => "it names a grid cell, track or position, not a length that can move",
+        _ => {
+            "it has no motion defined; animate `width`, `height`, `gap`, a padding or a \
+              margin, or a `scale` transform instead"
+        }
     }
 }
 

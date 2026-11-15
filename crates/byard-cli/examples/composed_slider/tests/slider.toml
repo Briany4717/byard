@@ -1,0 +1,37 @@
+# The composed slider takes the pointer and the keyboard (RFC-0063).
+size = "360x400"
+
+[[test]]
+name = "it is a slider with a value and a description"
+expect = ['Slider "Volume" description "Drag, or use the arrow keys, Home and End" = "40 percent"']
+
+[[test]]
+name = "Tab reaches it, and End and Home go to the ends"
+steps = [{ key = "Tab" }, { key = "End" }]
+expect = ['= "100 percent"']
+
+[[test]]
+name = "Home goes back to the start"
+steps = [{ key = "Tab" }, { key = "Home" }]
+expect = ['= "0 percent"']
+
+[[test]]
+name = "the arrows step by five"
+steps = [{ key = "Tab" }, { key = "Right" }, { key = "Right" }]
+expect = ['= "50 percent"']
+
+[[test]]
+name = "a press jumps to where it landed"
+steps = [{ tap = [60, 80] }]
+expect = ['percent"']
+not = ['= "40 percent"']
+
+[[test]]
+name = "a drag follows the pointer past the end"
+steps = [
+    { hold = [60, 80] },
+    { hover = [200, 80] },
+    { hover = [900, 80] },
+    { release = [900, 80] },
+]
+expect = ['= "100 percent"']

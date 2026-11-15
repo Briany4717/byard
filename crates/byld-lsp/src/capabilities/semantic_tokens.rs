@@ -320,7 +320,9 @@ fn collect_member_tokens(members: &[Member], out: &mut Vec<RawToken>) {
                 });
                 collect_expr_tokens(action, out);
             }
-            Member::Timer { action, span, .. } => {
+            Member::Timer {
+                dur, action, span, ..
+            } => {
                 // "every" and "after" are both five characters, so the keyword
                 // run is the same length either way.
                 out.push(RawToken {
@@ -328,6 +330,7 @@ fn collect_member_tokens(members: &[Member], out: &mut Vec<RawToken>) {
                     token_type: 0, // KEYWORD
                     modifiers: 0,
                 });
+                collect_expr_tokens(dur, out);
                 collect_expr_tokens(action, out);
             }
             Member::Measure { action, span } => {
@@ -352,6 +355,16 @@ fn collect_member_tokens(members: &[Member], out: &mut Vec<RawToken>) {
                     collect_expr_tokens(value, out);
                 }
                 collect_expr_tokens(action, out);
+            }
+            Member::Provide { span, fields, .. } => {
+                out.push(RawToken {
+                    span: Span::new(span.start, span.start + 7), // "provide"
+                    token_type: 0,
+                    modifiers: 0,
+                });
+                for arg in fields {
+                    collect_expr_tokens(&arg.value, out);
+                }
             }
             Member::Inject { name, span, .. } => {
                 out.push(RawToken {
@@ -546,6 +559,7 @@ fn collect_expr_tokens(expr: &Expr, out: &mut Vec<RawToken>) {
                 collect_expr_tokens(value, out);
             }
         }
+        Expr::SlotBlock { members, .. } => collect_member_tokens(members, out),
         Expr::Lambda { body, .. } => collect_expr_tokens(body, out),
         Expr::Block(statements, _) => {
             for statement in statements {

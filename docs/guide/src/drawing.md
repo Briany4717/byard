@@ -37,7 +37,19 @@ pixels, with `(0, 0)` at the top-left.
 | `ngon` | `cx`, `cy`, `r`, `n`, and optionally `corner`, `inner` and `rotate` |
 | `bezier` | `x1`, `y1`, `cx1`, `cy1`, `cx2`, `cy2`, `x2`, `y2` |
 | `path` | A body of commands, or `d:` with SVG path text |
-| `text` | The text, then `x`, `y`, and optionally `color`, `size` and `align` |
+| `text` | The text, then `x`, `y`, and optionally `color`, `size`, `typo` and `align` |
+
+`text` takes the text style a `Text` does: `typo: labelLarge` gives it the theme token's size,
+weight and family (`typo: t.labelLarge` through `inject Theme as t` works too), so a dial's
+numbers are drawn in the face the rest of the app is. A `size` written beside it wins over the
+token's size, and `align` measures the line in the face it is drawn in. A `text` with no `typo` is
+drawn in the default face at the regular weight, as it was.
+
+```byld,fragment
+Canvas #[width: 120, height: 60] {
+    text("12", x: 60, y: 36, typo: titleLarge, align: center, color: 0xE6E1E5)
+}
+```
 
 Every shape that can be painted also takes these:
 
@@ -130,6 +142,11 @@ View Main() {
 - `cubic(c1x, c1y, c2x, c2y, x, y)` is a curve with two.
 - `close()` joins the end back to the start.
 
+A path with `stroke` is outlined too: `stroke` is the colour, `stroke_width` how thick (1
+by default), `cap` the ends (`butt`, `round`, `square`) and `join` the corners (`miter`,
+`round`, `bevel`). With no `fill` it is only the line, which is how a curved progress ring
+or a wave is drawn. `dash` is not available on a path, nor any stroke on `path(d: …)`.
+
 A body path is turned into a mesh, remembered, and not worked out again while its
 numbers stay the same. A path whose data moved is redone. A path that does not
 start with `move` is an error.
@@ -203,7 +220,8 @@ when the geometry follows data.
 
 ## Clip masks
 
-A `Clip` cuts what it holds to a shape. Its own box is the default. `rrect` rounds
+A `Clip` cuts what it holds to a shape, a `Canvas` path (filled or stroked) included:
+a wave 400 wide shows through a `Clip` 120 wide. Its own box is the default. `rrect` rounds
 the corners. A `path` child makes the mask any shape at all, and the path can read
 state, so the mask can move:
 

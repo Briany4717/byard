@@ -37,6 +37,7 @@ pub mod frame;
 pub mod platform;
 pub mod relay;
 pub mod render;
+pub mod surface;
 pub mod telemetry;
 pub mod text;
 

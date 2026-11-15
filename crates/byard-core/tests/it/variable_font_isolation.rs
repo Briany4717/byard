@@ -172,6 +172,26 @@ fn a_variable_font_draws_the_same_after_another_at_a_heavy_weight() {
         .filter(|(a, b)| a[0].abs_diff(b[0]) > 64)
         .count();
     let drawn = alone.chunks_exact(4).filter(|p| p[0] > 0).count();
+    // The ink each picture has, and where it is: a shift keeps the ink and
+    // moves the box; a leaked axis (the icon's `FILL`) changes the ink.
+    let ink = |px: &[u8]| -> u64 { px.chunks_exact(4).map(|p| u64::from(p[0])).sum() };
+    let bounds = |px: &[u8]| -> (usize, usize, usize, usize) {
+        let mut b = (usize::MAX, usize::MAX, 0, 0);
+        for (i, p) in px.chunks_exact(4).enumerate() {
+            if p[0] > 0 {
+                let (x, y) = (i % SIZE as usize, i / SIZE as usize);
+                b = (b.0.min(x), b.1.min(y), b.2.max(x), b.3.max(y));
+            }
+        }
+        b
+    };
+    eprintln!(
+        "ink after {} alone {}; box after {:?} alone {:?}",
+        ink(&after),
+        ink(&alone),
+        bounds(&after),
+        bounds(&alone)
+    );
     assert!(
         after == alone,
         "the icon line drew differently after a heavy variable line: {differing} bytes differ, \

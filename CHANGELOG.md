@@ -141,6 +141,7 @@ Byard uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Fixed
 
+- **`byard shot` and `byard test` draw the same picture on any machine.** A field generated on another thread (a `path` filled through the vector atlas, an SVG icon) landed on whichever frame the worker finished by, so a slow or busy machine drew it later or not at all. A headless frame now waits for what the last one asked for, and a windowed app still never waits.
 - **`focus_in` after a press is documented, not changed.** A click on a focusable control fires `focus_in` as Tab does (a browser's `focusin`); only the `focus_visible` state tells the keyboard from the pointer. A tooltip that wants keyboard focus only has to be built on that state; an event for it would be new syntax and is written up in the reviewer notes.
 - **`byard shot` no longer draws every frame of an endless animation.** A page with a loop that never ends (a progress bar, a spinner) was drawn frame by frame up to `--at`, 17 s for a page of keyframed paths in a debug build; a loop depends only on the clock, so the frames in between are skipped when nothing else is in motion, and the picture is the same bytes (`BYARD_SHOT_EVERY_FRAME=1` compares).
 - **More than eight `anim.keyframes` stops is `TooManyKeyframes` everywhere.** In a path body (`line(anim.keyframes(…), y)`) or a shape argument the sequence was not checked and drew flat; the error now comes from there too.

@@ -87,6 +87,10 @@ pub struct VectorJit {
     entries: HashMap<String, CacheEntry>,
     sender: Sender<JitMessage>,
     receiver: Receiver<JitMessage>,
+    /// Results a headless host waited for ([`VectorJit::wait_for_pending`])
+    /// before the tick that drains them; [`VectorJit::drain_ready`] takes
+    /// these first, then whatever else has arrived.
+    arrived: Vec<JitMessage>,
     /// Free-cell stack. Each entry is `(pixel_x, pixel_y,
     /// layer)`. Initialized with every cell in the atlas; cells are popped on
     /// alloc and pushed back on eviction or `Failed` cleanup. Since all glyphs
@@ -125,6 +129,7 @@ impl Default for VectorJit {
             entries: HashMap::new(),
             sender,
             receiver,
+            arrived: Vec::new(),
             free_cells,
             next_upload_id: 0,
             tick: 0,
@@ -328,6 +333,33 @@ impl VectorJit {
         });
     }
 
+    /// Blocks until every field still being generated has arrived, or until
+    /// `timeout` passes. For a headless host (`byard shot`, `byard test`): a
+    /// field then lands on the tick after the one that asked for it, however
+    /// fast the machine is, so the same command draws the same picture. A
+    /// windowed app never calls it; its frames don't wait.
+    pub fn wait_for_pending(&mut self, timeout: std::time::Duration) {
+        let deadline = std::time::Instant::now() + timeout;
+        loop {
+            let waiting = self
+                .entries
+                .iter()
+                .filter(|(handle, e)| {
+                    matches!(e, CacheEntry::Pending | CacheEntry::Regenerating { .. })
+                        && !self.arrived.iter().any(|m| &m.handle == *handle)
+                })
+                .count();
+            if waiting == 0 {
+                return;
+            }
+            let left = deadline.saturating_duration_since(std::time::Instant::now());
+            match self.receiver.recv_timeout(left) {
+                Ok(msg) => self.arrived.push(msg),
+                Err(_) => return,
+            }
+        }
+    }
+
     /// Drains every generation that completed since the last call, allocates
     /// each a fresh atlas cell, marks it resident, and returns the
     /// [`AtlasUpload`]s to attach to this tick's frame, plus a re-send of
@@ -364,7 +396,11 @@ impl VectorJit {
         // double-uploaded on their very first tick.
         let mut just_completed: std::collections::HashSet<String> =
             std::collections::HashSet::new();
+        let mut done = std::mem::take(&mut self.arrived);
         while let Ok(msg) = self.receiver.try_recv() {
+            done.push(msg);
+        }
+        for msg in done {
             match msg.result {
                 Ok(glyph) => {
                     // A hot-reload regeneration reuses the retained cell so the
@@ -548,6 +584,7 @@ impl VectorJit {
             entries: HashMap::new(),
             sender,
             receiver,
+            arrived: Vec::new(),
             free_cells,
             next_upload_id: 0,
             tick: 0,
@@ -622,6 +659,33 @@ mod tests {
         let path = write_gear_fixture();
         let mut jit = VectorJit::new();
         assert!(jit.lookup_or_dispatch(&path).is_none());
+    }
+
+    #[test]
+    fn after_a_wait_the_next_drain_has_the_field_however_slow_the_worker() {
+        // A headless shot waits for what the last frame asked for, so the
+        // field lands on the very next tick: no poll loop, no sleep.
+        let path = write_gear_fixture();
+        let mut jit = VectorJit::new();
+        assert!(jit.lookup_or_dispatch(&path).is_none());
+        assert!(jit.is_generating());
+        jit.wait_for_pending(std::time::Duration::from_secs(30));
+        assert_eq!(
+            jit.drain_ready().len(),
+            1,
+            "the field lands on the first drain"
+        );
+        assert!(!jit.is_generating());
+        assert!(jit.lookup_or_dispatch(&path).is_some());
+    }
+
+    #[test]
+    fn a_wait_with_nothing_pending_returns_at_once() {
+        let mut jit = VectorJit::new();
+        let start = std::time::Instant::now();
+        jit.wait_for_pending(std::time::Duration::from_secs(30));
+        assert!(start.elapsed() < std::time::Duration::from_secs(1));
+        assert_eq!(jit.drain_ready().len(), 0);
     }
 
     #[test]

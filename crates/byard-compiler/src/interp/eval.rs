@@ -1480,6 +1480,15 @@ impl Interpreter {
         self.vector_jit.is_generating()
     }
 
+    /// Waits, up to `timeout`, for the work [`has_background_work`] reports,
+    /// so it lands on the next tick. Only a headless host calls this, to draw
+    /// the same picture on any machine (see `VectorJit::wait_for_pending`).
+    ///
+    /// [`has_background_work`]: Self::has_background_work
+    pub fn wait_for_background_work(&mut self, timeout: std::time::Duration) {
+        self.vector_jit.wait_for_pending(timeout);
+    }
+
     /// The most recently projected value of a value binding (for tests).
     #[must_use]
     pub fn binding_value(&self, s: ScopeId) -> Option<Value> {

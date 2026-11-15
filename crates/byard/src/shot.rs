@@ -295,6 +295,9 @@ impl App {
             if !replies.is_empty() {
                 let _ = interp.apply_io_results(replies);
             }
+            // A field the last frame asked for lands on this one, on any
+            // machine.
+            interp.wait_for_background_work(std::time::Duration::from_secs(30));
             interp.set_now_ms(now);
             // The first frame draws the app as it opens; each one after it
             // delivers the next step of a gesture, to whatever that frame put

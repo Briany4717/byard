@@ -10,6 +10,10 @@ Byard uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.1.0] - 2026-11-15
+
+The first release.
+
 ### Added
 
 - **The window as a value.** `window.width` and `window.height` (`Float`s, logical pixels) are readable in any expression and follow the window: `when window.width >= md { rail } else { bar }` chooses which elements are there, in the frame the window crossed the width. Beside `window.width` or `window.height` in a comparison a bare name is a breakpoint from `[theme.breakpoints]`, the names `on width >= md` takes (`UnknownBreakpoint` otherwise). A program that never writes `window` pays nothing. RFC-0067. See `crates/byard-cli/examples/window_and_roles`.
@@ -70,221 +74,10 @@ Byard uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   all of them; the `workspace` example uses each.
 - **Motion on colours and gradients (RFC-0057).** `with` after a whole gradient animates it stop by stop, a conditional of gradients is the gradient it picks, and two that cannot be blended (another `kind`, another number of stops) are `GradientShapeMismatch`. A `with` after a shape's `fill` or `stroke`, a shadow's `color` or a gradient stop now blends as a colour (it ran the packed integer as a number), and `color.alpha(x with anim..)` animates.
 
-### Changed
-
-- **The shadow presets are Material's elevations, exactly.** `"sm"` to `"2xl"` are levels 1 to 5 as Material defines them for the web: a key shadow at 30% black over an ambient one at 15% with spread. They were one shadow each, tuned by eye under linear blending; with sRGB blending (RFC-0060) Material's own numbers look as they do on Android and in a browser.
-- **Translucent colour blends in sRGB, like the design tools.** The surface, `byard shot`, `group` layers and backdrop copies are `Unorm` targets and every colour-writing shader ends in one shared `byard_out`, generated from `byard_core::color`, so a 10% white layer over `#6750A4` reads `(118, 98, 173)` as in Figma, a browser and Android, where it read `(130, 116, 176)`. Opaque colours and images are byte for byte as before; shadows, scrims, state layers, antialiased edges and text change. `blur` and `backdrop` read and write the encoded bytes, as CSS `backdrop-filter` does. A package shader (`App::shader`) still returns linear colour from `fs_main`; the engine wraps it. RFC-0060.
-- **A `list_item` with a `tap` is in the Tab order,** as a `button` is, and Space and Enter press it. A tappable row in a list no longer needs an empty `focus =>` to be reached from the keyboard; one with nothing to press stays out.
-- **`a11y_label` or `a11y_description` on a `Box`, `Row`, `Column`, `Grid`, `ZStack` or `Clip` with no role and no `tap` is an error.** Such a container is not in the accessibility tree, so the label was read by nothing; give it an `a11y_role`. RFC-0063.
-- **Tab enters a `tab_list` or `radio_group` once, at its selected member.** The group is one stop, as WAI-ARIA has it: the next Tab leaves it and the arrow keys move inside it; with nothing selected Tab enters at the first. This changes the Tab order of an app with one; it used to stop at every member. RFC-0063.
-- **`tap(e)` is an error.** A `tap` carries no value, so a name on it read as empty; the error points to `pointer_down(e)`, which has the position.
-
-- **A disabled element shows no hover or press.** `disabled: true` stopped the handlers and Tab but still let `on hover` and `on pressed` style the element, so a disabled button tinted under the pointer. It is now only `disabled`, and `on disabled+hover` (or `pressed`, `focused`, `focus_visible`, `dragging`), which could never apply, is the error `DisabledStateNeverMet`. RFC-0059.
-- **`byard check` no longer slows with the number of calls.** A view's body is lowered once for each way a call is written, and every call is still checked against the view's signature; a screen with 1000 calls of a button checks in 37 ms where it took 340. `byard shot` runs the same check first, and a gallery's now takes 46 ms of its 377.
-- **`byard shot` and `App::shot` skip the frames of an app at rest.** Once two frames in a row ask for no more (nothing animating, no timer or call in flight, no field being generated), the run goes to its last frame, the same picture; the gallery of 190 buttons takes 199 ms where it took 503, and 1000 buttons 604 ms where it took 4.6 s. `Shot::every_frame` (and `BYARD_SHOT_EVERY_FRAME` for the command) draws them all.
-- A font in `[assets.fonts]` is read straight into the shared buffer instead of being copied once more, which saves about 5 ms for the 15 MB Material Symbols.
-- Colour animations mix in OKLab with premultiplied alpha, so a fade to or from a transparent colour keeps the other end's hue instead of passing through grey.
-- **Named motion in the theme (RFC-0053).** `[theme.motion]` declares springs
-  (`spatial_fast = { stiffness = 800, damping_ratio = 0.6 }`) and durations
-  (`short_2 = 100`), and byld reads them as tokens wherever a curve goes:
-  `with t.springSpatialFast`, `anim.ease(t.durationShort2)`. `byard-base` ships Material 3
-  Expressive's six springs and sixteen durations, a package's come in with `extends`, and a
-  misspelt or misused token is a check error that names it. `anim.spring` takes
-  `damping_ratio:` (1.0 is no bounce) beside `damping:` (the coefficient), and every duration
-  position, `anim.keyframes(duration:)` included, takes a duration token.
-- **The rest of Material's colour roles in `byard-base`, and from a seed**: `surfaceContainerLowest`,
-  `surfaceContainerHighest`, `surfaceDim`, `surfaceBright`, `inverseSurface`, `inverseOnSurface`,
-  `inversePrimary`, `scrim`, `shadow`, the `primary`, `secondary` and `tertiary` fixed roles, and the
-  `tertiary` family, `surfaceVariant` and `errorContainer` the base lacked. A seed derives all of them,
-  and they are held to the same contrast pairs. The expressive corners (`cornerLgIncreased`,
-  `cornerXlIncreased`, `cornerXxl`) and an `...Emphasized` twin of every type style are in the base too.
-
-### Changed
-
-- A modal overlay's scrim is the theme's `scrim` at 32% (black unless the theme says otherwise), not
-  a constant.
-- **Variation axes on text.** `variations: (FILL: 1, wght: 500, GRAD: 0, opsz: 24)` on `Text` and `TextField` sets a variable font's axes, and an axis can move with `with` (`FILL: liked ? 1 : 0 with anim.spring()`). `wght` there is the weight; with `weight:` as well it is `VariationWeightConflict`.
-- **Icon fonts.** `[assets.fonts] symbols = { path = "..", icons = true }` declares an icon font, and `byard bundle` keeps only the glyphs for the names the program writes: four icons from Material Symbols Rounded ship as 16 KB, not 15 MB. `icons_include = [..]` lists names built at run time; without it `byard check` warns (`IconNameNotStatic`) and the font ships whole.
-- **`byard shot --hold X,Y` and `--hover X,Y`.** A held press (with `--at` for how long) and a hovering pointer, so `on pressed`, a press morph, a ripple and `on hover` can be pictured.
-
-### Changed
-
-- **`byard.lock` no longer pins a `path` dependency by checksum.** It went stale on every edit and `check` stayed green on the old one; a path package is the files on disk, so the lock lists it (`name`, `source`) and nothing more. Old locks still read. A package repository whose `gallery/` depends on `..` needs no lock diff per commit.
-- **A git dependency is cached as what `byard publish` archives**, from the same file list: the gallery, `.github` and undeclared fonts are not kept. The checksum is the same as from a path or a registry.
-- **A directory registry is written relative to the project** by `byard add --registry`, so `byard.toml` and the lock name `../registry`, not `/tmp/.../registry`; `byard get` warns when a manifest already has an absolute one. Registries served under a path, with a trailing slash, are tested end to end.
-- Stockroom's timed budget test is `#[ignore]`d in the normal run, which keeps its counter checks, and CI's budgets step runs it with `--ignored`.
-- **Composed controls** (RFC-0052). A control built from a `Box` can say what it is. Every
-  element takes `a11y_role` (23 keywords: `button`, `toggle_button`, `switch`, `checkbox`,
-  `radio`, `radio_group`, `slider`, `tab`, `tab_list`, `menu_item`, `menu`, `link`, `text_field`,
-  `progress_bar`, `list`, `list_item`, `dialog`, `alert`, `navigation`, `toolbar`, `group`,
-  `image`, `heading`), `a11y_value`, `a11y_checked`, `a11y_mixed`, `a11y_selected`,
-  `a11y_expanded` and `a11y_disabled`. A misspelt role is a check error that names the closest,
-  and a misspelt keyword written as a string (`fit: "covr"`) is one too, where it used to be
-  ignored. They reach the screen reader and `byard shot --a11y`.
-- **The keyboard on a composed control.** A `Box` with a `tap` and a role that implies focus is
-  in the Tab order, and so is one with a `focus =>`; Space and Enter press it as its role says
-  (a checkbox and a radio take Space, a link takes Enter, the rest both). The arrow keys walk
-  a `tab_list` and a `radio_group` (Home and End too in a tab list), and a radio group selects
-  as it goes.
-- **`on focus_visible`**, a style state set when focus arrived by the keyboard (Tab, Shift+Tab,
-  the arrows of a group) or into a `TextField`, and not by a pointer press. `on focused` is
-  unchanged.
-- Example `composed_controls`: a switch, a checkbox and a link made from `Box`es.
-
-### Changed
-
-- **The focus ring of `keyboard_focus` is `on focus_visible`.** A click on its buttons no longer
-  leaves a ring, a key still draws it. No built-in control had a default ring (focus draws nothing
-  by itself), so nothing else moves; an app that wants a ring for the keyboard only changes
-  `on focused` to `on focus_visible` on a `Button` or a `Box`.
-  
-- **Bindable parameters (RFC-0051).** A view can declare `bind on: Bool`, and the caller passes
-  a `var` with `Switch(bind: wifi)` (`bind name: var` when the view has several). The view reads
-  and writes the caller's `var` as its own, in a text, an action, a control's `bind:` or another
-  view's binding, with no copy and no callback between the two. A `let`, a literal, an
-  expression or a loop variable is `BindNotAVar`, and a value where a binding is declared (or the
-  reverse) is `BindArgMismatch`. `BindNotAVar` on a plain parameter now names the fix. Hover,
-  completion, the formatter and hot reload know it. See `examples/bindable_params`.
-
-### Fixed
-
-- **A redrawn region no longer keeps a line of the old picture on WARP.** The wipe before an incremental redraw ran the box shader, which drops fragments whose coverage is zero from screen-space derivatives; along the diagonal the quad's two triangles share, WARP did, and one pixel of the previous frame's ink stayed. The wipe now has its own fragment stage that writes every pixel.
-- **Variable fonts no longer need a patched swash.** swash 0.2.10 still leaks one variable font's weight into the next (dfrg/swash#149), and crates.io ignores a `[patch]`, so a published `byard` would have shipped the leak. A line with any glyph from a font that has variation axes is now drawn as custom glyphs by Byard's own rasteriser, with every axis set and the same hinting, subpixel bins and sizes as before, and `third_party/swash` is gone. A test fails when swash fixes the leak and says what to remove.
-- **`byard publish` takes an icon font.** A font declared as a table (`symbols = { path = "…", icons = true }`) stopped `publish` with "must be a string path", and the same check broke the checksum of a git dependency on such a package. A font's licence file beside it (`LICENSE…`, `OFL…`, `COPYING…`, `NOTICE…`) is now published with it, since Apache-2.0 and the OFL require it to travel with the font; it is shipped, not pinned.
-- **`autofocus` fires for an element drawn into an overlay that is already open.** It only did when the overlay opened; now it takes focus the first time it is drawn if nothing in the overlay has focus (a month grid replaced inside an open dialog).
-- **`scroll_fraction` reaches the whole header.** It was only bound for a direct child of a `ScrollView` with a literal `collapse_header: true`; `collapse_header: top != none`, and a `when` arm that passes it as an argument to a view, now work.
-- **A function can read a constant.** `fn bump(x: Int) -> Int => x + step` with a top-level `let step` (private or not) was `UnknownName`, though the guide lets a function read constants.
-- **A parameter's name no longer leaks into the next view `check` lowers.** A view with `min: Str` made `translate: (x1, 0.0)` in another view that reads its own `min: Float` fail with "expected a number".
-- **`byard shot` and `byard test` draw the same picture on any machine.** A field generated on another thread (a `path` filled through the vector atlas, an SVG icon) landed on whichever frame the worker finished by, so a slow or busy machine drew it later or not at all. A headless frame now waits for what the last one asked for, and a windowed app still never waits.
-- **`focus_in` after a press is documented, not changed.** A click on a focusable control fires `focus_in` as Tab does (a browser's `focusin`); only the `focus_visible` state tells the keyboard from the pointer. A tooltip that wants keyboard focus only has to be built on that state; an event for it would be new syntax and is written up in the reviewer notes.
-- **`byard shot` no longer draws every frame of an endless animation.** A page with a loop that never ends (a progress bar, a spinner) was drawn frame by frame up to `--at`, 17 s for a page of keyframed paths in a debug build; a loop depends only on the clock, so the frames in between are skipped when nothing else is in motion, and the picture is the same bytes (`BYARD_SHOT_EVERY_FRAME=1` compares).
-- **More than eight `anim.keyframes` stops is `TooManyKeyframes` everywhere.** In a path body (`line(anim.keyframes(…), y)`) or a shape argument the sequence was not checked and drew flat; the error now comes from there too.
-- **A path inside a `Clip` is drawn, and cut at the clip.** A filled or stroked `Canvas` path ignored the content clip it was in (a `Clip`, a `ScrollView`), so it showed past the edge, and next to a clipped shape it could vanish. See `crates/byard-cli/examples/path_in_clip`.
-- **A drag over a `tap` scrolls inside a focusable ancestor.** `Box #[focus => {}, key_down(k) => …] { ScrollView { Box #[tap => …] } }` took every press on the inner box for a tap, because something around it could take focus; only a focusable that is itself the tapping element keeps the press now.
-- **A modal overlay's scrim fades with its content.** It appeared and went at once while the dialog faded; it now follows the opacity of the overlay's first element, so `on enter { opacity: 0.0 }` and `on leave` fade both.
-- **`on enter` waits out a delayed `with`.** `opacity: 1.0 with anim.ease(150ms, delay: 2s)` and `on enter { opacity: 0.0 }` showed the element at once; the move off the `on enter` values counted as a retarget, which cancels a delay. A `with` inside `on leave` already gave the way out its own speed; the guide says so.
-- **The first `on measure` of an element lands without motion.** A value it wrote (a tab indicator's width and position, a line's length) used to spring from its starting 0 on the first frame; now the first measurement is drawn where it is, and later changes, and any other change on that frame, move as before. Only an animation whose value reads what the first measure wrote starts from it.
-- **`a11y_described_by` reaches a bare `Text`, and a name tagged inside a `when`.** `Text("…") as tip` gave the reader nothing to point at, and an `as` in a `when` branch was `UnknownStateTarget` for an attribute outside it; it now describes while the branch is shown.
-- **`none` in a `?:` arm is none.** `provide C(color: on ? 0xFF0000 : none)` and `Pill(color: on ? red : none)` gave a `Color?` the text "none", which `!= none` took as present and drew as colour 0.
-- **`after` and `every` run in `byard shot` and `byard test`.** They followed the app clock only in `App::shot`; the command line never armed them, so a snackbar's timeout or a ticking clock stayed where it started however long a `--wait`, `--at` or `wait` step was. Skipping idle frames stops at the next timer, so it fires on the frame it is due.
-- **A `let` inside an element's braces is `LetInElementBody`.** It was ignored, and the first thing said was an unrelated `AttributeTypeMismatch` where its name was used. A `let` goes at the top of the view or inside a `when` or `for`.
-- **A `ZStack` places a child on both axes.** `alignment` (`center`, `top_end`, `bottom_start`, …) had no horizontal effect when every child was narrower than the stack, which packed its one column at the start: the column is now the whole stack.
-- **A `Clip` lays out its children at their own size at every width,** not only at 0: they are stretched to it only if they ask (`align_self: stretch`). A label sliding open in a clip is no longer measured at the width it has reached.
-- **`long_press` fires while the press is held,** after about half a second, and not only on release, so a held press in `byard shot` or `byard test` fires it. A `long_press` on a wrapper fires over a child that takes the tap.
-- **`after` and `every` follow the app clock in `byard shot` and `byard test`,** so a timeout can be tested with a `wait`.
-- **A press on a child that taps, inside a `ScrollView`, scrolls it** once it travels past the tap slop, and the tap is cancelled; a child with its own `drag` or `change` keeps the gesture.
-- **A `ScrollView` culls a child by where it is drawn,** its own `translate`, `scale` and `rotate` included, not by its layout rect.
-- **`dismiss =>` on an anchored panel runs in the scope of the view it is written in.** An action that wrote a `var` or a binding of its view (a docked search view's `expanded`) did nothing.
-- **A press lands where the element is drawn.** An element's own `translate` carried its children's targets with it but not its own, so a box moved 100 to the right was still pressed where it was laid out. Its own `scale` and `rotate` still leave its target alone, so a hover that scales it does not move its own edge. Found by Byard Material's slider handle.
-- **A `ZStack` child that stretches and has a `height` or a `width` of its own** (`align_self: stretch`, `grow`) now sits where `alignment` puts it along that axis, not at the start: a 1 high rule across a `bottom_start` stack is at the bottom.
-- **`a11y_label` on an `Overlay` reads the view it is written in.** `a11y_label: headline` named the dialog `headline`, the word, when `headline` was a parameter.
-- **An explicit `height` on the header of a `collapse_header` `ScrollView`** is kept: the header no longer shrinks when the content below is taller than the view.
-- **`byard test` and `shot --key` know `PageUp`, `PageDown` and `Insert`** (`Home` and `End` were there), and a key they do not know is an error that lists the ones they do.
-- **A slot inside `when`, `else` and `for`.** `content` placed in a branch of a `when`, or in a `for` body, was "unknown view `content`"; it is spliced there as anywhere else, to any depth of nesting, and a slot placed in each row of a `for` is a set of elements of its own in every row. RFC-0062.
-- **A `let` in a `for` or `when` body** is defined where it is written. It was dropped, so a length it fed was "expected a length" (or, on `width`, silently the default size).
-- **A `pointer_down`, `key_down` or `change` written on a built-in `Slider` never ran**, and neither did its `tap`, `hover` or any other event. They run now, before the slider's own handling; `Toggle`, `Checkbox` and `RadioButton` had the same gap and the same fix. A `pointer_down(e)` on any element inside a `ScrollView` reads `e.x` and `e.y` from the element as drawn.
-
-- **`typo:` chosen with `?:` keeps its font family and weight.** `typo: big ? t.titleLarge : t.labelLarge` drew in the default face at regular weight, with the right size.
-- **A `Box` with a `border` and no `bg` draws its border.** It drew nothing.
-- **A `ZStack` child with `grow: 1` or `align_self: stretch` fills the stack.** It came out a pixel wide.
-- Saving a file no longer reloads an empty program first: a save that truncates the file before writing it is read once, after the writing has stopped.
-- **Text reads the parameters of its view.** `Text("Aa") #[size: dim]` in a view with a
-  `dim` parameter drew at the default size, and so did `weight`, `color`, `wrap` and `typo`
-  when they named a parameter, a `let` or a `var` of the view. They now use the value of
-  each call, and follow it when it changes. A `Float` works as a `size`, and `weight: w`
-  with `w` a number no longer fails `byard check`.
-- **`Image` and `VectorIcon` read the parameters of their view too.** `width`, `height`,
-  `opacity`, `size` and `color` written as a parameter used the default; they now use the
-  value of each call.
-- **`lines:` on a `Text` is an error.** It was accepted and did nothing, so a text meant to
-  stop at two lines ran on. `byard check` now says the attribute is unknown.
-- **A view with motion can be used twice on one screen.** Every call of a view shared the
-  animation of each `with` inside it, so `Pill(round: true) Pill(round: false) Pill(round: true)`
-  drew all three like the last (springs, curves, keyframes, staggers, loops, `on hover` changes and
-  `morph:` alike). Each call now animates on its own, including inside an `Overlay`, and one that
-  goes away starts over when it comes back.
-- **A package can declare a view named like a built-in.** `View Button` in a package made
-  its own `byard check` fail with `IntrinsicShadowed`, though an app would write `m.Button`.
-  Now the package checks clean: a bare `Button` is still the built-in, the package's is
-  `m.Button` outside and `package.Button` inside, and `use package.{Button}` says to write the
-  qualified name. An app declaring such a view is still an error. The editor completes,
-  hovers and jumps to the qualified name.
-- **An action on a view call is an error, not silently dropped.** `Card("x") => count++`
-  and `Card("x") #[tap => count++]` checked clean and did nothing on a tap. `byard check`
-  now says the view takes no trailing action and names the `Fn()` parameter to pass it to.
-- **`byard shot` no longer draws a program `byard check` rejects.** It runs the same check
-  first, prints the errors the same way, exits non-zero and writes no PNG.
-- **An unknown key in `byard.toml` is an error.** `[theme.motion]`, a misspelt `[package]` or
-  `[project]` key, an unknown `[theme.color]` scheme or a stray top-level table now name the key
-  and suggest the closest one, instead of being accepted or only warned about.
-- **Using a package's views without its theme says what to add.** A token only the package's theme
-  declares now reads "`surfaceContainerHighest` is declared by package `material`'s theme; add
-  `[theme] extends = "material"`, or declare it yourself" (or, if the theme already extends
-  another package, to declare it or extend that one instead).
-- **`byard publish` runs `byard check` first** and publishes nothing when the package has errors.
-
-- **A lambda sees its own item.** A `fn` called with the item inside a list
-  lambda (`products.filter(p => isLow(p.qty))`) was computed once, for the
-  first item, and gave every item the same answer. A lambda inside another
-  (`cats.map(c => products.filter(p => p.cat == c))`) could not read the outer
-  item. Both now give the right result.
-- **A callback you pass to a view runs in your scope, as the guide says.** The braces
-  used to be read in the view that ran them, so a parameter, `let` or `var` of the same
-  name there made a write do nothing, or sent `byard check` into a stack overflow. They
-  now read and write the names visible where you wrote them.
-- **An argument you pass to an action is read once.** `on_x(items[0])` gave the callback
-  the value of `items[0]` every time its braces read the parameter, so a write earlier in
-  the braces (`xs = xs.filter(...)`) changed what `id` meant on the next line. The same held
-  for a `let` action and a `fn` called with an argument. The value is now taken when the
-  call runs.
-- **A modal overlay is a dialog you can use.** A press on its panel, a `Text` or a
-  `TextField` in it no longer runs `dismiss`; only a press outside the content
-  does, and a press on a field focuses it. The page under the overlay is dimmed by
-  a scrim (black at 32%, or `scrim: <colour>`), as the guide said it was. A press
-  no longer reaches a `tap` on an element under the one pressed, so `tap => {}` on
-  a panel is not needed and a panel's `tap` is not run by a field inside it. A
-  `TextField`'s placeholder, and a value longer than the field, stop at its edge.
-- **A `TextField` keeps its focus when something before it appears or goes.** A
-  message that showed above a field as you typed (a `when` before it in the
-  same parent, or inside a view placed before it) took the keyboard with it, so
-  typing went dead after the first character. Focus, the caret, the selection
-  and the undo history now follow the field itself, as its state does, whatever
-  a `when` or a `for` before it adds or removes. A focused field that is
-  removed lets go of its `focused:` var.
-- **An element keeps what the engine holds for it when something before it
-  appears or goes.** A message that showed above a `TextField` as you typed (a
-  `when` before it in the same parent, or inside a view placed before it) took
-  the keyboard with it, so typing went dead after the first character. Focus,
-  the caret, the selection and the undo history now follow the field itself, as
-  its state does, whatever a `when` or a `for` before it adds or removes. The
-  same holds for a press in flight, the element under the pointer (`on hover`)
-  and a `ScrollView`'s `end_reached`, which fired again when a `when` before the
-  view opened. A focused field that is removed lets go of its `focused:` var.
-### Added
-
 - **`Text` takes the layout attributes of an element in a `Row` or `Column`.**
   `Text("x") #[grow: 1]`, `height`, `p` and its sides, and the margins
   used to be `unknown attribute`, or in the case of `m`, accepted and ignored.
   A `Text` that writes none of them is laid out exactly as before.
-
-### Fixed
-
-- **A change to only a container's minimum size is laid out again.** A `Button`'s
-  touch floor (and any `min_width`/`min_height`) was left out of what decides
-  whether a container changed, so a frame that moved nothing else kept last
-  frame's geometry.
-
-- **A windowed `ScrollView` fills the space it is given.** With `grow: 1` and no
-  `height` it built only a handful of rows and left the rest of the view blank,
-  and a growing one asked its parent for the height of its whole list. It now
-  shows every row that fits and takes only what is left. A `ScrollView` that
-  scrolls sideways is laid out whole instead of being windowed.
-
-- **`Text #[width: N, wrap: false]` is `N` wide.** It was as wide as its text.
-  A single line that is wider than its `width` is clipped at the edge of it, so
-  the cells of a table stay in their columns.
-- **`byard check` looks inside what is not shown at the start.** A tab that is not the active one, a route the first path does not match, both arms of a `when` and the body of a `for` over an empty list were not checked, so an unknown view or attribute in them said `0 errors` until somebody opened them. They are now, in `byard check` and in the editor.
-### Added
 
 - **Numbers from text.** `"12".toInt()` and `"4.5".toFloat()` read a field's text
   as a number, or as nothing when it is not one, so `qty.toInt() ?? 0` is the
@@ -293,7 +86,6 @@ Byard uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   `abs()`, `min(other)` and `max(other)`, and `{x:,.2}` in a string puts a comma
   between thousands (`193,440.70`). A method a number does not have is now
   `UnknownMethod`, with the closest name. RFC-0048.
-### Added
 
 - **`now()` and `nowUtc()` read the clock.** They answer the local time, or UTC, as
   ISO text with seconds (`2026-11-05T14:03:12`), straight away, with no controller
@@ -306,7 +98,6 @@ Byard uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 - **`Shot::now` fixes the clock in a Rust app's shot.** `App::shot` with
   `Shot::after(1000).now("2026-11-05T09:00:00")` draws `now()` at that time, as
   `byard shot --now` does for a project without a Rust half.
-### Added
 
 - **`basis` works on a `Box`, `Row`, `Column`, `Button`, `ScrollView`, `Grid`,
   `ZStack` and `Clip`.** It was accepted on them and ignored. It is the size a
@@ -316,65 +107,10 @@ Byard uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   `a || (b ? x : y)`, which is rarely what was meant. `byard check` says so and
   suggests the parentheses; the precedence itself is unchanged.
 
-### Changed
-
-- **`basis` on an element it cannot affect is an unknown attribute.** `Image`,
-  `Canvas`, `TextField`, `Toggle`, `Slider`, `Checkbox`, `RadioButton`
-  and `VectorIcon` laid themselves out from their own size and ignored it.
-
-### Fixed
-
-- **`TextField #[bind: value]` on a view parameter did nothing, and `check` said
-  nothing.** A parameter is a copy of what the caller passed, so a control
-  cannot write it. `bind:` and `value:` on a control now have to name a `var`: a
-  parameter, a `let`, a loop variable or a literal is an error, and the one for a
-  parameter shows how to pass the value down and the edits back up.
-
-- **A `Bool` given to a `Str` parameter drew `Bool(false)`.** Arguments to a view
-  are now checked against the parameter's declared type (an `Int` may go where a
-  `Float` is wanted), and a value that is not text is drawn as interpolation
-  writes it, `false`, never as its Rust debug form.
-
-- **A keyword used as a name gave dozens of errors, none about the name.**
-  `fn when(at: Str) -> Str => at` is now one error at `when`, and so is a keyword
-  naming a view, a type, a parameter, a `var`, a `let`, an `inject` or a record
-  field. Any other stray token between top-level items is also one error, not one
-  per token that follows it.
-### Added
-
 - **`byard::data_dir(app_id)`.** The directory where an app's data lives, the
   one `Store` writes in, so a controller can put a file beside the store
   without rebuilding the platform path by hand. The guide's controllers
   chapter shows it.
-
-### Changed
-
-- **A method is camelCase in Byld, wherever it comes from.** A controller's
-  `fn export_csv` is now `room.exportCsv(...)`, and the animation curves
-  `anim.ease_in`, `anim.ease_out` and `anim.ease_in_out` are now
-  `anim.easeIn`, `anim.easeOut` and `anim.easeInOut`, and so is the easing word
-  on a keyframe step (`60%: 100 easeOut`). An app must rename those
-  in its `.byd` files: the old spelling is an error that names the new
-  one. The Rust names do not change, `#[byard(rename = "...")]` on a controller
-  method sets another name, and attributes, events and record fields keep the
-  names they were given.
-
-### Fixed
-
-- **`App::app_id` and `without_default_capabilities` no longer discard the
-  controllers provided before them.** `App::new(dir).provide(room).app_id("x")`
-  failed at start with `no ambient Stockroom`; the chain now means the same in
-  any order.
-
-- **`Text` takes `basis`.** `Text("x") #[grow: 1, basis: 0]` starts from nothing and
-  gets an equal share, so the cells of a table line up whatever they say. Without
-  it a `grow` text starts from its words, as a `Box` does.
-
-## [0.1.0] - 2026-11-05
-
-The first release.
-
-### Added
 
 - **`cargo install byard` installs the `byard` command.** The command used to
   be the `byard-cli` crate's binary, installed from a clone with `cargo install
@@ -1044,6 +780,88 @@ The first release.
 
 ### Changed
 
+- **The shadow presets are Material's elevations, exactly.** `"sm"` to `"2xl"` are levels 1 to 5 as Material defines them for the web: a key shadow at 30% black over an ambient one at 15% with spread. They were one shadow each, tuned by eye under linear blending; with sRGB blending (RFC-0060) Material's own numbers look as they do on Android and in a browser.
+- **Translucent colour blends in sRGB, like the design tools.** The surface, `byard shot`, `group` layers and backdrop copies are `Unorm` targets and every colour-writing shader ends in one shared `byard_out`, generated from `byard_core::color`, so a 10% white layer over `#6750A4` reads `(118, 98, 173)` as in Figma, a browser and Android, where it read `(130, 116, 176)`. Opaque colours and images are byte for byte as before; shadows, scrims, state layers, antialiased edges and text change. `blur` and `backdrop` read and write the encoded bytes, as CSS `backdrop-filter` does. A package shader (`App::shader`) still returns linear colour from `fs_main`; the engine wraps it. RFC-0060.
+- **A `list_item` with a `tap` is in the Tab order,** as a `button` is, and Space and Enter press it. A tappable row in a list no longer needs an empty `focus =>` to be reached from the keyboard; one with nothing to press stays out.
+- **`a11y_label` or `a11y_description` on a `Box`, `Row`, `Column`, `Grid`, `ZStack` or `Clip` with no role and no `tap` is an error.** Such a container is not in the accessibility tree, so the label was read by nothing; give it an `a11y_role`. RFC-0063.
+- **Tab enters a `tab_list` or `radio_group` once, at its selected member.** The group is one stop, as WAI-ARIA has it: the next Tab leaves it and the arrow keys move inside it; with nothing selected Tab enters at the first. This changes the Tab order of an app with one; it used to stop at every member. RFC-0063.
+- **`tap(e)` is an error.** A `tap` carries no value, so a name on it read as empty; the error points to `pointer_down(e)`, which has the position.
+
+- **A disabled element shows no hover or press.** `disabled: true` stopped the handlers and Tab but still let `on hover` and `on pressed` style the element, so a disabled button tinted under the pointer. It is now only `disabled`, and `on disabled+hover` (or `pressed`, `focused`, `focus_visible`, `dragging`), which could never apply, is the error `DisabledStateNeverMet`. RFC-0059.
+- **`byard check` no longer slows with the number of calls.** A view's body is lowered once for each way a call is written, and every call is still checked against the view's signature; a screen with 1000 calls of a button checks in 37 ms where it took 340. `byard shot` runs the same check first, and a gallery's now takes 46 ms of its 377.
+- **`byard shot` and `App::shot` skip the frames of an app at rest.** Once two frames in a row ask for no more (nothing animating, no timer or call in flight, no field being generated), the run goes to its last frame, the same picture; the gallery of 190 buttons takes 199 ms where it took 503, and 1000 buttons 604 ms where it took 4.6 s. `Shot::every_frame` (and `BYARD_SHOT_EVERY_FRAME` for the command) draws them all.
+- A font in `[assets.fonts]` is read straight into the shared buffer instead of being copied once more, which saves about 5 ms for the 15 MB Material Symbols.
+- Colour animations mix in OKLab with premultiplied alpha, so a fade to or from a transparent colour keeps the other end's hue instead of passing through grey.
+- **Named motion in the theme (RFC-0053).** `[theme.motion]` declares springs
+  (`spatial_fast = { stiffness = 800, damping_ratio = 0.6 }`) and durations
+  (`short_2 = 100`), and byld reads them as tokens wherever a curve goes:
+  `with t.springSpatialFast`, `anim.ease(t.durationShort2)`. `byard-base` ships Material 3
+  Expressive's six springs and sixteen durations, a package's come in with `extends`, and a
+  misspelt or misused token is a check error that names it. `anim.spring` takes
+  `damping_ratio:` (1.0 is no bounce) beside `damping:` (the coefficient), and every duration
+  position, `anim.keyframes(duration:)` included, takes a duration token.
+- **The rest of Material's colour roles in `byard-base`, and from a seed**: `surfaceContainerLowest`,
+  `surfaceContainerHighest`, `surfaceDim`, `surfaceBright`, `inverseSurface`, `inverseOnSurface`,
+  `inversePrimary`, `scrim`, `shadow`, the `primary`, `secondary` and `tertiary` fixed roles, and the
+  `tertiary` family, `surfaceVariant` and `errorContainer` the base lacked. A seed derives all of them,
+  and they are held to the same contrast pairs. The expressive corners (`cornerLgIncreased`,
+  `cornerXlIncreased`, `cornerXxl`) and an `...Emphasized` twin of every type style are in the base too.
+
+- A modal overlay's scrim is the theme's `scrim` at 32% (black unless the theme says otherwise), not
+  a constant.
+- **Variation axes on text.** `variations: (FILL: 1, wght: 500, GRAD: 0, opsz: 24)` on `Text` and `TextField` sets a variable font's axes, and an axis can move with `with` (`FILL: liked ? 1 : 0 with anim.spring()`). `wght` there is the weight; with `weight:` as well it is `VariationWeightConflict`.
+- **Icon fonts.** `[assets.fonts] symbols = { path = "..", icons = true }` declares an icon font, and `byard bundle` keeps only the glyphs for the names the program writes: four icons from Material Symbols Rounded ship as 16 KB, not 15 MB. `icons_include = [..]` lists names built at run time; without it `byard check` warns (`IconNameNotStatic`) and the font ships whole.
+- **`byard shot --hold X,Y` and `--hover X,Y`.** A held press (with `--at` for how long) and a hovering pointer, so `on pressed`, a press morph, a ripple and `on hover` can be pictured.
+
+- **`byard.lock` no longer pins a `path` dependency by checksum.** It went stale on every edit and `check` stayed green on the old one; a path package is the files on disk, so the lock lists it (`name`, `source`) and nothing more. Old locks still read. A package repository whose `gallery/` depends on `..` needs no lock diff per commit.
+- **A git dependency is cached as what `byard publish` archives**, from the same file list: the gallery, `.github` and undeclared fonts are not kept. The checksum is the same as from a path or a registry.
+- **A directory registry is written relative to the project** by `byard add --registry`, so `byard.toml` and the lock name `../registry`, not `/tmp/.../registry`; `byard get` warns when a manifest already has an absolute one. Registries served under a path, with a trailing slash, are tested end to end.
+- Stockroom's timed budget test is `#[ignore]`d in the normal run, which keeps its counter checks, and CI's budgets step runs it with `--ignored`.
+- **Composed controls** (RFC-0052). A control built from a `Box` can say what it is. Every
+  element takes `a11y_role` (23 keywords: `button`, `toggle_button`, `switch`, `checkbox`,
+  `radio`, `radio_group`, `slider`, `tab`, `tab_list`, `menu_item`, `menu`, `link`, `text_field`,
+  `progress_bar`, `list`, `list_item`, `dialog`, `alert`, `navigation`, `toolbar`, `group`,
+  `image`, `heading`), `a11y_value`, `a11y_checked`, `a11y_mixed`, `a11y_selected`,
+  `a11y_expanded` and `a11y_disabled`. A misspelt role is a check error that names the closest,
+  and a misspelt keyword written as a string (`fit: "covr"`) is one too, where it used to be
+  ignored. They reach the screen reader and `byard shot --a11y`.
+- **The keyboard on a composed control.** A `Box` with a `tap` and a role that implies focus is
+  in the Tab order, and so is one with a `focus =>`; Space and Enter press it as its role says
+  (a checkbox and a radio take Space, a link takes Enter, the rest both). The arrow keys walk
+  a `tab_list` and a `radio_group` (Home and End too in a tab list), and a radio group selects
+  as it goes.
+- **`on focus_visible`**, a style state set when focus arrived by the keyboard (Tab, Shift+Tab,
+  the arrows of a group) or into a `TextField`, and not by a pointer press. `on focused` is
+  unchanged.
+- Example `composed_controls`: a switch, a checkbox and a link made from `Box`es.
+
+- **The focus ring of `keyboard_focus` is `on focus_visible`.** A click on its buttons no longer
+  leaves a ring, a key still draws it. No built-in control had a default ring (focus draws nothing
+  by itself), so nothing else moves; an app that wants a ring for the keyboard only changes
+  `on focused` to `on focus_visible` on a `Button` or a `Box`.
+  
+- **Bindable parameters (RFC-0051).** A view can declare `bind on: Bool`, and the caller passes
+  a `var` with `Switch(bind: wifi)` (`bind name: var` when the view has several). The view reads
+  and writes the caller's `var` as its own, in a text, an action, a control's `bind:` or another
+  view's binding, with no copy and no callback between the two. A `let`, a literal, an
+  expression or a loop variable is `BindNotAVar`, and a value where a binding is declared (or the
+  reverse) is `BindArgMismatch`. `BindNotAVar` on a plain parameter now names the fix. Hover,
+  completion, the formatter and hot reload know it. See `examples/bindable_params`.
+
+- **`basis` on an element it cannot affect is an unknown attribute.** `Image`,
+  `Canvas`, `TextField`, `Toggle`, `Slider`, `Checkbox`, `RadioButton`
+  and `VectorIcon` laid themselves out from their own size and ignored it.
+
+- **A method is camelCase in Byld, wherever it comes from.** A controller's
+  `fn export_csv` is now `room.exportCsv(...)`, and the animation curves
+  `anim.ease_in`, `anim.ease_out` and `anim.ease_in_out` are now
+  `anim.easeIn`, `anim.easeOut` and `anim.easeInOut`, and so is the easing word
+  on a keyframe step (`60%: 100 easeOut`). An app must rename those
+  in its `.byd` files: the old spelling is an error that names the new
+  one. The Rust names do not change, `#[byard(rename = "...")]` on a controller
+  method sets another name, and attributes, events and record fields keep the
+  names they were given.
+
 - **Images stop piling up in video memory.** The texture cache kept every
   decoded image for the life of the app, so a gallery, a feed or a list of
   avatars grew VRAM without a limit. It now holds up to 128 MiB of decoded
@@ -1627,6 +1445,161 @@ The first release.
   `text::TextSizer` trait.
 
 ### Fixed
+
+- **A redrawn region no longer keeps a line of the old picture on WARP.** The wipe before an incremental redraw ran the box shader, which drops fragments whose coverage is zero from screen-space derivatives; along the diagonal the quad's two triangles share, WARP did, and one pixel of the previous frame's ink stayed. The wipe now has its own fragment stage that writes every pixel.
+- **Variable fonts no longer need a patched swash.** swash 0.2.10 still leaks one variable font's weight into the next (dfrg/swash#149), and crates.io ignores a `[patch]`, so a published `byard` would have shipped the leak. A line with any glyph from a font that has variation axes is now drawn as custom glyphs by Byard's own rasteriser, with every axis set and the same hinting, subpixel bins and sizes as before, and `third_party/swash` is gone. A test fails when swash fixes the leak and says what to remove.
+- **`byard publish` takes an icon font.** A font declared as a table (`symbols = { path = "…", icons = true }`) stopped `publish` with "must be a string path", and the same check broke the checksum of a git dependency on such a package. A font's licence file beside it (`LICENSE…`, `OFL…`, `COPYING…`, `NOTICE…`) is now published with it, since Apache-2.0 and the OFL require it to travel with the font; it is shipped, not pinned.
+- **`autofocus` fires for an element drawn into an overlay that is already open.** It only did when the overlay opened; now it takes focus the first time it is drawn if nothing in the overlay has focus (a month grid replaced inside an open dialog).
+- **`scroll_fraction` reaches the whole header.** It was only bound for a direct child of a `ScrollView` with a literal `collapse_header: true`; `collapse_header: top != none`, and a `when` arm that passes it as an argument to a view, now work.
+- **A function can read a constant.** `fn bump(x: Int) -> Int => x + step` with a top-level `let step` (private or not) was `UnknownName`, though the guide lets a function read constants.
+- **A parameter's name no longer leaks into the next view `check` lowers.** A view with `min: Str` made `translate: (x1, 0.0)` in another view that reads its own `min: Float` fail with "expected a number".
+- **`byard shot` and `byard test` draw the same picture on any machine.** A field generated on another thread (a `path` filled through the vector atlas, an SVG icon) landed on whichever frame the worker finished by, so a slow or busy machine drew it later or not at all. A headless frame now waits for what the last one asked for, and a windowed app still never waits.
+- **`focus_in` after a press is documented, not changed.** A click on a focusable control fires `focus_in` as Tab does (a browser's `focusin`); only the `focus_visible` state tells the keyboard from the pointer. A tooltip that wants keyboard focus only has to be built on that state; an event for it would be new syntax and is written up in the reviewer notes.
+- **`byard shot` no longer draws every frame of an endless animation.** A page with a loop that never ends (a progress bar, a spinner) was drawn frame by frame up to `--at`, 17 s for a page of keyframed paths in a debug build; a loop depends only on the clock, so the frames in between are skipped when nothing else is in motion, and the picture is the same bytes (`BYARD_SHOT_EVERY_FRAME=1` compares).
+- **More than eight `anim.keyframes` stops is `TooManyKeyframes` everywhere.** In a path body (`line(anim.keyframes(…), y)`) or a shape argument the sequence was not checked and drew flat; the error now comes from there too.
+- **A path inside a `Clip` is drawn, and cut at the clip.** A filled or stroked `Canvas` path ignored the content clip it was in (a `Clip`, a `ScrollView`), so it showed past the edge, and next to a clipped shape it could vanish. See `crates/byard-cli/examples/path_in_clip`.
+- **A drag over a `tap` scrolls inside a focusable ancestor.** `Box #[focus => {}, key_down(k) => …] { ScrollView { Box #[tap => …] } }` took every press on the inner box for a tap, because something around it could take focus; only a focusable that is itself the tapping element keeps the press now.
+- **A modal overlay's scrim fades with its content.** It appeared and went at once while the dialog faded; it now follows the opacity of the overlay's first element, so `on enter { opacity: 0.0 }` and `on leave` fade both.
+- **`on enter` waits out a delayed `with`.** `opacity: 1.0 with anim.ease(150ms, delay: 2s)` and `on enter { opacity: 0.0 }` showed the element at once; the move off the `on enter` values counted as a retarget, which cancels a delay. A `with` inside `on leave` already gave the way out its own speed; the guide says so.
+- **The first `on measure` of an element lands without motion.** A value it wrote (a tab indicator's width and position, a line's length) used to spring from its starting 0 on the first frame; now the first measurement is drawn where it is, and later changes, and any other change on that frame, move as before. Only an animation whose value reads what the first measure wrote starts from it.
+- **`a11y_described_by` reaches a bare `Text`, and a name tagged inside a `when`.** `Text("…") as tip` gave the reader nothing to point at, and an `as` in a `when` branch was `UnknownStateTarget` for an attribute outside it; it now describes while the branch is shown.
+- **`none` in a `?:` arm is none.** `provide C(color: on ? 0xFF0000 : none)` and `Pill(color: on ? red : none)` gave a `Color?` the text "none", which `!= none` took as present and drew as colour 0.
+- **`after` and `every` run in `byard shot` and `byard test`.** They followed the app clock only in `App::shot`; the command line never armed them, so a snackbar's timeout or a ticking clock stayed where it started however long a `--wait`, `--at` or `wait` step was. Skipping idle frames stops at the next timer, so it fires on the frame it is due.
+- **A `let` inside an element's braces is `LetInElementBody`.** It was ignored, and the first thing said was an unrelated `AttributeTypeMismatch` where its name was used. A `let` goes at the top of the view or inside a `when` or `for`.
+- **A `ZStack` places a child on both axes.** `alignment` (`center`, `top_end`, `bottom_start`, …) had no horizontal effect when every child was narrower than the stack, which packed its one column at the start: the column is now the whole stack.
+- **A `Clip` lays out its children at their own size at every width,** not only at 0: they are stretched to it only if they ask (`align_self: stretch`). A label sliding open in a clip is no longer measured at the width it has reached.
+- **`long_press` fires while the press is held,** after about half a second, and not only on release, so a held press in `byard shot` or `byard test` fires it. A `long_press` on a wrapper fires over a child that takes the tap.
+- **`after` and `every` follow the app clock in `byard shot` and `byard test`,** so a timeout can be tested with a `wait`.
+- **A press on a child that taps, inside a `ScrollView`, scrolls it** once it travels past the tap slop, and the tap is cancelled; a child with its own `drag` or `change` keeps the gesture.
+- **A `ScrollView` culls a child by where it is drawn,** its own `translate`, `scale` and `rotate` included, not by its layout rect.
+- **`dismiss =>` on an anchored panel runs in the scope of the view it is written in.** An action that wrote a `var` or a binding of its view (a docked search view's `expanded`) did nothing.
+- **A press lands where the element is drawn.** An element's own `translate` carried its children's targets with it but not its own, so a box moved 100 to the right was still pressed where it was laid out. Its own `scale` and `rotate` still leave its target alone, so a hover that scales it does not move its own edge. Found by Byard Material's slider handle.
+- **A `ZStack` child that stretches and has a `height` or a `width` of its own** (`align_self: stretch`, `grow`) now sits where `alignment` puts it along that axis, not at the start: a 1 high rule across a `bottom_start` stack is at the bottom.
+- **`a11y_label` on an `Overlay` reads the view it is written in.** `a11y_label: headline` named the dialog `headline`, the word, when `headline` was a parameter.
+- **An explicit `height` on the header of a `collapse_header` `ScrollView`** is kept: the header no longer shrinks when the content below is taller than the view.
+- **`byard test` and `shot --key` know `PageUp`, `PageDown` and `Insert`** (`Home` and `End` were there), and a key they do not know is an error that lists the ones they do.
+- **A slot inside `when`, `else` and `for`.** `content` placed in a branch of a `when`, or in a `for` body, was "unknown view `content`"; it is spliced there as anywhere else, to any depth of nesting, and a slot placed in each row of a `for` is a set of elements of its own in every row. RFC-0062.
+- **A `let` in a `for` or `when` body** is defined where it is written. It was dropped, so a length it fed was "expected a length" (or, on `width`, silently the default size).
+- **A `pointer_down`, `key_down` or `change` written on a built-in `Slider` never ran**, and neither did its `tap`, `hover` or any other event. They run now, before the slider's own handling; `Toggle`, `Checkbox` and `RadioButton` had the same gap and the same fix. A `pointer_down(e)` on any element inside a `ScrollView` reads `e.x` and `e.y` from the element as drawn.
+
+- **`typo:` chosen with `?:` keeps its font family and weight.** `typo: big ? t.titleLarge : t.labelLarge` drew in the default face at regular weight, with the right size.
+- **A `Box` with a `border` and no `bg` draws its border.** It drew nothing.
+- **A `ZStack` child with `grow: 1` or `align_self: stretch` fills the stack.** It came out a pixel wide.
+- Saving a file no longer reloads an empty program first: a save that truncates the file before writing it is read once, after the writing has stopped.
+- **Text reads the parameters of its view.** `Text("Aa") #[size: dim]` in a view with a
+  `dim` parameter drew at the default size, and so did `weight`, `color`, `wrap` and `typo`
+  when they named a parameter, a `let` or a `var` of the view. They now use the value of
+  each call, and follow it when it changes. A `Float` works as a `size`, and `weight: w`
+  with `w` a number no longer fails `byard check`.
+- **`Image` and `VectorIcon` read the parameters of their view too.** `width`, `height`,
+  `opacity`, `size` and `color` written as a parameter used the default; they now use the
+  value of each call.
+- **`lines:` on a `Text` is an error.** It was accepted and did nothing, so a text meant to
+  stop at two lines ran on. `byard check` now says the attribute is unknown.
+- **A view with motion can be used twice on one screen.** Every call of a view shared the
+  animation of each `with` inside it, so `Pill(round: true) Pill(round: false) Pill(round: true)`
+  drew all three like the last (springs, curves, keyframes, staggers, loops, `on hover` changes and
+  `morph:` alike). Each call now animates on its own, including inside an `Overlay`, and one that
+  goes away starts over when it comes back.
+- **A package can declare a view named like a built-in.** `View Button` in a package made
+  its own `byard check` fail with `IntrinsicShadowed`, though an app would write `m.Button`.
+  Now the package checks clean: a bare `Button` is still the built-in, the package's is
+  `m.Button` outside and `package.Button` inside, and `use package.{Button}` says to write the
+  qualified name. An app declaring such a view is still an error. The editor completes,
+  hovers and jumps to the qualified name.
+- **An action on a view call is an error, not silently dropped.** `Card("x") => count++`
+  and `Card("x") #[tap => count++]` checked clean and did nothing on a tap. `byard check`
+  now says the view takes no trailing action and names the `Fn()` parameter to pass it to.
+- **`byard shot` no longer draws a program `byard check` rejects.** It runs the same check
+  first, prints the errors the same way, exits non-zero and writes no PNG.
+- **An unknown key in `byard.toml` is an error.** `[theme.motion]`, a misspelt `[package]` or
+  `[project]` key, an unknown `[theme.color]` scheme or a stray top-level table now name the key
+  and suggest the closest one, instead of being accepted or only warned about.
+- **Using a package's views without its theme says what to add.** A token only the package's theme
+  declares now reads "`surfaceContainerHighest` is declared by package `material`'s theme; add
+  `[theme] extends = "material"`, or declare it yourself" (or, if the theme already extends
+  another package, to declare it or extend that one instead).
+- **`byard publish` runs `byard check` first** and publishes nothing when the package has errors.
+
+- **A lambda sees its own item.** A `fn` called with the item inside a list
+  lambda (`products.filter(p => isLow(p.qty))`) was computed once, for the
+  first item, and gave every item the same answer. A lambda inside another
+  (`cats.map(c => products.filter(p => p.cat == c))`) could not read the outer
+  item. Both now give the right result.
+- **A callback you pass to a view runs in your scope, as the guide says.** The braces
+  used to be read in the view that ran them, so a parameter, `let` or `var` of the same
+  name there made a write do nothing, or sent `byard check` into a stack overflow. They
+  now read and write the names visible where you wrote them.
+- **An argument you pass to an action is read once.** `on_x(items[0])` gave the callback
+  the value of `items[0]` every time its braces read the parameter, so a write earlier in
+  the braces (`xs = xs.filter(...)`) changed what `id` meant on the next line. The same held
+  for a `let` action and a `fn` called with an argument. The value is now taken when the
+  call runs.
+- **A modal overlay is a dialog you can use.** A press on its panel, a `Text` or a
+  `TextField` in it no longer runs `dismiss`; only a press outside the content
+  does, and a press on a field focuses it. The page under the overlay is dimmed by
+  a scrim (black at 32%, or `scrim: <colour>`), as the guide said it was. A press
+  no longer reaches a `tap` on an element under the one pressed, so `tap => {}` on
+  a panel is not needed and a panel's `tap` is not run by a field inside it. A
+  `TextField`'s placeholder, and a value longer than the field, stop at its edge.
+- **A `TextField` keeps its focus when something before it appears or goes.** A
+  message that showed above a field as you typed (a `when` before it in the
+  same parent, or inside a view placed before it) took the keyboard with it, so
+  typing went dead after the first character. Focus, the caret, the selection
+  and the undo history now follow the field itself, as its state does, whatever
+  a `when` or a `for` before it adds or removes. A focused field that is
+  removed lets go of its `focused:` var.
+- **An element keeps what the engine holds for it when something before it
+  appears or goes.** A message that showed above a `TextField` as you typed (a
+  `when` before it in the same parent, or inside a view placed before it) took
+  the keyboard with it, so typing went dead after the first character. Focus,
+  the caret, the selection and the undo history now follow the field itself, as
+  its state does, whatever a `when` or a `for` before it adds or removes. The
+  same holds for a press in flight, the element under the pointer (`on hover`)
+  and a `ScrollView`'s `end_reached`, which fired again when a `when` before the
+  view opened. A focused field that is removed lets go of its `focused:` var.
+
+- **A change to only a container's minimum size is laid out again.** A `Button`'s
+  touch floor (and any `min_width`/`min_height`) was left out of what decides
+  whether a container changed, so a frame that moved nothing else kept last
+  frame's geometry.
+
+- **A windowed `ScrollView` fills the space it is given.** With `grow: 1` and no
+  `height` it built only a handful of rows and left the rest of the view blank,
+  and a growing one asked its parent for the height of its whole list. It now
+  shows every row that fits and takes only what is left. A `ScrollView` that
+  scrolls sideways is laid out whole instead of being windowed.
+
+- **`Text #[width: N, wrap: false]` is `N` wide.** It was as wide as its text.
+  A single line that is wider than its `width` is clipped at the edge of it, so
+  the cells of a table stay in their columns.
+- **`byard check` looks inside what is not shown at the start.** A tab that is not the active one, a route the first path does not match, both arms of a `when` and the body of a `for` over an empty list were not checked, so an unknown view or attribute in them said `0 errors` until somebody opened them. They are now, in `byard check` and in the editor.
+
+- **`TextField #[bind: value]` on a view parameter did nothing, and `check` said
+  nothing.** A parameter is a copy of what the caller passed, so a control
+  cannot write it. `bind:` and `value:` on a control now have to name a `var`: a
+  parameter, a `let`, a loop variable or a literal is an error, and the one for a
+  parameter shows how to pass the value down and the edits back up.
+
+- **A `Bool` given to a `Str` parameter drew `Bool(false)`.** Arguments to a view
+  are now checked against the parameter's declared type (an `Int` may go where a
+  `Float` is wanted), and a value that is not text is drawn as interpolation
+  writes it, `false`, never as its Rust debug form.
+
+- **A keyword used as a name gave dozens of errors, none about the name.**
+  `fn when(at: Str) -> Str => at` is now one error at `when`, and so is a keyword
+  naming a view, a type, a parameter, a `var`, a `let`, an `inject` or a record
+  field. Any other stray token between top-level items is also one error, not one
+  per token that follows it.
+
+- **`App::app_id` and `without_default_capabilities` no longer discard the
+  controllers provided before them.** `App::new(dir).provide(room).app_id("x")`
+  failed at start with `no ambient Stockroom`; the chain now means the same in
+  any order.
+
+- **`Text` takes `basis`.** `Text("x") #[grow: 1, basis: 0]` starts from nothing and
+  gets an equal share, so the cells of a table line up whatever they say. Without
+  it a `grow` text starts from its words, as a `Box` does.
 
 - **The language server shows a warning as a warning.** Every diagnostic was an
   error, including the ones `byard check` prints and passes (`UncheckableInject`

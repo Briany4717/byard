@@ -390,26 +390,55 @@ fn the_run_is_drawn_with_the_cap_and_the_mark() {
 
 // ── elevation ────────────────────────────────────────────────────────────
 
-/// `(dy, blur)` of the shadow a box with `shadow: preset` casts.
-fn cast(preset: &str) -> (f32, f32) {
+/// `(dy, blur, spread, alpha)` of each shadow a box with `shadow: preset` casts, in paint
+/// order: the ambient one first, then the key one over it.
+fn cast(preset: &str) -> Vec<(f32, f32, f32, u8)> {
     let f = frame_in(&format!(
         "View Main() {{ Box #[bg: 0xFFFFFF, width: 50, height: 50, shadow: \"{preset}\"] {{}} }}"
     ));
-    let s = f
-        .decorated()
+    #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
+    f.decorated()
         .iter()
-        .find(|d| d.shadow_blur > 0.0)
-        .unwrap_or_else(|| panic!("no shadow for {preset}"));
-    (s.shadow_dy, s.shadow_blur)
+        .filter(|d| d.shadow_blur > 0.0)
+        .map(|d| {
+            (
+                d.shadow_dy,
+                d.shadow_blur,
+                d.shadow_spread,
+                (d.shadow_color[3] * 255.0).round() as u8,
+            )
+        })
+        .collect()
 }
 
 #[test]
-fn the_presets_cover_the_five_material_elevations() {
-    assert_eq!(cast("sm"), (1.0, 3.0), "level 1");
-    assert_eq!(cast("md"), (3.0, 8.0), "level 2");
-    assert_eq!(cast("lg"), (6.0, 16.0), "level 3");
-    assert_eq!(cast("xl"), (8.0, 20.0), "level 4");
-    assert_eq!(cast("2xl"), (12.0, 28.0), "level 5");
+fn the_presets_are_the_five_material_elevations() {
+    // Material's own values: an ambient shadow at 15%, and a key one at 30% over it.
+    assert_eq!(
+        cast("sm"),
+        [(1.0, 3.0, 1.0, 38), (1.0, 2.0, 0.0, 77)],
+        "level 1"
+    );
+    assert_eq!(
+        cast("md"),
+        [(2.0, 6.0, 2.0, 38), (1.0, 2.0, 0.0, 77)],
+        "level 2"
+    );
+    assert_eq!(
+        cast("lg"),
+        [(4.0, 8.0, 3.0, 38), (1.0, 3.0, 0.0, 77)],
+        "level 3"
+    );
+    assert_eq!(
+        cast("xl"),
+        [(6.0, 10.0, 4.0, 38), (2.0, 3.0, 0.0, 77)],
+        "level 4"
+    );
+    assert_eq!(
+        cast("2xl"),
+        [(8.0, 12.0, 6.0, 38), (4.0, 4.0, 0.0, 77)],
+        "level 5"
+    );
 }
 
 #[test]

@@ -48,18 +48,36 @@ const KEYWORD_ATTRS: &[&str] = &[
     "morph_mode",
 ];
 
-/// A preset shadow (`sm`, `md`, `lg`, `xl`, `2xl`): an offset and a blur, with an alpha that
-/// scales gently with size (`sm` 0x44 to `lg` 0x66).
-fn shadow_preset(dy: f32, blur: f32) -> ShadowSpec {
-    #[allow(clippy::cast_possible_truncation)]
-    let alpha = (0x44 + (blur as i64 - 3) * 2).clamp(0x44, 0x66);
-    ShadowSpec {
-        dx: 0.0,
-        dy,
-        blur,
-        spread: 0.0,
-        color: super::intrinsics::color_to_rgba(alpha << 24, true),
-    }
+/// A preset shadow (`sm`, `md`, `lg`, `xl`, `2xl`): Material's elevation levels 1 to 5,
+/// as Material defines them for the web. Each is two shadows, a key one (30% black, on
+/// top) and an ambient one (15% black, spread), and both assume sRGB blending, which is
+/// how Byard blends (RFC-0060).
+fn elevation(level: u8) -> Vec<ShadowSpec> {
+    // (key y, key blur), (ambient y, ambient blur, ambient spread)
+    let ((ky, kb), (ay, ab, aspread)) = match level {
+        1 => ((1.0, 2.0), (1.0, 3.0, 1.0)),
+        2 => ((1.0, 2.0), (2.0, 6.0, 2.0)),
+        3 => ((1.0, 3.0), (4.0, 8.0, 3.0)),
+        4 => ((2.0, 3.0), (6.0, 10.0, 4.0)),
+        _ => ((4.0, 4.0), (8.0, 12.0, 6.0)),
+    };
+    let black = |alpha: i64| super::intrinsics::color_to_rgba(alpha << 24, true);
+    vec![
+        ShadowSpec {
+            dx: 0.0,
+            dy: ky,
+            blur: kb,
+            spread: 0.0,
+            color: black(0x4D),
+        },
+        ShadowSpec {
+            dx: 0.0,
+            dy: ay,
+            blur: ab,
+            spread: aspread,
+            color: black(0x26),
+        },
+    ]
 }
 
 /// Default drop-shadow colour (`0xAARRGGBB`, ~33% black) when a shadow omits its
@@ -868,12 +886,11 @@ impl Interpreter {
             Value::Tuple(fields) if fields.is_empty() => Vec::new(),
             Value::Tuple(fields) => vec![self.shadow_from_values(fields)],
             Value::Str(t) => match t.as_str() {
-                "sm" => vec![shadow_preset(1.0, 3.0)],
-                "md" => vec![shadow_preset(3.0, 8.0)],
-                "lg" => vec![shadow_preset(6.0, 16.0)],
-                // Material elevation levels 4 and 5 (RFC-0064).
-                "xl" => vec![shadow_preset(8.0, 20.0)],
-                "2xl" => vec![shadow_preset(12.0, 28.0)],
+                "sm" => elevation(1),
+                "md" => elevation(2),
+                "lg" => elevation(3),
+                "xl" => elevation(4),
+                "2xl" => elevation(5),
                 "none" | "" => Vec::new(),
                 other => {
                     self.report_not_a_shadow(span, &format!("the word `{other}`"));

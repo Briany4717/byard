@@ -29,6 +29,7 @@ mod render_readback;
 mod retained_layout_parity;
 mod ripple_readback;
 mod rotated_clip_readback;
+mod srgb_blending_readback;
 mod text_colour_readback;
 mod text_editing_readback;
 mod text_transform_readback;

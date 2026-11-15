@@ -76,7 +76,7 @@ fn demo_boxes_are_actually_painted_on_screen() {
     let scale = 2.0_f32;
     let phys_w = (logical_w * scale) as u32;
     let phys_h = (logical_h * scale) as u32;
-    let fmt = wgpu::TextureFormat::Bgra8UnormSrgb;
+    let fmt = wgpu::TextureFormat::Bgra8Unorm;
     let mut enc = pollster::block_on(EncoderSubsystem::init(
         Arc::clone(&device),
         Arc::clone(&queue),
@@ -219,7 +219,7 @@ fn vector_icon_paints_after_generation_lands() {
     let scale = 1.0_f32;
     let phys_w = logical_w as u32;
     let phys_h = logical_h as u32;
-    let fmt = wgpu::TextureFormat::Bgra8UnormSrgb;
+    let fmt = wgpu::TextureFormat::Bgra8Unorm;
     let mut enc = pollster::block_on(EncoderSubsystem::init(
         Arc::clone(&device),
         Arc::clone(&queue),
@@ -364,7 +364,7 @@ fn widget_inside_bordered_card_is_not_occluded() {
     let scale = 2.0_f32;
     let phys_w = (logical_w * scale) as u32;
     let phys_h = (logical_h * scale) as u32;
-    let fmt = wgpu::TextureFormat::Bgra8UnormSrgb;
+    let fmt = wgpu::TextureFormat::Bgra8Unorm;
     let mut enc = pollster::block_on(EncoderSubsystem::init(
         Arc::clone(&device),
         Arc::clone(&queue),
@@ -504,7 +504,7 @@ fn content_clip_scissors_overflow_to_the_viewport() {
     }
     frame.end_clip();
 
-    let fmt = wgpu::TextureFormat::Bgra8UnormSrgb;
+    let fmt = wgpu::TextureFormat::Bgra8Unorm;
     let mut enc = pollster::block_on(EncoderSubsystem::init(
         Arc::clone(&device),
         Arc::clone(&queue),
@@ -669,7 +669,7 @@ fn scrollview_scrolls_and_clips_end_to_end() {
         "the ScrollView must emit a content clip"
     );
 
-    let fmt = wgpu::TextureFormat::Bgra8UnormSrgb;
+    let fmt = wgpu::TextureFormat::Bgra8Unorm;
     let mut enc = pollster::block_on(EncoderSubsystem::init(
         Arc::clone(&device),
         Arc::clone(&queue),

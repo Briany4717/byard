@@ -58,7 +58,7 @@ impl Readback {
 fn render(device: &Arc<wgpu::Device>, queue: &Arc<wgpu::Queue>, frame: &RenderFrame) -> Readback {
     let phys_w = (LOGICAL_W * SCALE) as u32;
     let phys_h = (LOGICAL_H * SCALE) as u32;
-    let fmt = wgpu::TextureFormat::Bgra8UnormSrgb;
+    let fmt = wgpu::TextureFormat::Bgra8Unorm;
     let mut enc = pollster::block_on(EncoderSubsystem::init(
         Arc::clone(device),
         Arc::clone(queue),
@@ -273,9 +273,9 @@ fn a_gradient_paints_a_ramp_over_the_fill_and_its_offset_travels() {
 /// (RFC-0005 §1).
 ///
 /// The whole path is involved and every step of it can be wrong on its own:
-/// the literal is decoded to linear light by the compiler, blended in linear by
-/// the shader, and encoded once by the sRGB surface on write. Skipping the
-/// decode encoded it twice and put `0x808080` on screen as `0xBC`, which is the
+/// the literal is decoded to linear light by the compiler, and the shader
+/// encodes it once on write into the `Unorm` target (RFC-0060), where the blend
+/// mixes sRGB bytes. Skipping the decode encoded it twice and put `0x808080` on screen as `0xBC`, which is the
 /// kind of error that looks like a taste decision rather than a bug.
 #[test]
 fn a_written_colour_reaches_the_screen_as_itself() {
@@ -336,5 +336,11 @@ fn a_half_transparent_bg_shows_what_is_behind_it() {
     assert!(
         half > opaque.saturating_add(40),
         "the white parent shows through a 0x80 black child: {half:#04X} vs opaque {opaque:#04X}"
+    );
+    // RFC-0060: 0x80 black over white is the middle grey of a design tool, 127.
+    // Blended in linear light (the blend before this RFC) it read 188 (0xBC).
+    assert!(
+        half.abs_diff(127) <= 1,
+        "half black over white blends in sRGB: {half}, not 188"
     );
 }

@@ -154,15 +154,240 @@ const LAYER_PRELUDE: &str = "\
 @group(1) @binding(1) var layer_sampler: sampler;
 ";
 
-/// The WGSL the engine compiles for `S`: the prelude, then the package's own.
+/// The WGSL the engine compiles for `S`: the prelude, then the package's own
+/// with its `fs_main` wrapped so the colour it returns is encoded (RFC-0060).
+///
+/// The package's code keeps its line numbers: the prelude is the only thing
+/// before it, and everything the engine adds (the transfer functions and the
+/// wrapper) comes after. A source with no `fs_main` is returned as written, and
+/// [`wrap_fragment`] says why when the pipeline is built.
 #[must_use]
 pub fn assembled_wgsl<S: Shader>() -> String {
     let mut source = String::from(PRELUDE);
     if S::LAYERS.is_some() {
         source.push_str(LAYER_PRELUDE);
     }
-    source.push_str(S::wgsl());
+    match wrap_fragment(S::wgsl()) {
+        Ok(wrapped) => {
+            source.push_str(&wrapped.package);
+            source.push('\n');
+            source.push_str(crate::color::wgsl_transfer());
+            source.push_str(&wrapped.entry);
+        }
+        Err(_) => source.push_str(S::wgsl()),
+    }
     source
+}
+
+/// A package's source with its fragment stage renamed, and the entry point
+/// that calls it.
+struct Wrapped {
+    /// The package's WGSL, `fs_main` now `package_fs_main` and an ordinary
+    /// function: its attributes blanked out in place, so no line or column
+    /// before the name moves.
+    package: String,
+    /// The engine's `fs_main`, with the package's signature.
+    entry: String,
+}
+
+/// `src` with comments blanked to spaces, so a search for code cannot land in
+/// one and an index into it is an index into `src`.
+fn blank_comments(src: &str) -> String {
+    let bytes = src.as_bytes();
+    let mut out = bytes.to_vec();
+    let mut i = 0;
+    while i < bytes.len() {
+        if bytes[i] == b'/' && bytes.get(i + 1) == Some(&b'/') {
+            while i < bytes.len() && bytes[i] != b'\n' {
+                out[i] = b' ';
+                i += 1;
+            }
+        } else if bytes[i] == b'/' && bytes.get(i + 1) == Some(&b'*') {
+            let mut depth = 0_u32;
+            while i < bytes.len() {
+                if bytes[i] == b'/' && bytes.get(i + 1) == Some(&b'*') {
+                    depth += 1;
+                    out[i] = b' ';
+                    out[i + 1] = b' ';
+                    i += 2;
+                } else if bytes[i] == b'*' && bytes.get(i + 1) == Some(&b'/') {
+                    depth -= 1;
+                    out[i] = b' ';
+                    out[i + 1] = b' ';
+                    i += 2;
+                    if depth == 0 {
+                        break;
+                    }
+                } else {
+                    if bytes[i] != b'\n' {
+                        out[i] = b' ';
+                    }
+                    i += 1;
+                }
+            }
+        } else {
+            i += 1;
+        }
+    }
+    String::from_utf8(out).unwrap_or_default()
+}
+
+fn is_ident(b: u8) -> bool {
+    b.is_ascii_alphanumeric() || b == b'_'
+}
+
+/// Index of the `)` that closes the `(` at `open`.
+fn matching_paren(code: &[u8], open: usize) -> Option<usize> {
+    let mut depth = 0_u32;
+    for (i, &b) in code.iter().enumerate().skip(open) {
+        match b {
+            b'(' => depth += 1,
+            b')' => {
+                depth -= 1;
+                if depth == 0 {
+                    return Some(i);
+                }
+            }
+            _ => {}
+        }
+    }
+    None
+}
+
+/// Blanks every attribute (`@location(0)`, `@builtin(position)`,
+/// `@interpolate(flat)`, `@invariant`) in `code[range]` into spaces, and
+/// returns the range with the attributes gone, for reading names and types.
+fn strip_attributes(code: &mut [u8], range: std::ops::Range<usize>) -> String {
+    let mut i = range.start;
+    while i < range.end {
+        if code[i] == b'@' {
+            let start = i;
+            i += 1;
+            while i < range.end && is_ident(code[i]) {
+                i += 1;
+            }
+            let mut j = i;
+            while j < range.end && code[j].is_ascii_whitespace() {
+                j += 1;
+            }
+            if j < range.end && code[j] == b'(' {
+                if let Some(close) = matching_paren(code, j) {
+                    i = close + 1;
+                }
+            }
+            for b in &mut code[start..i] {
+                if *b != b'\n' {
+                    *b = b' ';
+                }
+            }
+        } else {
+            i += 1;
+        }
+    }
+    String::from_utf8_lossy(&code[range]).into_owned()
+}
+
+/// Splits a parameter list at its top-level commas.
+fn split_params(list: &str) -> Vec<&str> {
+    let mut parts = Vec::new();
+    let (mut depth, mut from) = (0_i32, 0);
+    for (i, c) in list.char_indices() {
+        match c {
+            '(' | '<' | '[' => depth += 1,
+            ')' | '>' | ']' => depth -= 1,
+            ',' if depth == 0 => {
+                parts.push(&list[from..i]);
+                from = i + 1;
+            }
+            _ => {}
+        }
+    }
+    parts.push(&list[from..]);
+    parts.into_iter().filter(|p| !p.trim().is_empty()).collect()
+}
+
+/// Renames the package's `fs_main` and builds the `fs_main` that encodes what
+/// it returns (RFC-0060 section 5).
+///
+/// The package writes a linear colour with straight alpha, and may name any
+/// inputs it likes: the wrapper takes the same parameters, attributes and
+/// all, and hands them on by name. The package's own function is an ordinary
+/// function, so the attributes only an entry point may carry are blanked in
+/// place.
+///
+/// # Errors
+///
+/// A message when there is no `fn fs_main(`, or it does not return a
+/// `vec4<f32>`.
+fn wrap_fragment(src: &str) -> Result<Wrapped, String> {
+    let masked = blank_comments(src);
+    let code = masked.as_bytes();
+    let mut found = None;
+    let mut from = 0;
+    while let Some(at) = masked[from..].find("fs_main") {
+        let name = from + at;
+        from = name + "fs_main".len();
+        let before = masked[..name].trim_end();
+        let after = masked[from..].trim_start();
+        let is_fn = before.ends_with("fn")
+            && before[..before.len() - 2]
+                .bytes()
+                .next_back()
+                .is_none_or(|b| !is_ident(b));
+        if is_fn && after.starts_with('(') {
+            found = Some((name, masked.len() - after.len()));
+            break;
+        }
+    }
+    let Some((name, open)) = found else {
+        return Err("it has no `fn fs_main(`: a package shader needs a fragment stage".to_string());
+    };
+    let close = matching_paren(code, open)
+        .ok_or_else(|| "the parameter list of `fs_main` is never closed".to_string())?;
+    let arrow = masked[close + 1..]
+        .find("->")
+        .map(|i| close + 1 + i)
+        .filter(|&i| masked[close + 1..i].trim().is_empty())
+        .ok_or_else(|| "`fs_main` must return a `vec4<f32>` colour".to_string())?;
+    let brace = masked[arrow..]
+        .find('{')
+        .map(|i| arrow + i)
+        .ok_or_else(|| "the body of `fs_main` is missing".to_string())?;
+
+    let mut package = src.as_bytes().to_vec();
+    // Blank each of the attributes in the return type and the parameters.
+    let returns = strip_attributes(&mut package, arrow + 2..brace);
+    if !matches!(returns.trim(), "vec4<f32>" | "vec4f") {
+        return Err(format!(
+            "`fs_main` must return a `vec4<f32>` colour, it returns `{}`",
+            returns.trim()
+        ));
+    }
+    let params = strip_attributes(&mut package, open + 1..close);
+    let names: Vec<&str> = split_params(&params)
+        .into_iter()
+        .map(|p| p.split(':').next().unwrap_or(p).trim())
+        .collect();
+    // `@fragment` on the line above, if it is directly before the `fn`.
+    let head = masked[..name].trim_end();
+    let head = head.strip_suffix("fn").unwrap_or(head).trim_end();
+    if let Some(at) = head.strip_suffix("@fragment").map(str::len) {
+        for b in &mut package[at..at + "@fragment".len()] {
+            *b = b' ';
+        }
+    }
+    let mut package_src = String::from_utf8_lossy(&package).into_owned();
+    package_src.replace_range(name..name + "fs_main".len(), "package_fs_main");
+
+    let entry = format!(
+        "\n@fragment\nfn fs_main({}) -> @location(0) vec4<f32> {{\n    return byard_out(package_fs_main({}));\n}}\n",
+        &src[open + 1..close],
+        names.join(", ")
+    );
+    Ok(Wrapped {
+        package: package_src,
+        entry,
+    })
 }
 
 /// The vertex attributes of `S`'s instance record, built once and kept: a
@@ -286,6 +511,10 @@ impl<S: Shader> ShaderPipeline<S> {
             }
         }
 
+        if let Err(reason) = wrap_fragment(S::wgsl()) {
+            return Err(fail(reason));
+        }
+
         let scope = cx.device.push_error_scope(wgpu::ErrorFilter::Validation);
 
         let layer_layout = S::LAYERS.map(|_| layer_bind_group_layout(cx.device, S::NAME));
@@ -342,7 +571,10 @@ impl<S: Shader> ShaderPipeline<S> {
         };
 
         if let Some(error) = scope.pop().await {
-            return Err(fail(error.to_string()));
+            // The package wrote `fs_main`; the engine renamed it.
+            return Err(fail(
+                error.to_string().replace("package_fs_main", "fs_main"),
+            ));
         }
         Ok(Self {
             pipeline,
@@ -575,6 +807,119 @@ mod tests {
         assert!(source.contains("fn to_clip"));
         assert!(source.contains("var layers: texture_2d_array<f32>"));
         assert!(source.ends_with("// the package's own"));
+    }
+
+    const SAMPLE: &str = "// fn fs_main(not: this) is a comment
+struct Out {
+    @builtin(position) clip: vec4<f32>,
+    @location(0) uv: vec2<f32>,
+};
+
+@fragment
+fn fs_main(
+    in: Out,
+    @builtin(front_facing) front: bool,
+) -> @location(0) vec4<f32> {
+    return vec4<f32>(in.uv, 0.0, 1.0);
+}
+";
+
+    #[test]
+    fn the_fragment_stage_is_wrapped_in_place() {
+        let wrapped = wrap_fragment(SAMPLE).expect("a plain fs_main wraps");
+        // Same lines, same columns up to the name: nothing a package wrote moves.
+        assert_eq!(
+            wrapped.package.lines().count(),
+            SAMPLE.lines().count(),
+            "the package's own lines are not shifted"
+        );
+        for (own, kept) in SAMPLE.lines().zip(wrapped.package.lines()) {
+            assert!(
+                own.len() <= kept.len(),
+                "a line only ever grows, by the rename: {own:?} vs {kept:?}"
+            );
+        }
+        assert!(wrapped.package.contains("fn package_fs_main("));
+        assert!(
+            !wrapped.package.contains("@fragment")
+                && !wrapped.package.contains("@location(0) vec4"),
+            "an ordinary function carries no entry-point attributes:\n{}",
+            wrapped.package
+        );
+        assert!(
+            wrapped
+                .package
+                .contains("// fn fs_main(not: this) is a comment"),
+            "a comment is left as written"
+        );
+        assert!(wrapped.entry.contains("@fragment"));
+        assert!(wrapped.entry.contains("@builtin(front_facing) front: bool"));
+        assert!(
+            wrapped
+                .entry
+                .contains("byard_out(package_fs_main(in, front))")
+        );
+    }
+
+    #[test]
+    fn a_package_without_a_fragment_stage_is_said_so() {
+        let error = wrap_fragment("fn helper() -> f32 { return 1.0; }")
+            .err()
+            .unwrap();
+        assert!(error.contains("fs_main"), "{error}");
+        let error = wrap_fragment(
+            "@fragment fn fs_main() -> @location(0) vec3<f32> { return vec3<f32>(1.0); }",
+        )
+        .err()
+        .unwrap();
+        assert!(
+            error.contains("vec4<f32>") && error.contains("vec3<f32>"),
+            "{error}"
+        );
+    }
+
+    #[test]
+    fn the_wrapped_module_is_valid() {
+        struct Wrapped;
+        impl Shader for Wrapped {
+            const NAME: &'static str = "wrapped";
+            type Instance = [f32; 4];
+            fn lanes() -> &'static [Lane] {
+                &[Lane::Vec4]
+            }
+            fn wgsl() -> &'static str {
+                "
+struct Out {
+    @builtin(position) clip: vec4<f32>,
+    @location(0) uv: vec2<f32>,
+};
+@vertex
+fn vs_main(
+    @location(0) quad: vec2<f32>,
+    @location(1) rect: vec4<f32>,
+    @location(15) depth: f32,
+) -> Out {
+    var out: Out;
+    out.clip = to_clip(rect.xy + quad * rect.zw, depth);
+    out.uv = quad;
+    return out;
+}
+@fragment
+fn fs_main(in: Out, @builtin(front_facing) front: bool) -> @location(0) vec4<f32> {
+    return vec4<f32>(in.uv, 0.0, 1.0);
+}
+"
+            }
+        }
+        let source = assembled_wgsl::<Wrapped>();
+        let module = naga::front::wgsl::parse_str(&source)
+            .unwrap_or_else(|e| panic!("{}", e.emit_to_string(&source)));
+        naga::valid::Validator::new(
+            naga::valid::ValidationFlags::all(),
+            naga::valid::Capabilities::empty(),
+        )
+        .validate(&module)
+        .unwrap_or_else(|e| panic!("{e:?}"));
     }
 
     #[test]

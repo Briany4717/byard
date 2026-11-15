@@ -134,7 +134,7 @@ fn encoder(device: &Arc<wgpu::Device>, queue: &Arc<wgpu::Queue>) -> EncoderSubsy
     let mut enc = pollster::block_on(EncoderSubsystem::init(
         Arc::clone(device),
         Arc::clone(queue),
-        wgpu::TextureFormat::Rgba8UnormSrgb,
+        wgpu::TextureFormat::Rgba8Unorm,
         1.0,
         SIZE,
         SIZE,
@@ -169,7 +169,7 @@ fn render_image(
         mip_level_count: 1,
         sample_count: 1,
         dimension: wgpu::TextureDimension::D2,
-        format: wgpu::TextureFormat::Rgba8UnormSrgb,
+        format: wgpu::TextureFormat::Rgba8Unorm,
         usage: wgpu::TextureUsages::RENDER_ATTACHMENT
             | wgpu::TextureUsages::COPY_SRC
             | wgpu::TextureUsages::COPY_DST,
@@ -326,7 +326,7 @@ fn lanes_that_are_not_the_record_are_refused_by_name() {
     let built = pollster::block_on(byard_core::render::ShaderPipeline::<Wrong>::build(
         &byard_core::encoder::pipeline::PipelineCtx {
             device: &device,
-            format: wgpu::TextureFormat::Rgba8UnormSrgb,
+            format: wgpu::TextureFormat::Rgba8Unorm,
             viewport_layout: &viewport_layout,
         },
     ));
@@ -337,6 +337,107 @@ fn lanes_that_are_not_the_record_are_refused_by_name() {
     assert!(message.contains("test_wrong_lanes"), "{message}");
     assert!(
         message.contains("16") && message.contains("24"),
+        "{message}"
+    );
+}
+
+/// RFC-0060 section 5: the engine renames the package's `fs_main` and wraps
+/// it, and an error inside the package's code still shows the package's own
+/// line, under the name the package wrote.
+#[test]
+fn an_error_in_a_package_shader_points_at_its_own_line_and_name() {
+    struct Typo;
+    impl Shader for Typo {
+        const NAME: &'static str = "test_typo";
+        type Instance = Swatch;
+        fn lanes() -> &'static [Lane] {
+            &[Lane::Vec4, Lane::U32, Lane::F32]
+        }
+        fn wgsl() -> &'static str {
+            "
+@vertex
+fn vs_main(
+    @location(0) quad: vec2<f32>,
+    @location(1) rect: vec4<f32>,
+    @location(15) depth: f32,
+) -> @builtin(position) vec4<f32> {
+    return to_clip(rect.xy + quad * rect.zw, depth);
+}
+
+@fragment
+fn fs_main() -> @location(0) vec4<f32> {
+    let tint = missing_tint * 0.5;
+    return vec4<f32>(tint, 1.0);
+}
+"
+        }
+    }
+    let Some((device, _queue, _turn)) = try_device() else {
+        eprintln!("no GPU adapter, skipping package-shader build test");
+        return;
+    };
+    let viewport_layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+        label: None,
+        entries: &[],
+    });
+    let built = pollster::block_on(byard_core::render::ShaderPipeline::<Typo>::build(
+        &byard_core::encoder::pipeline::PipelineCtx {
+            device: &device,
+            format: wgpu::TextureFormat::Rgba8Unorm,
+            viewport_layout: &viewport_layout,
+        },
+    ));
+    let Err(error) = built else {
+        panic!("an undeclared name must not build");
+    };
+    let message = error.to_string();
+    assert!(message.contains("test_typo"), "{message}");
+    assert!(
+        message.contains("let tint = missing_tint * 0.5;"),
+        "the package's own line is quoted: {message}"
+    );
+    assert!(
+        !message.contains("package_fs_main"),
+        "the engine's rename does not leak: {message}"
+    );
+}
+
+/// A package shader with no fragment stage is refused by name, with the
+/// reason, when its pipeline is built.
+#[test]
+fn a_package_shader_without_a_fragment_stage_is_refused_by_name() {
+    struct Mute;
+    impl Shader for Mute {
+        const NAME: &'static str = "test_mute";
+        type Instance = [f32; 4];
+        fn lanes() -> &'static [Lane] {
+            &[Lane::Vec4]
+        }
+        fn wgsl() -> &'static str {
+            "// nothing to draw with"
+        }
+    }
+    let Some((device, _queue, _turn)) = try_device() else {
+        eprintln!("no GPU adapter, skipping package-shader build test");
+        return;
+    };
+    let viewport_layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+        label: None,
+        entries: &[],
+    });
+    let built = pollster::block_on(byard_core::render::ShaderPipeline::<Mute>::build(
+        &byard_core::encoder::pipeline::PipelineCtx {
+            device: &device,
+            format: wgpu::TextureFormat::Rgba8Unorm,
+            viewport_layout: &viewport_layout,
+        },
+    ));
+    let Err(error) = built else {
+        panic!("a shader with no fs_main must not build");
+    };
+    let message = error.to_string();
+    assert!(
+        message.contains("test_mute") && message.contains("fs_main"),
         "{message}"
     );
 }

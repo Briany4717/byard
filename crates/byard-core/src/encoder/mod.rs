@@ -3822,6 +3822,16 @@ async fn build_decorated_texture_pipelines(
     ))
 }
 
+/// What every shader that writes a colour starts with: the transfer to sRGB
+/// (`byard_out`, RFC-0060, generated from `color`) and the clip block.
+pub(crate) fn clip_block() -> String {
+    format!(
+        "{}\n{}",
+        crate::color::wgsl_transfer(),
+        include_str!("clip.wgsl")
+    )
+}
+
 /// Depth-buffer format used to resolve draw order across the four UI pipelines.
 pub(crate) const DEPTH_FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Depth32Float;
 
@@ -3900,7 +3910,7 @@ async fn build_solid_box_pipeline(
         source: wgpu::ShaderSource::Wgsl(std::borrow::Cow::Owned(format!(
             "{}
 {}",
-            include_str!("clip.wgsl"),
+            clip_block(),
             include_str!("solid_box.wgsl")
         ))),
     });

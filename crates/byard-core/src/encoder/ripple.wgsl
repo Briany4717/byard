@@ -185,5 +185,5 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
     // ink composites onto light and dark surfaces alike, and rapid taps pool
     // where circles overlap.
     let a_clipped = a * clip_coverage(in.position.xy);
-    return vec4<f32>(in.color.rgb * a_clipped, a_clipped);
+    return byard_out_premul(vec4<f32>(in.color.rgb * a_clipped, a_clipped));
 }

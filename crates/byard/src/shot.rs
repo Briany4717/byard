@@ -400,7 +400,7 @@ impl Target {
         }))
         .map_err(|e| gpu("no GPU device", e))?;
         let (device, queue) = (Arc::new(device), Arc::new(queue));
-        let format = wgpu::TextureFormat::Rgba8UnormSrgb;
+        let format = wgpu::TextureFormat::Rgba8Unorm;
         let mut encoder = pollster::block_on(EncoderSubsystem::init(
             Arc::clone(&device),
             Arc::clone(&queue),

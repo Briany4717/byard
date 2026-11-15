@@ -682,5 +682,5 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
         discard;
     }
     let rgb = (stroke_rgba.rgb * a_stroke + d.fill_color.rgb * a_fill) / out_a;
-    return vec4<f32>(rgb, out_a * opacity * clip_coverage(in.position.xy));
+    return byard_out(vec4<f32>(rgb, out_a * opacity * clip_coverage(in.position.xy)));
 }

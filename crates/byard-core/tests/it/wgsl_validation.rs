@@ -27,27 +27,35 @@ const GRADIENT: &str = include_str!("../../src/encoder/gradient.wgsl");
 /// The shared clip block, prepended by every pipeline that can be clipped.
 const CLIP: &str = include_str!("../../src/encoder/clip.wgsl");
 
+/// The sRGB write every colour-writing shader starts with (RFC-0060).
+fn transfer() -> &'static str {
+    byard_core::color::wgsl_transfer()
+}
+
 /// Every pipeline shader, assembled the way its pipeline assembles it.
 fn shaders() -> Vec<(&'static str, String)> {
     vec![
         (
             "solid_box",
             format!(
-                "{CLIP}\n{}",
+                "{}\n{CLIP}\n{}",
+                transfer(),
                 include_str!("../../src/encoder/solid_box.wgsl")
             ),
         ),
         (
             "decorated_box",
             format!(
-                "{CLIP}\n{GRADIENT}\n{}",
+                "{}\n{CLIP}\n{GRADIENT}\n{}",
+                transfer(),
                 include_str!("../../src/encoder/decorated_box.wgsl")
             ),
         ),
         (
             "canvas_fill",
             format!(
-                "{CLIP}\n{GRADIENT}\n{}",
+                "{}\n{CLIP}\n{GRADIENT}\n{}",
+                transfer(),
                 include_str!("../../src/encoder/canvas_fill.wgsl")
             ),
         ),
@@ -56,9 +64,26 @@ fn shaders() -> Vec<(&'static str, String)> {
         (
             "canvas_shape",
             format!(
-                "{CLIP}\n{GRADIENT}\n{}",
+                "{}\n{CLIP}\n{GRADIENT}\n{}",
+                transfer(),
                 include_str!("../../src/encoder/canvas_shape.wgsl")
             ),
+        ),
+        (
+            "backdrop",
+            format!(
+                "{}\n{}",
+                transfer(),
+                include_str!("../../src/encoder/backdrop.wgsl")
+            ),
+        ),
+        (
+            "blur",
+            include_str!("../../src/encoder/blur.wgsl").to_string(),
+        ),
+        (
+            "group",
+            include_str!("../../src/encoder/group.wgsl").to_string(),
         ),
         (
             "clip_mask",
@@ -66,19 +91,25 @@ fn shaders() -> Vec<(&'static str, String)> {
         ),
         (
             "ripple",
-            format!("{CLIP}\n{}", include_str!("../../src/encoder/ripple.wgsl")),
+            format!(
+                "{}\n{CLIP}\n{}",
+                transfer(),
+                include_str!("../../src/encoder/ripple.wgsl")
+            ),
         ),
         (
             "texture_sampler",
             format!(
-                "{CLIP}\n{}",
+                "{}\n{CLIP}\n{}",
+                transfer(),
                 include_str!("../../src/encoder/texture_sampler.wgsl")
             ),
         ),
         (
             "vector_msdf",
             format!(
-                "{CLIP}\n{}",
+                "{}\n{CLIP}\n{}",
+                transfer(),
                 include_str!("../../src/encoder/vector_msdf.wgsl")
             ),
         ),

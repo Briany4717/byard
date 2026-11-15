@@ -35,7 +35,7 @@ fn encoder_builds_all_pipelines_including_decorated_and_texture() {
     let result = pollster::block_on(EncoderSubsystem::init(
         device,
         queue,
-        wgpu::TextureFormat::Rgba8UnormSrgb,
+        wgpu::TextureFormat::Rgba8Unorm,
         1.0,
         64,
         64,
@@ -109,7 +109,7 @@ fn render_and_read(
         mip_level_count: 1,
         sample_count: 1,
         dimension: wgpu::TextureDimension::D2,
-        format: wgpu::TextureFormat::Rgba8UnormSrgb,
+        format: wgpu::TextureFormat::Rgba8Unorm,
         usage: wgpu::TextureUsages::RENDER_ATTACHMENT
             | wgpu::TextureUsages::COPY_SRC
             | wgpu::TextureUsages::COPY_DST,
@@ -168,7 +168,7 @@ fn solid_and_decorated_boxes_actually_paint_pixels() {
     let mut enc = pollster::block_on(EncoderSubsystem::init(
         Arc::clone(&device),
         Arc::clone(&queue),
-        wgpu::TextureFormat::Rgba8UnormSrgb,
+        wgpu::TextureFormat::Rgba8Unorm,
         1.0,
         size,
         size,

@@ -50,7 +50,7 @@ impl Harness {
         let mut enc = pollster::block_on(EncoderSubsystem::init(
             Arc::clone(&device),
             Arc::clone(&queue),
-            wgpu::TextureFormat::Rgba8UnormSrgb,
+            wgpu::TextureFormat::Rgba8Unorm,
             1.0,
             256,
             256,
@@ -67,7 +67,7 @@ impl Harness {
             mip_level_count: 1,
             sample_count: 1,
             dimension: wgpu::TextureDimension::D2,
-            format: wgpu::TextureFormat::Rgba8UnormSrgb,
+            format: wgpu::TextureFormat::Rgba8Unorm,
             usage: wgpu::TextureUsages::RENDER_ATTACHMENT
                 | wgpu::TextureUsages::COPY_SRC
                 | wgpu::TextureUsages::COPY_DST,

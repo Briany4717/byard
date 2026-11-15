@@ -5,15 +5,29 @@
 //! Because it is a fact about the engine, not about the language. A colour is
 //! *written* the way a designer reads it (`0x5B8DEF` is the number out of the
 //! design tool, an sRGB-encoded triple), and everything downstream of this
-//! module is linear: `RenderFrame`'s colours are documented as linear, the
-//! shaders blend in linear, and the surface is an sRGB format precisely so the
-//! GPU encodes once on write.
+//! module is linear: `RenderFrame`'s colours are documented as linear, and each
+//! fragment shader encodes its colour once, on write, into a `Unorm` target
+//! (RFC-0060), so the blend mixes sRGB bytes like the tools a design comes
+//! from. [`wgsl_transfer`] is that encode, generated from the same constants.
 //!
 //! It used to live in the compiler, which was fine while `byld` was the only
 //! thing that produced colours. A package's native view produces them too
 //! (RFC-0039), and a second implementation of a transfer function is a second
 //! chance to get it wrong: the engine already spent a release displaying every
 //! colour lighter than it was written, because one path encoded twice.
+
+/// Where the sRGB → linear curve leaves its straight segment.
+const DECODE_KNEE: f32 = 0.040_45;
+/// Where the linear → sRGB curve leaves its straight segment.
+const ENCODE_KNEE: f32 = 0.003_130_8;
+/// The slope of both straight segments' encoded side.
+const LINEAR_SLOPE: f32 = 12.92;
+/// The curve's offset.
+const OFFSET: f32 = 0.055;
+/// The curve's scale, `1 + OFFSET`.
+const SCALE: f32 = 1.055;
+/// The curve's exponent.
+const GAMMA: f32 = 2.4;
 
 /// One channel of sRGB gamma → linear.
 ///
@@ -22,21 +36,65 @@
 /// where a dark UI spends most of its range.
 #[must_use]
 pub fn srgb_to_linear(c: f32) -> f32 {
-    if c <= 0.040_45 {
-        c / 12.92
+    if c <= DECODE_KNEE {
+        c / LINEAR_SLOPE
     } else {
-        ((c + 0.055) / 1.055).powf(2.4)
+        ((c + OFFSET) / SCALE).powf(GAMMA)
     }
 }
 
 /// One channel of linear → sRGB gamma, the inverse of [`srgb_to_linear`].
 #[must_use]
 pub fn linear_to_srgb(c: f32) -> f32 {
-    if c <= 0.003_130_8 {
-        c * 12.92
+    if c <= ENCODE_KNEE {
+        c * LINEAR_SLOPE
     } else {
-        1.055 * c.powf(1.0 / 2.4) - 0.055
+        SCALE * c.powf(1.0 / GAMMA) - OFFSET
     }
+}
+
+/// The WGSL every colour-writing fragment shader ends with (RFC-0060),
+/// generated from the constants above so the curve is written once.
+///
+/// It defines `byard_encode(c: f32) -> f32`, `byard_out(c: vec4<f32>)` (a
+/// straight-alpha colour in, the encoded one out) and `byard_out_premul`
+/// (premultiplied in, premultiplied encoded out, zero alpha kept as zero).
+/// The render targets are `Unorm`, so what a shader writes is the sRGB byte,
+/// and the fixed-function blend mixes encoded values like a design tool does.
+#[must_use]
+pub fn wgsl_transfer() -> &'static str {
+    static SOURCE: std::sync::OnceLock<String> = std::sync::OnceLock::new();
+    SOURCE.get_or_init(|| {
+        format!(
+            "// Linear to sRGB, generated from byard_core::color (RFC-0060).
+fn byard_encode(c: f32) -> f32 {{
+    let v = clamp(c, 0.0, 1.0);
+    if (v <= {ENCODE_KNEE:?}) {{
+        return v * {LINEAR_SLOPE:?};
+    }}
+    return {SCALE:?} * pow(v, {inv:?}) - {OFFSET:?};
+}}
+
+fn byard_out(c: vec4<f32>) -> vec4<f32> {{
+    return vec4<f32>(byard_encode(c.r), byard_encode(c.g), byard_encode(c.b), c.a);
+}}
+
+fn byard_out_premul(c: vec4<f32>) -> vec4<f32> {{
+    if (!(c.a > 0.0)) {{
+        return vec4<f32>(0.0);
+    }}
+    let straight = c.rgb / c.a;
+    return vec4<f32>(
+        byard_encode(straight.r) * c.a,
+        byard_encode(straight.g) * c.a,
+        byard_encode(straight.b) * c.a,
+        c.a,
+    );
+}}
+",
+            inv = 1.0 / GAMMA
+        )
+    })
 }
 
 /// Parses a colour integer into **linear-space** RGBA (6-digit ⇒ opaque,

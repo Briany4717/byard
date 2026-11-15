@@ -162,7 +162,7 @@ pub async fn build_pipeline(
 
     let source = format!(
         "{}\n{GRADIENT_WGSL}\n{}",
-        include_str!("clip.wgsl"),
+        super::clip_block(),
         include_str!("canvas_fill.wgsl")
     );
     let shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {

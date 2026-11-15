@@ -37,7 +37,7 @@ fn render_and_read(
         mip_level_count: 1,
         sample_count: 1,
         dimension: wgpu::TextureDimension::D2,
-        format: wgpu::TextureFormat::Rgba8UnormSrgb,
+        format: wgpu::TextureFormat::Rgba8Unorm,
         usage: wgpu::TextureUsages::RENDER_ATTACHMENT
             | wgpu::TextureUsages::COPY_SRC
             | wgpu::TextureUsages::COPY_DST,
@@ -100,7 +100,7 @@ fn init_encoder(device: Arc<wgpu::Device>, queue: Arc<wgpu::Queue>, size: u32) -
     let mut enc = pollster::block_on(EncoderSubsystem::init(
         device,
         queue,
-        wgpu::TextureFormat::Rgba8UnormSrgb,
+        wgpu::TextureFormat::Rgba8Unorm,
         1.0,
         size,
         size,

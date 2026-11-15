@@ -175,7 +175,15 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
     color = mix(vec3<f32>(luma), color, in.params.x);
 
     // `backdrop_tint` blended on top of the blurred sample.
-    color = mix(color, in.tint.rgb, in.tint.a);
+    // The blurred sample is the target's own encoded byte (RFC-0060 section 3:
+    // sRGB blur, nothing decoded, nothing re-encoded). The tint is a linear
+    // colour like every other the frame carries, so it is encoded to meet it.
+    let tint = vec3<f32>(
+        byard_encode(in.tint.r),
+        byard_encode(in.tint.g),
+        byard_encode(in.tint.b),
+    );
+    color = mix(color, tint, in.tint.a);
 
     return vec4<f32>(color, coverage * in.params.y);
 }

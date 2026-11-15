@@ -210,7 +210,7 @@ pub async fn build_pipeline(
             "{}
 {}
 {}",
-            include_str!("clip.wgsl"),
+            super::clip_block(),
             include_str!("gradient.wgsl"),
             include_str!("canvas_shape.wgsl")
         ))),

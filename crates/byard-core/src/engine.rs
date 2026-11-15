@@ -335,14 +335,31 @@ impl Engine {
             .map_err(|_| ByardError::UnsupportedBackend)?;
 
         // --- Surface format negotiation ---
-        // Prefer sRGB so that linear-space colours in shaders display correctly.
+        // The engine draws into `Unorm` targets and its shaders write sRGB-
+        // encoded bytes, so the blend mixes encoded values like a design tool
+        // (RFC-0060). Take a `Unorm` surface when one is offered. When the
+        // surface only offers sRGB, take it and allow the `Unorm` twin as a
+        // view format; the engine's own target is the twin, and the final copy
+        // onto the surface is byte for byte.
         let caps = surface.get_capabilities(&adapter);
         let surface_format = caps
             .formats
             .iter()
-            .find(|f| f.is_srgb())
+            .find(|f| {
+                matches!(
+                    f,
+                    wgpu::TextureFormat::Bgra8Unorm | wgpu::TextureFormat::Rgba8Unorm
+                )
+            })
+            .or_else(|| caps.formats.iter().find(|f| f.is_srgb()))
             .copied()
             .unwrap_or(caps.formats[0]);
+        let target_format = surface_format.remove_srgb_suffix();
+        let view_formats = if target_format == surface_format {
+            vec![]
+        } else {
+            vec![target_format]
+        };
 
         // --- Composite alpha negotiation ---
         // The UI clears its target to `Color::TRANSPARENT` (an incremental
@@ -380,7 +397,7 @@ impl Engine {
             height,
             present_mode: wgpu::PresentMode::AutoVsync,
             alpha_mode,
-            view_formats: vec![],
+            view_formats,
             desired_maximum_frame_latency: 2,
         };
         surface.configure(&device, &surface_config);
@@ -393,7 +410,7 @@ impl Engine {
         let mut encoder = EncoderSubsystem::init(
             Arc::clone(&device),
             Arc::clone(&queue),
-            surface_format,
+            target_format,
             scale_f32,
             width,
             height,

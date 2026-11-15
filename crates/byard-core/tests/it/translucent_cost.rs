@@ -34,14 +34,14 @@ fn bx(rect: [f32; 4], color: [f32; 4], radius: f32) -> BoxInstance {
 /// 24 cards at the page's scroll `offset`, each with its layers.
 fn page(offset: f32) -> RenderFrame {
     let mut f = RenderFrame::new();
-    f.push_instance(bx([0.0, 0.0, W as f32, H as f32], rgba(0xFEF7FF), 0.0));
+    f.push_instance(bx([0.0, 0.0, W as f32, H as f32], rgba(0x00FE_F7FF), 0.0));
     for i in 0..24_u32 {
         let y = 24.0 + i as f32 * 168.0 - offset;
         let x = 24.0;
         let w = W as f32 - 48.0;
         // The card: surface container with the level-1 shadow.
         f.push_decorated(DecoratedBox {
-            base: bx([x, y, w, 144.0], rgba(0xF3EDF7), 12.0),
+            base: bx([x, y, w, 144.0], rgba(0x00F3_EDF7), 12.0),
             shadow_dy: 1.0,
             shadow_blur: 3.0,
             shadow_color: to_rgba(0x4D00_0000, true),

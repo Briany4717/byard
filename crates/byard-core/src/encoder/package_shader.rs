@@ -160,7 +160,7 @@ const LAYER_PRELUDE: &str = "\
 /// The package's code keeps its line numbers: the prelude is the only thing
 /// before it, and everything the engine adds (the transfer functions and the
 /// wrapper) comes after. A source with no `fs_main` is returned as written, and
-/// [`wrap_fragment`] says why when the pipeline is built.
+/// the pipeline's build says why.
 #[must_use]
 pub fn assembled_wgsl<S: Shader>() -> String {
     let mut source = String::from(PRELUDE);

@@ -33,6 +33,10 @@ fn fs_main(@builtin(position) p: vec4<f32>) -> @location(0) vec4<f32> {
 ";
 
 #[test]
+#[allow(
+    clippy::too_many_lines,
+    reason = "one GPU round trip, read top to bottom"
+)]
 fn the_wgsl_transfer_is_the_rust_one() {
     let Some((device, queue, _turn)) = byard_test_gpu::device(byard_core::engine::device_limits)
     else {

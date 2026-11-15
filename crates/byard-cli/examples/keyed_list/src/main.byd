@@ -17,14 +17,14 @@ View Main() {
     var names = ["Ada", "Grace", "Linus"]
     var next = 1
 
-    Column #[p: 24, gap: 12] {
+    Column #[p: 24, gap: 12, grow: 1, bg: 0xFFFBFE] {
         Row #[gap: 8] {
-            Button("Add at the front") #[width: 150] => {
+            Button("Add at the front") => {
                 names = names.reverse().push("Row {next}").reverse()
                 next += 1
             }
-            Button("Remove first") #[width: 130] => names = names.slice(1, names.len)
-            Button("Reverse") #[width: 100] => names = names.reverse()
+            Button("Remove first") => names = names.slice(1, names.len)
+            Button("Reverse") => names = names.reverse()
         }
         Column #[gap: 8] {
             for name in names key name {
@@ -36,7 +36,7 @@ View Main() {
 
 View Counter(name: Str) {
     var count = 0
-    Row #[gap: 12, align: center, p: 8, bg: 0x2A2A38, radius: 8, width: 280] {
+    Row #[gap: 12, align: center, p: 8, bg: 0xECE6F0, radius: 8, width: 280] {
         Text(name) #[width: 90]
         Text("{count}") #[width: 40]
         Button("+") => count += 1

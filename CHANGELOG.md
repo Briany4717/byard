@@ -141,6 +141,7 @@ Byard uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Fixed
 
+- **`autofocus` fires for an element drawn into an overlay that is already open.** It only did when the overlay opened; now it takes focus the first time it is drawn if nothing in the overlay has focus (a month grid replaced inside an open dialog).
 - **`scroll_fraction` reaches the whole header.** It was only bound for a direct child of a `ScrollView` with a literal `collapse_header: true`; `collapse_header: top != none`, and a `when` arm that passes it as an argument to a view, now work.
 - **A function can read a constant.** `fn bump(x: Int) -> Int => x + step` with a top-level `let step` (private or not) was `UnknownName`, though the guide lets a function read constants.
 - **A parameter's name no longer leaks into the next view `check` lowers.** A view with `min: Str` made `translate: (x1, 0.0)` in another view that reads its own `min: Float` fail with "expected a number".

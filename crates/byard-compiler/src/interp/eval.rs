@@ -831,8 +831,8 @@ pub struct Interpreter {
     /// What the focus scopes that are mounted need to give back when they go
     /// (RFC-0066 §1): by the identity of the overlay that is one.
     live_scopes: Vec<focus::LiveScope>,
-    /// The elements marked `autofocus` outside any overlay that have already
-    /// been given focus, by identity.
+    /// The elements marked `autofocus` that have already been drawn (and so
+    /// been given focus, or not, once), by identity.
     autofocused: std::collections::HashSet<u32>,
     /// The layout indices of the focused element and its ancestors, for this
     /// frame, once something asked.

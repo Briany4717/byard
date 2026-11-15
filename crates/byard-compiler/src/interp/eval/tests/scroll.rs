@@ -1757,7 +1757,10 @@ fn collapse_header_given_an_expression_binds_scroll_fraction() {
              }} {COLLAPSE_BODY} }} }}"
     );
     let (a0, a1) = sub_alpha_before_after(&src);
-    assert!(a0 > 0.9 && (0.0..0.1).contains(&a1), "faded from {a0} to {a1}");
+    assert!(
+        a0 > 0.9 && (0.0..0.1).contains(&a1),
+        "faded from {a0} to {a1}"
+    );
 }
 
 /// `scroll_fraction` reaches a header that is a `when` arm.
@@ -1772,7 +1775,10 @@ fn scroll_fraction_reaches_a_header_inside_a_when() {
              }} }} {COLLAPSE_BODY} }} }}"
     );
     let (a0, a1) = sub_alpha_before_after(&src);
-    assert!(a0 > 0.9 && (0.0..0.1).contains(&a1), "faded from {a0} to {a1}");
+    assert!(
+        a0 > 0.9 && (0.0..0.1).contains(&a1),
+        "faded from {a0} to {a1}"
+    );
 }
 
 /// `scroll_fraction` passed as an argument to a view drawn as the header.
@@ -1787,7 +1793,10 @@ fn scroll_fraction_passes_to_a_view_drawn_as_the_header() {
              Box #[opacity: 1.0 - f] {{ Text(\"Sub\") #[color: 0xC7BFDE] }} }} }}"
     );
     let (a0, a1) = sub_alpha_before_after(&src);
-    assert!(a0 > 0.9 && (0.0..0.1).contains(&a1), "faded from {a0} to {a1}");
+    assert!(
+        a0 > 0.9 && (0.0..0.1).contains(&a1),
+        "faded from {a0} to {a1}"
+    );
 }
 
 /// The combination the Scaffold wrote: a `when` whose arm draws a view that is
@@ -1803,5 +1812,8 @@ fn scroll_fraction_passes_through_a_when_to_a_view() {
              Box #[opacity: 1.0 - f] {{ Text(\"Sub\") #[color: 0xC7BFDE] }} }} }}"
     );
     let (a0, a1) = sub_alpha_before_after(&src);
-    assert!(a0 > 0.9 && (0.0..0.1).contains(&a1), "faded from {a0} to {a1}");
+    assert!(
+        a0 > 0.9 && (0.0..0.1).contains(&a1),
+        "faded from {a0} to {a1}"
+    );
 }

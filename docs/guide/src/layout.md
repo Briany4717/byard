@@ -404,6 +404,11 @@ element around where it was. A focus that moved by itself shows its ring only if
 overlay was opened by a key. A tooltip, or a list of suggestions, is not a scope and
 leaves focus where it is.
 
+The same rule holds after it has opened: an element with `autofocus: true` drawn into an
+overlay that is already open (the next page of a dialog replacing the last) takes focus the
+first time it is drawn, if nothing in that overlay has focus then. Focus that is on another
+element of the overlay stays where it is. Only the topmost overlay does this.
+
 `Escape` dismisses the topmost overlay that has a `dismiss`, and only that one, so a
 submenu closes before its menu. `focused: v` goes both ways: writing `v = true` moves
 focus to the element, `v = false` takes it away.

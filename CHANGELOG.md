@@ -146,6 +146,7 @@ Byard uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Fixed
 
+- **`byard publish` takes an icon font.** A font declared as a table (`symbols = { path = "…", icons = true }`) stopped `publish` with "must be a string path", and the same check broke the checksum of a git dependency on such a package. A font's licence file beside it (`LICENSE…`, `OFL…`, `COPYING…`, `NOTICE…`) is now published with it, since Apache-2.0 and the OFL require it to travel with the font; it is shipped, not pinned.
 - **`autofocus` fires for an element drawn into an overlay that is already open.** It only did when the overlay opened; now it takes focus the first time it is drawn if nothing in the overlay has focus (a month grid replaced inside an open dialog).
 - **`scroll_fraction` reaches the whole header.** It was only bound for a direct child of a `ScrollView` with a literal `collapse_header: true`; `collapse_header: top != none`, and a `when` arm that passes it as an argument to a view, now work.
 - **A function can read a constant.** `fn bump(x: Int) -> Int => x + step` with a top-level `let step` (private or not) was `UnknownName`, though the guide lets a function read constants.

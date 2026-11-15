@@ -123,12 +123,20 @@ pub fn declared_assets(root: &Path) -> Result<Vec<(String, PathBuf)>, ProjectErr
         .get("assets")
         .and_then(|a| a.get("fonts"))
         .and_then(toml::Value::as_table);
-    for (family, path) in fonts.into_iter().flatten() {
-        let Some(path) = path.as_str() else {
+    for (family, entry) in fonts.into_iter().flatten() {
+        // A font is a path, or a table with a `path` (an icon font,
+        // `{ path = "…", icons = true }`), as the manifest reads it.
+        let path = match entry {
+            toml::Value::String(path) => Some(path.as_str()),
+            toml::Value::Table(t) => t.get("path").and_then(toml::Value::as_str),
+            _ => None,
+        };
+        let Some(path) = path else {
             return Err(ProjectError::manifest(
                 &manifest,
                 format!(
-                    "{}: [assets.fonts] `{family}` must be a string path",
+                    "{}: [assets.fonts] `{family}` must be a string path to a font file, \
+                     or a table with a `path`",
                     manifest.display()
                 ),
             ));
@@ -177,6 +185,36 @@ pub fn publishable_files(root: &Path) -> Result<Vec<(String, PathBuf)>, ProjectE
             files.push((name, path));
         }
     }
+    // A font's licence travels with it: Apache-2.0 and the OFL both require
+    // it. Every licence file in a folder that holds a declared asset goes too.
+    let mut asset_dirs: Vec<(String, PathBuf)> = declared_assets(root)?
+        .into_iter()
+        .filter_map(|(rel, _)| {
+            let dir = Path::new(&rel).parent()?;
+            if dir.as_os_str().is_empty() {
+                return None;
+            }
+            Some((dir.to_string_lossy().replace('\\', "/"), root.join(dir)))
+        })
+        .collect();
+    asset_dirs.sort();
+    asset_dirs.dedup();
+    for (rel_dir, dir) in asset_dirs {
+        let Ok(read) = std::fs::read_dir(&dir) else {
+            continue;
+        };
+        let mut found: Vec<PathBuf> = read.filter_map(|e| e.ok().map(|e| e.path())).collect();
+        found.sort();
+        for path in found {
+            let name = path
+                .file_name()
+                .map(|n| n.to_string_lossy().into_owned())
+                .unwrap_or_default();
+            if path.is_file() && is_licence_name(&name) {
+                files.push((format!("{rel_dir}/{name}"), path));
+            }
+        }
+    }
     files.sort_by(|a, b| a.0.cmp(&b.0));
     files.dedup_by(|a, b| a.0 == b.0);
     for (rel, path) in &files {
@@ -191,6 +229,15 @@ pub fn publishable_files(root: &Path) -> Result<Vec<(String, PathBuf)>, ProjectE
         }
     }
     Ok(files)
+}
+
+/// Whether a file name is a licence a font or image ships under:
+/// `LICENSE…`, `LICENCE…`, `COPYING…`, `OFL…` or `NOTICE…`, in any case.
+fn is_licence_name(name: &str) -> bool {
+    let upper = name.to_ascii_uppercase();
+    ["LICENSE", "LICENCE", "COPYING", "OFL", "NOTICE"]
+        .iter()
+        .any(|p| upper.starts_with(p))
 }
 
 /// Collects `(relative path, absolute path)` for every `.byd` under `root`
@@ -1536,6 +1583,62 @@ mod tests {
         assert_eq!(old.packages[0].version, "0.1.0");
         assert_eq!(old.packages[0].source, "registry+../registry#brand");
 
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// An icon font is declared as a table (`{ path = "…", icons = true }`).
+    /// `publish` and the checksum read it as the manifest does: the file is
+    /// published and hashed, not refused.
+    #[test]
+    fn a_font_declared_as_a_table_is_published_and_hashed() {
+        let dir = std::env::temp_dir().join(format!("byard-font-table-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(dir.join("src")).unwrap();
+        std::fs::create_dir_all(dir.join("fonts")).unwrap();
+        std::fs::write(
+            dir.join("byard.toml"),
+            "[package]\nname = \"kit\"\nversion = \"0.1.0\"\n\n[assets.fonts]\n\
+             symbols = { path = \"fonts/Icons.ttf\", icons = true }\ntext = \"fonts/Text.ttf\"\n",
+        )
+        .unwrap();
+        std::fs::write(dir.join("src/a.byd"), "View A() { Box {} }\n").unwrap();
+        std::fs::write(dir.join("fonts/Icons.ttf"), b"icons").unwrap();
+        std::fs::write(dir.join("fonts/Text.ttf"), b"text").unwrap();
+        // The fonts' licences sit beside them, and a stray file does not go.
+        std::fs::write(dir.join("fonts/OFL-Text.txt"), b"ofl").unwrap();
+        std::fs::write(dir.join("fonts/LICENSE-Icons"), b"apache").unwrap();
+        std::fs::write(dir.join("fonts/notes.txt"), b"mine").unwrap();
+        let hashed = package_checksum(&dir).unwrap();
+
+        let files: Vec<String> = publishable_files(&dir)
+            .unwrap()
+            .into_iter()
+            .map(|(rel, _)| rel)
+            .collect();
+        assert!(files.contains(&"fonts/Icons.ttf".to_string()), "{files:?}");
+        assert!(files.contains(&"fonts/Text.ttf".to_string()), "{files:?}");
+        assert!(files.contains(&"fonts/OFL-Text.txt".to_string()), "{files:?}");
+        assert!(files.contains(&"fonts/LICENSE-Icons".to_string()), "{files:?}");
+        assert!(!files.contains(&"fonts/notes.txt".to_string()), "{files:?}");
+
+        // A licence is shipped, not pinned: changing one keeps the checksum.
+        std::fs::write(dir.join("fonts/OFL-Text.txt"), b"ofl, reworded").unwrap();
+        assert_eq!(hashed, package_checksum(&dir).unwrap());
+
+        // The icon font is part of what the checksum pins.
+        let before = package_checksum(&dir).unwrap();
+        std::fs::write(dir.join("fonts/Icons.ttf"), b"other icons").unwrap();
+        assert_ne!(before, package_checksum(&dir).unwrap());
+
+        // A table without a `path` is still refused, with what to write.
+        std::fs::write(
+            dir.join("byard.toml"),
+            "[package]\nname = \"kit\"\nversion = \"0.1.0\"\n\n[assets.fonts]\n\
+             symbols = { icons = true }\n",
+        )
+        .unwrap();
+        let err = publishable_files(&dir).unwrap_err().to_string();
+        assert!(err.contains("a table with a `path`"), "{err}");
         let _ = std::fs::remove_dir_all(&dir);
     }
 

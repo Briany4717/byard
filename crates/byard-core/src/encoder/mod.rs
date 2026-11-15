@@ -653,6 +653,7 @@ impl EncoderSubsystem {
             surface_format,
             Some(wgpu::BlendState::ALPHA_BLENDING),
             draw_depth_stencil(),
+            "fs_main",
             "ByardCore - SolidBox Render Pipeline",
         )
         .await?;
@@ -667,6 +668,7 @@ impl EncoderSubsystem {
             surface_format,
             None,
             clear_depth_stencil(),
+            CLEAR_FRAGMENT_ENTRY,
             "ByardCore - SolidBox Clear Pipeline",
         )
         .await?;
@@ -3859,6 +3861,10 @@ pub(crate) fn draw_depth_stencil_no_write() -> wgpu::DepthStencilState {
     }
 }
 
+/// The fragment entry point of `solid_box.wgsl` the clear pipeline runs. It
+/// must be the one that writes every pixel the quad covers (see the shader).
+const CLEAR_FRAGMENT_ENTRY: &str = "fs_clear";
+
 /// Depth-stencil state for the clear pipeline: never tests or writes depth
 /// (`Always` + no write), so wiping colour in the incremental scissor region
 /// leaves the draw-order depth buffer (already cleared this frame) untouched.
@@ -3872,6 +3878,7 @@ fn clear_depth_stencil() -> wgpu::DepthStencilState {
     }
 }
 
+#[allow(clippy::too_many_arguments)]
 async fn build_solid_box_pipeline(
     device: &wgpu::Device,
     bind_group_layout: &wgpu::BindGroupLayout,
@@ -3879,6 +3886,7 @@ async fn build_solid_box_pipeline(
     surface_format: wgpu::TextureFormat,
     blend: Option<wgpu::BlendState>,
     depth_stencil: wgpu::DepthStencilState,
+    fragment_entry: &str,
     debug_name: &str,
 ) -> Result<wgpu::RenderPipeline, ByardError> {
     // --- GPU VALIDATION ERROR SCOPE (RFC §8) ---
@@ -3916,7 +3924,7 @@ async fn build_solid_box_pipeline(
         },
         fragment: Some(wgpu::FragmentState {
             module: &shader_module,
-            entry_point: Some("fs_main"),
+            entry_point: Some(fragment_entry),
             targets: &[Some(wgpu::ColorTargetState {
                 format: surface_format,
                 blend,
@@ -4153,3 +4161,34 @@ mod tests;
 /// covered by `tests/instrumentation.rs`.
 #[cfg(all(test, feature = "telemetry"))]
 mod submit_scope_tests;
+
+#[cfg(test)]
+mod clear_quad_shader_tests {
+    /// The clear quad wipes every pixel it covers or it is not a clear.
+    ///
+    /// Run through `fs_main`, the quad drops fragments whose distance-field
+    /// coverage is zero, and the coverage comes from screen-space derivatives.
+    /// On WARP that left a one-pixel diagonal, where the quad's two triangles
+    /// meet, of the previous frame's ink standing in a region that had been
+    /// redrawn: the picture of a line that changed was not the picture of that
+    /// line drawn alone. Lavapipe does not show it, so this reads the shader:
+    /// the entry point the clear pipeline runs has no `discard` and takes no
+    /// derivative.
+    #[test]
+    fn the_clear_fragment_stage_cannot_drop_or_smear_a_pixel() {
+        let source = include_str!("solid_box.wgsl");
+        let entry = super::CLEAR_FRAGMENT_ENTRY;
+        assert_ne!(
+            entry, "fs_main",
+            "the clear pipeline runs the drawing stage"
+        );
+        let start = source
+            .find(&format!("fn {entry}("))
+            .unwrap_or_else(|| panic!("solid_box.wgsl has no `{entry}`"));
+        let body = &source[start..];
+        let body = &body[..body.find("\n}").map_or(body.len(), |i| i + 2)];
+        for banned in ["discard", "dpdx", "dpdy", "fwidth", "smoothstep"] {
+            assert!(!body.contains(banned), "`{entry}` uses `{banned}`:\n{body}");
+        }
+    }
+}

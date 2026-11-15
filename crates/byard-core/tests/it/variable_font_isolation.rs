@@ -154,70 +154,22 @@ fn a_variable_font_draws_the_same_after_another_at_a_heavy_weight() {
     let mut kept = encoder(&device, &queue);
     let _ = render(&mut kept, &device, &queue, &heavy);
     let after = render(&mut kept, &device, &queue, &icon);
-    eprintln!(
-        "second frame: full redraw {}, scissored {}",
-        kept.last_frame_was_full_redraw(),
-        kept.last_frame_scissored()
-    );
     let mut fresh = encoder(&device, &queue);
     let alone = render(&mut fresh, &device, &queue, &icon);
     assert!(alone.iter().any(|&b| b != 0), "the icon drew something");
-    // How far apart the two pictures are: the bytes that differ, the largest
-    // difference, and the pixels whose coverage moved by more than a quarter.
+    // Where the two pictures differ, for a CI log: the bytes, and the box of the
+    // pixels, so a stray line and a changed glyph read differently.
     let differing = after.iter().zip(&alone).filter(|(a, b)| a != b).count();
-    let largest = after
-        .iter()
-        .zip(&alone)
-        .map(|(a, b)| a.abs_diff(*b))
-        .max()
-        .unwrap_or(0);
-    let moved = after
-        .chunks_exact(4)
-        .zip(alone.chunks_exact(4))
-        .filter(|(a, b)| a[0].abs_diff(b[0]) > 64)
-        .count();
-    let drawn = alone.chunks_exact(4).filter(|p| p[0] > 0).count();
-    // The ink each picture has, and where it is: a shift keeps the ink and
-    // moves the box; a leaked axis (the icon's `FILL`) changes the ink.
-    let ink = |px: &[u8]| -> u64 { px.chunks_exact(4).map(|p| u64::from(p[0])).sum() };
-    let bounds = |px: &[u8]| -> (usize, usize, usize, usize) {
-        let mut b = (usize::MAX, usize::MAX, 0, 0);
-        for (i, p) in px.chunks_exact(4).enumerate() {
-            if p[0] > 0 {
-                let (x, y) = (i % SIZE as usize, i / SIZE as usize);
-                b = (b.0.min(x), b.1.min(y), b.2.max(x), b.3.max(y));
-            }
-        }
-        b
-    };
-    if after != alone {
-        // Both pictures as text, two pixels a character, so a CI log shows
-        // what the other one drew.
-        for (name, px) in [("after", &after), ("alone", &alone)] {
-            eprintln!("{name}:");
-            for y in (0..SIZE as usize).step_by(2) {
-                let row: String = (0..SIZE as usize)
-                    .step_by(2)
-                    .map(|x| match px[(y * SIZE as usize + x) * 4] {
-                        0 => '.',
-                        1..=127 => '+',
-                        _ => '#',
-                    })
-                    .collect();
-                eprintln!("{row}");
-            }
+    let mut area = (usize::MAX, usize::MAX, 0, 0);
+    for (i, (a, b)) in after.chunks_exact(4).zip(alone.chunks_exact(4)).enumerate() {
+        if a != b {
+            let (x, y) = (i % SIZE as usize, i / SIZE as usize);
+            area = (area.0.min(x), area.1.min(y), area.2.max(x), area.3.max(y));
         }
     }
-    eprintln!(
-        "ink after {} alone {}; box after {:?} alone {:?}",
-        ink(&after),
-        ink(&alone),
-        bounds(&after),
-        bounds(&alone)
-    );
     assert!(
         after == alone,
         "the icon line drew differently after a heavy variable line: {differing} bytes differ, \
-         the largest by {largest}; {moved} of {drawn} drawn pixels moved by more than 64"
+         in the box {area:?}"
     );
 }

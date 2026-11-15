@@ -1707,3 +1707,113 @@ fn a_growing_windowed_scrollview_does_not_push_its_siblings_off_screen() {
     // 300 - 40 - the footer leaves about 240px: twelve rows are visible.
     assert!(frame.instances().len() >= 12, "rows fill the space");
 }
+
+/// Lowers `src` (views in order, the first the root), scrolls its collapsing
+/// header's `sy` from 0 to 80 and returns the alpha of the `0xC7BFDE` text
+/// (the subtitle) before and after.
+fn sub_alpha_before_after(src: &str) -> (f32, f32) {
+    let parsed = parse(src);
+    assert!(parsed.errors.is_empty(), "{:?}", parsed.errors);
+    let mut interp = Interpreter::new();
+    interp.load_views(&parsed.views);
+    let known: Vec<&str> = parsed.views.iter().map(|v| v.name.as_str()).collect();
+    let tree = interp.lower_view(&parsed.views[0], &known);
+    assert!(interp.errors().is_empty(), "{:?}", interp.errors());
+    interp.tick();
+    let sy = interp.var_signal(&Symbol::intern("sy")).unwrap();
+    let sub_rgb = crate::interp::intrinsics::color_to_rgba(0x00C7_BFDE, false);
+    let alpha = |frame: &byard_core::frame::RenderFrame| -> f32 {
+        frame
+            .texts()
+            .iter()
+            .enumerate()
+            .find(|(_, t)| t.color[..3] == sub_rgb[..3])
+            .map_or(-1.0, |(i, t)| {
+                t.color[3] * frame.composite_opacity(|m| m.text, i)
+            })
+    };
+    let mut f0 = byard_core::frame::RenderFrame::new();
+    interp.render(&tree, &mut f0, 400.0, 300.0);
+    let a0 = alpha(&f0);
+    interp.write_var(sy, Value::Float(80.0));
+    let mut f1 = byard_core::frame::RenderFrame::new();
+    interp.render(&tree, &mut f1, 400.0, 300.0);
+    (a0, alpha(&f1))
+}
+
+const COLLAPSE_BODY: &str = "Column #[p: 8] { Box #[bg: 0x112233, width: 180, height: 120] {} \
+                             Box #[bg: 0x223344, width: 180, height: 120] {} }";
+
+/// `collapse_header` given an expression, not the literal `true`, still
+/// collapses and still binds `scroll_fraction`.
+#[test]
+fn collapse_header_given_an_expression_binds_scroll_fraction() {
+    let src = format!(
+        "View V() {{ var sx = 0.0 var sy = 0.0 let on = 1 > 0 \
+         ScrollView #[collapse_header: on, collapse_min: 20, offset: (sx, sy), \
+                      width: 200, height: 100] {{ \
+             Box #[bg: 0xAABBCC, width: 200, p: 8] {{ \
+                 Box #[opacity: 1.0 - scroll_fraction] {{ Text(\"Sub\") #[color: 0xC7BFDE] }} \
+             }} {COLLAPSE_BODY} }} }}"
+    );
+    let (a0, a1) = sub_alpha_before_after(&src);
+    assert!(
+        a0 > 0.9 && (0.0..0.1).contains(&a1),
+        "faded from {a0} to {a1}"
+    );
+}
+
+/// `scroll_fraction` reaches a header that is a `when` arm.
+#[test]
+fn scroll_fraction_reaches_a_header_inside_a_when() {
+    let src = format!(
+        "View V() {{ var sx = 0.0 var sy = 0.0 let top = 1 \
+         ScrollView #[collapse_header: top != 0, collapse_min: 20, offset: (sx, sy), \
+                      width: 200, height: 100] {{ \
+             when top != 0 {{ Box #[bg: 0xAABBCC, width: 200, p: 8] {{ \
+                 Box #[opacity: 1.0 - scroll_fraction] {{ Text(\"Sub\") #[color: 0xC7BFDE] }} \
+             }} }} {COLLAPSE_BODY} }} }}"
+    );
+    let (a0, a1) = sub_alpha_before_after(&src);
+    assert!(
+        a0 > 0.9 && (0.0..0.1).contains(&a1),
+        "faded from {a0} to {a1}"
+    );
+}
+
+/// `scroll_fraction` passed as an argument to a view drawn as the header.
+#[test]
+fn scroll_fraction_passes_to_a_view_drawn_as_the_header() {
+    let src = format!(
+        "View V() {{ var sx = 0.0 var sy = 0.0 \
+         ScrollView #[collapse_header: true, collapse_min: 20, offset: (sx, sy), \
+                      width: 200, height: 100] {{ \
+             Hdr(f: scroll_fraction) {COLLAPSE_BODY} }} }} \
+         View Hdr(f: Float) {{ Box #[bg: 0xAABBCC, width: 200, p: 8] {{ \
+             Box #[opacity: 1.0 - f] {{ Text(\"Sub\") #[color: 0xC7BFDE] }} }} }}"
+    );
+    let (a0, a1) = sub_alpha_before_after(&src);
+    assert!(
+        a0 > 0.9 && (0.0..0.1).contains(&a1),
+        "faded from {a0} to {a1}"
+    );
+}
+
+/// The combination the Scaffold wrote: a `when` whose arm draws a view that is
+/// given `scroll_fraction`.
+#[test]
+fn scroll_fraction_passes_through_a_when_to_a_view() {
+    let src = format!(
+        "View V() {{ var sx = 0.0 var sy = 0.0 let top = 1 \
+         ScrollView #[collapse_header: top != 0, collapse_min: 20, offset: (sx, sy), \
+                      width: 200, height: 100] {{ \
+             when top != 0 {{ Hdr(f: scroll_fraction) }} {COLLAPSE_BODY} }} }} \
+         View Hdr(f: Float) {{ Box #[bg: 0xAABBCC, width: 200, p: 8] {{ \
+             Box #[opacity: 1.0 - f] {{ Text(\"Sub\") #[color: 0xC7BFDE] }} }} }}"
+    );
+    let (a0, a1) = sub_alpha_before_after(&src);
+    assert!(
+        a0 > 0.9 && (0.0..0.1).contains(&a1),
+        "faded from {a0} to {a1}"
+    );
+}

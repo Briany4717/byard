@@ -1659,9 +1659,7 @@ impl Interpreter {
         // A collapsing header's height is what it was written as: its measure
         // may not squeeze it when the content below is taller than the view
         // (the collapse distance is that height less `collapse_min`).
-        if name.as_str() == "ScrollView"
-            && Self::enum_prop(&attrs, "collapse_header") == Some("true")
-        {
+        if name.as_str() == "ScrollView" && self.collapse_header_on(&attrs) {
             if let Some(&header) = child_ids.first() {
                 let mut item = self.atlas.flex_item(header);
                 if item.shrink.is_none() {

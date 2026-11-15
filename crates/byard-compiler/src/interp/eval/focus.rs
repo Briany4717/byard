@@ -152,10 +152,12 @@ impl Interpreter {
         }
 
         // Scopes that have mounted, outermost first.
+        let mut mounted: Vec<u32> = Vec::new();
         for scope in &scopes {
             if self.live_scopes.iter().any(|l| l.key == scope.key) {
                 continue;
             }
+            mounted.push(scope.key);
             let returns = self
                 .router
                 .focused()
@@ -171,6 +173,38 @@ impl Interpreter {
             self.router
                 .move_focus(&mut self.ctx, entry, visible && entry.is_some());
             moved = true;
+        }
+
+        // An `autofocus` drawn into a scope that was already open is given
+        // focus the first time it is drawn, when nothing in that scope has it
+        // (the focused element has just gone, as when a page of a dialog is
+        // replaced by the next). Only the topmost scope takes it, and one that
+        // opened this frame has had its entry already.
+        if let Some(top) = scopes.last() {
+            let inside: Vec<u32> = self
+                .router
+                .autofocus_all()
+                .iter()
+                .copied()
+                .filter(|a| self.router.scope_holds(top, *a))
+                .collect();
+            let mut taken = None;
+            for index in inside {
+                let Some(uid) = self.uid_of_index(index) else {
+                    continue;
+                };
+                let held = self
+                    .router
+                    .focused()
+                    .is_some_and(|f| self.router.scope_holds(top, f));
+                if self.autofocused.insert(uid) && !mounted.contains(&top.key) && !held {
+                    taken.get_or_insert(index);
+                }
+            }
+            if let Some(index) = taken {
+                self.router.move_focus(&mut self.ctx, Some(index), visible);
+                moved = true;
+            }
         }
 
         // An `autofocus` outside any scope is given focus the first time it is
@@ -191,9 +225,9 @@ impl Interpreter {
         if !self.autofocused.is_empty() {
             let now: Vec<u32> = self
                 .router
-                .autofocus_outside(&scopes)
-                .into_iter()
-                .filter_map(|i| self.uid_of_index(i))
+                .autofocus_all()
+                .iter()
+                .filter_map(|i| self.uid_of_index(*i))
                 .collect();
             self.autofocused.retain(|u| now.contains(u));
         }

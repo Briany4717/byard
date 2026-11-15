@@ -326,8 +326,15 @@ impl Interpreter {
                 // its *first* child (the header), the header's descendants read it
                 // to interpolate their own size/opacity. The signal is carried on
                 // `bound_sig` (unused by a ScrollView) so `render` can drive it.
+                // Written as a value (`collapse_header: top != none`) it may be
+                // on or off as the program runs, so the binding is made for
+                // anything but a literal `false`; paint decides if it drives.
                 let collapse = el.name.as_str() == "ScrollView"
-                    && Self::enum_prop(&attrs, "collapse_header") == Some("true");
+                    && attrs.iter().any(|a| {
+                        a.name.as_str() == "collapse_header"
+                            && matches!(&a.kind, crate::parser::ast::AttrKind::Prop { .. })
+                    })
+                    && Self::enum_prop(&attrs, "collapse_header") != Some("false");
                 // RFC-0037 `clip(path)`: a `Clip`'s `path { … }` child is its
                 // mask, not content. Lifted out here so it never reaches the
                 // child list, which is what keeps `path` a hard error
@@ -340,7 +347,9 @@ impl Interpreter {
                     let snap = self.env.len();
                     self.env
                         .push(Symbol::intern("scroll_fraction"), Value::Signal(frac));
+                    self.collapse_depth += 1;
                     let mut kids = self.lower_members(&el_children[..1], known_views);
+                    self.collapse_depth -= 1;
                     self.env.truncate(snap);
                     kids.extend(self.lower_members(&el_children[1..], known_views));
                     (kids, Some(frac))

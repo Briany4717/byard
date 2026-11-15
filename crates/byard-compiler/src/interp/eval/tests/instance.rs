@@ -753,3 +753,26 @@ fn individual_margin_padding_properties_override() {
         }
     );
 }
+
+/// A view's parameter name does not leak into the next view lowered on the
+/// same interpreter (what `check` does): `min: Str` in one view must not
+/// make `min` a string inside another view that declares `min: Float`.
+#[test]
+fn a_parameter_name_does_not_leak_into_the_next_view_lowered() {
+    let src = "View First(min: Str = \"\") { Text(min) } \
+               View Second(min: Float = 0.0) { \
+                   Box #[translate: (min, 0.0), width: 10, height: 10] {} }";
+    let parsed = parse(src);
+    assert!(parsed.errors.is_empty(), "{:?}", parsed.errors);
+    let mut interp = Interpreter::new();
+    interp.set_checking(true);
+    interp.load_views(&parsed.views);
+    let known: Vec<&str> = parsed.views.iter().map(|v| v.name.as_str()).collect();
+    for view in &parsed.views {
+        let tree = interp.lower_view(view, &known);
+        interp.tick();
+        let mut frame = byard_core::frame::RenderFrame::new();
+        interp.render(&tree, &mut frame, 200.0, 200.0);
+    }
+    assert!(interp.errors().is_empty(), "{:?}", interp.errors());
+}

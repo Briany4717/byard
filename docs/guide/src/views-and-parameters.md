@@ -110,6 +110,9 @@ View Main() {
 error[KeywordAsName]: `when` is a keyword and cannot name a function
 ```
 
+A parameter belongs to its own view: two views may name a parameter the same and give it
+different types (`min: Str` in one, `min: Float` in another), and neither sees the other's.
+
 ### Defaults
 
 Put `= value` after a parameter's type and callers may leave it out. `Badge`

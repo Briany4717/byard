@@ -661,6 +661,10 @@ pub struct Interpreter {
     /// re-evaluated later must capture them now, exactly as it would inside the
     /// `for` body or route body the snapshot came from.
     restored_depth: u32,
+    /// Depth of collapsing-header lowering: while a header is being lowered,
+    /// `scroll_fraction` is a name in the environment that a `when` branch in
+    /// the header (lowered later, away from here) has to be given back.
+    collapse_depth: u32,
     /// Stack of caller-supplied child-block slots, one frame per active
     /// user-view instance (RFC-0007 D-A). The block is
     /// pre-lowered in the *caller* scope so a `content` element reference inside
@@ -827,8 +831,8 @@ pub struct Interpreter {
     /// What the focus scopes that are mounted need to give back when they go
     /// (RFC-0066 §1): by the identity of the overlay that is one.
     live_scopes: Vec<focus::LiveScope>,
-    /// The elements marked `autofocus` outside any overlay that have already
-    /// been given focus, by identity.
+    /// The elements marked `autofocus` that have already been drawn (and so
+    /// been given focus, or not, once), by identity.
     autofocused: std::collections::HashSet<u32>,
     /// The layout indices of the focused element and its ancestors, for this
     /// frame, once something asked.
@@ -2331,7 +2335,8 @@ impl Interpreter {
         // as it always was. A hot reload of the same view invalidates in
         // `reload`, which knows the AST changed.
         let identity = (view.name.clone(), view.span);
-        if self.lowered_view.as_ref() != Some(&identity) {
+        let another_view = self.lowered_view.as_ref() != Some(&identity);
+        if another_view {
             self.invalidate_retained_layout();
             self.lowered_view = Some(identity);
         }
@@ -2367,12 +2372,15 @@ impl Interpreter {
         // the view, so nothing binds its parameters. They go into scope as
         // unset values: a name an attribute reads is then known to be a name
         // the view binds, the same as inside a call, and not a bare keyword.
-        // A parameter that is already a name here keeps its value. An unset one
+        // A parameter that is already a name here keeps its value, when it is
+        // the same view lowered again; another view's names are not this
+        // view's (a `min: Str` there must not be the `min: Float` here), so
+        // its parameters shadow whatever the last lowering left. An unset one
         // is the zero of its declared type, so a number is a number where a
         // number goes (`radius: v`) and a `Str` there is still the mismatch it
         // should be; a type with no obvious zero stays `Unit`.
         for param in &view.params {
-            if self.env.lookup(&param.name).is_none() {
+            if another_view || self.env.lookup(&param.name).is_none() {
                 self.env.push(param.name.clone(), unset_param(param));
             }
         }

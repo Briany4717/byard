@@ -307,7 +307,11 @@ end for infinite lists, and can pull to refresh (`pull_refresh: true` with
 `refresh =>`). A header that shrinks as you scroll is `collapse_header: true`
 with `collapse_min`; the header is its first child, and keeps the `height` it is given
 whatever the content below measures; the children of that header read the engine's
-`scroll_fraction`, from 0 to 1. The `scroll_snap` and `collapse_header` examples
+`scroll_fraction`, from 0 to 1. The header is the first thing the `ScrollView` draws: a
+box, a `when` arm or a view you wrote, which may take `scroll_fraction` as an argument
+(`TopBar(fraction: scroll_fraction)`). `collapse_header` may be a value as well as `true`
+(`collapse_header: top != none`); when it is `false` nothing is pinned and `scroll_fraction`
+stays 0. The `scroll_snap` and `collapse_header` examples
 show each one working.
 
 ## Overlay
@@ -399,6 +403,11 @@ focus goes back to the element that had it; if that is gone, to the nearest focu
 element around where it was. A focus that moved by itself shows its ring only if the
 overlay was opened by a key. A tooltip, or a list of suggestions, is not a scope and
 leaves focus where it is.
+
+The same rule holds after it has opened: an element with `autofocus: true` drawn into an
+overlay that is already open (the next page of a dialog replacing the last) takes focus the
+first time it is drawn, if nothing in that overlay has focus then. Focus that is on another
+element of the overlay stays where it is. Only the topmost overlay does this.
 
 `Escape` dismisses the topmost overlay that has a `dismiss`, and only that one, so a
 submenu closes before its menu. `focused: v` goes both ways: writing `v = true` moves

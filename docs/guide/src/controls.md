@@ -408,7 +408,8 @@ attribute tells a reader.
 ## Moving focus yourself
 
 `autofocus: true` names the element focus goes to when its [overlay opens](layout.md#where-focus-goes);
-on one that is not in an overlay it takes focus the first time it is drawn, if nothing has it. It
+on one that is not in an overlay it takes focus the first time it is drawn, if nothing has it,
+and in an overlay that is already open, the first time it is drawn, if nothing in the overlay has it. It
 is `AutofocusNeedsFocus` on an element nothing can focus. `focused: v` goes both ways: a write of
 `true` to `v` focuses the element if it can take focus and is drawn, `false` blurs it, and when
 several are written in one frame the last wins.

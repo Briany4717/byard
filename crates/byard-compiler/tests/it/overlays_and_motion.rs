@@ -149,6 +149,69 @@ fn a_dialog_takes_focus_traps_tab_and_gives_it_back() {
     assert!(app.focused().contains("\"Open\""), "{}", app.dump());
 }
 
+const PAGES: &str = r#"
+View Main() {
+    var open = false
+    var page = 0
+    Column {
+        Button("Open") #[width: 80, height: 40] => { open = true }
+        when open {
+            Overlay #[dismiss => { open = false }] {
+                Column #[a11y_role: dialog, a11y_label: "Pages", anchor: center, bg: 0x333344, p: 20, gap: 10, width: 300] {
+                    Button("Close") #[width: 80, height: 40] => { open = false }
+                    when page == 0 {
+                        Button("First") #[width: 80, height: 40, autofocus: true] => { page = 1 }
+                    }
+                    when page == 1 {
+                        Button("Second") #[width: 80, height: 40, autofocus: true] => { page = 2 }
+                    }
+                    when page == 2 {
+                        Button("Third") #[width: 80, height: 40] => { page = 0 }
+                    }
+                }
+            }
+        }
+    }
+}
+"#;
+
+/// RFC-0066 §1, as written for an element already in an open dialog: an
+/// `autofocus` drawn after the scope opened takes focus when nothing in the
+/// scope has it (the focused element went, as it does when a page of the dialog
+/// is replaced by the next).
+#[test]
+fn an_autofocus_mounted_in_an_open_dialog_takes_focus() {
+    let mut app = App::new(PAGES);
+    app.key("Tab");
+    app.key("Enter");
+    app.send(&[]);
+    assert!(app.focused().contains("\"First\""), "{}", app.dump());
+    app.key("Enter");
+    app.send(&[]);
+    assert!(app.focused().contains("\"Second\""), "{}", app.dump());
+}
+
+#[test]
+fn an_autofocus_mounted_in_an_open_dialog_leaves_focus_that_is_in_it() {
+    // "Close" now turns the page, and keeps focus while "Second" is drawn.
+    let src = PAGES.replacen(
+        "Button(\"Close\") #[width: 80, height: 40] => { open = false }",
+        "Button(\"Close\") #[width: 80, height: 40] => { page = 1 }",
+        1,
+    );
+    let mut app = App::new(&src);
+    app.key("Tab");
+    app.key("Enter");
+    app.send(&[]);
+    assert!(app.focused().contains("\"First\""), "{}", app.dump());
+    app.key("Tab");
+    assert!(app.focused().contains("\"Close\""), "{}", app.dump());
+    app.key("Enter");
+    app.send(&[]);
+    assert!(app.dump().contains("\"Second\""), "{}", app.dump());
+    assert!(app.focused().contains("\"Close\""), "{}", app.dump());
+}
+
 #[test]
 fn a_dialog_without_autofocus_goes_to_the_first_focusable() {
     let src = DIALOG.replace(", autofocus: true", "");

@@ -665,6 +665,12 @@ impl EventRouter {
         self.autofocus.is_empty()
     }
 
+    /// The elements marked `autofocus` this frame, in the order drawn.
+    #[must_use]
+    pub fn autofocus_all(&self) -> &[u32] {
+        &self.autofocus
+    }
+
     /// The elements marked `autofocus` this frame that are not in any of
     /// `scopes`.
     #[must_use]

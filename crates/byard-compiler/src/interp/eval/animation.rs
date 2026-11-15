@@ -55,6 +55,11 @@ pub(super) struct LoopClock {
     /// mount, and cleared by a retarget that cancels a `delay:`, never by one
     /// that restarts a stagger.
     honor_delay: bool,
+    /// The render this timeline began on, and whether it has been retargeted
+    /// since: what tells the move off an `on enter` value (the frame after
+    /// the element arrived) from a change the user made.
+    born_seq: u64,
+    retargeted: bool,
 }
 
 /// The persisted state of one animated gradient (RFC-0057 §3): where it left
@@ -751,7 +756,16 @@ impl Interpreter {
     /// A target change reseeds `from` to the current on-screen value so a
     /// mid-flight reversal is continuous.
     pub(super) fn eval_animated(&mut self, target: &Expr, anim: &Expr, key: AnimKey) -> Value {
+        let probing = self.first_measure_pending();
+        if probing {
+            self.ctx.start_read_log();
+        }
         let target_value = self.eval_pure(target);
+        self.snap_seq = if probing && self.read_first_measure() {
+            self.frame_seq
+        } else {
+            0
+        };
         // No advancing clock (a host that never calls `set_now_ms`, e.g. a
         // non-animating test path): resolve straight to the target so an
         // animation can never latch `has_active_animations` on `t = 0` forever.
@@ -796,6 +810,26 @@ impl Interpreter {
         Value::Float(f64::from(self.animate_f32(target_val, &spec, key)))
     }
 
+    /// Whether the frame before this one was an element's first measurement
+    /// and its handler wrote something: only then is a read log of the
+    /// target worth taking.
+    fn first_measure_pending(&self) -> bool {
+        self.first_measure_seq != 0
+            && self.frame_seq == self.first_measure_seq + 1
+            && !self.first_measure_written.is_empty()
+    }
+
+    /// Whether the target, as it was just evaluated, read something an
+    /// element's first `on measure` wrote: only that value is where the
+    /// element *is*. A change the same frame made for another reason, a
+    /// branch of the target that did not read it, is still a change.
+    fn read_first_measure(&mut self) -> bool {
+        let (signals, memos) = self.ctx.take_read_log();
+        let written = &self.first_measure_written;
+        signals.iter().any(|s| written.contains(s))
+            || memos.iter().any(|m| self.ctx.memo_reads_any(*m, written))
+    }
+
     /// Moves one number towards `target_val` on the motion `spec` names, under
     /// `key`, and returns where it is now (RFC-0010, RFC-0025). Marks the frame
     /// active until the motion settles. The scalar `with` and each slot of an
@@ -814,6 +848,10 @@ impl Interpreter {
         }
         let packed = pack_curve(spec.curve);
         let now = self.now_ms;
+        // The frame after an element is measured for the first time: what it
+        // wrote is where the element is, so an animation still on its first
+        // value starts from there and does not travel from the placeholder.
+        let measured = self.snap_seq != 0 && self.snap_seq == self.frame_seq;
         let motion = self
             .animations
             .entry(key)
@@ -826,7 +864,11 @@ impl Interpreter {
         // Retarget on a goal change: reseed `from` to where the property
         // actually is right now (interruptible spring), restart the clock.
         if (motion.to - target_val).abs() > f32::EPSILON {
-            let current = motion.sample(now);
+            let current = if measured && (motion.from - motion.to).abs() <= f32::EPSILON {
+                target_val
+            } else {
+                motion.sample(now)
+            };
             motion.from = current;
             motion.to = target_val;
             motion.start_ms = now;
@@ -1046,7 +1088,7 @@ impl Interpreter {
         if !phase.finished {
             // A loop that never ends does not keep a leaving element drawn.
             if matches!(spec.repeat, RepeatMode::Infinite) {
-                self.any_active = true;
+                self.endless_seq = self.frame_seq;
             } else {
                 self.note_active();
             }
@@ -1072,14 +1114,25 @@ impl Interpreter {
     /// Positions a keyframe sequence on the engine clock: which two steps
     /// surround "now" and how far between them the value sits (RFC-0025 §3).
     ///
-    /// Returns `None` when the sequence is malformed (the checker has already
-    /// reported it) or the host never advanced the clock. Marks the animation
+    /// Returns `None` when the sequence is malformed (reported, once, here or
+    /// by the attribute checker) or the host never advanced the clock. Marks the animation
     /// active unless a finite sequence has played out, the settling contract
     /// the whole animation system shares.
     fn keyframe_blend<'a>(&mut self, expr: &'a Expr) -> Option<KeyframeBlend<'a>> {
         use byard_core::frame::{MAX_KEYFRAME_STEPS, MotionCurve, keyframe_cursor, loop_phase};
 
-        let track = crate::interp::anim::resolve_keyframes_in(expr, Some(&self.theme))?.ok()?;
+        let track = match crate::interp::anim::resolve_keyframes_in(expr, Some(&self.theme))? {
+            Ok(track) => track,
+            // A sequence the attribute checker never sees (a coordinate in a
+            // path body, an argument of a shape) is reported here, once, so it
+            // is never a value that is silently flat.
+            Err(err) => {
+                if !self.errors.contains(&err) {
+                    self.errors.push(err);
+                }
+                return None;
+            }
+        };
         let key = self.anim_key(expr.span());
         // Without an advancing clock, resolve to the sequence's first value,
         // mirrors the `with` path, and never latches the active set at `t = 0`.
@@ -1115,7 +1168,7 @@ impl Interpreter {
         );
         if !phase.finished {
             if matches!(track.repeat, RepeatMode::Infinite) {
-                self.any_active = true;
+                self.endless_seq = self.frame_seq;
             } else {
                 self.note_active();
             }
@@ -1300,6 +1353,8 @@ impl Interpreter {
             last_seen_seq: seq,
             endpoints,
             honor_delay: true,
+            born_seq: seq,
+            retargeted: false,
         });
         if seq.saturating_sub(clock.last_seen_seq) > 1 {
             clock.start_ms = clock
@@ -1308,9 +1363,17 @@ impl Interpreter {
         }
         clock.last_seen_seq = seq;
         if clock.endpoints != endpoints {
+            // The first retarget, on the frame after an element with an `on
+            // enter` arrived, is the element leaving the values that block
+            // gave it for its own: a mount, whose delay is waited out.
+            let arriving = !clock.retargeted
+                && self.entering_seq != 0
+                && clock.born_seq == self.entering_seq
+                && seq == clock.born_seq + 1;
+            clock.retargeted = true;
             clock.endpoints = endpoints;
             clock.start_ms = now;
-            clock.honor_delay = !cancellable;
+            clock.honor_delay = !cancellable || arriving;
         }
         clock.last_seen_ms = now;
         (now.saturating_sub(clock.start_ms), clock.honor_delay)

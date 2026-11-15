@@ -334,7 +334,8 @@ Read it with `??`, which gives the right side when there is nothing, or inside
 `when color != none { … }` and the true arm of `color != none ? a : b`, where `color`
 is a colour. Any other read, such as `bg: color`, is `NoneNotHandled`, which shows both
 ways to write it. The default of a `T?` is `none` and nothing else; a call may pass
-`none` too. Without a default the parameter is required.
+`none` too, also as the arm of a `?:` (`color: on ? 0xFF0000 : none`), in a call or in
+a context's `provide`. Without a default the parameter is required.
 
 The names in the braces mean what they mean where you wrote them, always. If
 `ActionButton` has a parameter, a `let` or a `var` called `count` of its own, the

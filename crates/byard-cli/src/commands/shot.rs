@@ -49,6 +49,9 @@ pub enum Step {
     Release(f32, f32),
     /// Move the pointer to a logical point, pressing nothing (RFC-0056).
     Hover(f32, f32),
+    /// Press at the first point, move to the second in [`DRAG_MOVES`] steps,
+    /// a frame each, and let go there: a swipe, a scroll, a sheet pulled down.
+    Drag((f32, f32), (f32, f32)),
     /// Press a key.
     Key(Key),
     /// Type text.
@@ -83,6 +86,13 @@ impl Step {
                 .collect(),
             Self::Release(x, y) => vec![pointer_event(EventKind::PointerUp, *x, *y, time_ms)],
             Self::Hover(x, y) => vec![pointer_event(EventKind::PointerMove, *x, *y, time_ms)],
+            // Only the press: the moves and the release are frames of their
+            // own (`Scene::apply`), because the router joins the moves of one
+            // frame into one and a drag would arrive as a jump.
+            Self::Drag((x0, y0), _) => [EventKind::PointerMove, EventKind::PointerDown]
+                .into_iter()
+                .map(|kind| pointer_event(kind, *x0, *y0, time_ms))
+                .collect(),
             Self::Key(Key { name, mods }) => [EventKind::KeyDown, EventKind::KeyUp]
                 .into_iter()
                 .map(|kind| InputEvent {
@@ -110,6 +120,14 @@ impl Step {
         }
     }
 }
+
+/// How many moves a [`Step::Drag`] makes between the press and the release,
+/// evenly spaced and a frame apart, so a handler that reads travel sees a
+/// gesture and not a jump.
+const DRAG_MOVES: u16 = 8;
+
+/// A drag's two ends, press then release.
+pub type Drag = ((f32, f32), (f32, f32));
 
 /// A pointer event at a logical point, with no payload or modifiers.
 fn pointer_event(kind: EventKind, x: f32, y: f32, time_ms: u64) -> InputEvent {
@@ -339,7 +357,8 @@ impl Scene {
         self.now += 16;
     }
 
-    /// Does one step: one frame, or for a wait, as many as the time takes.
+    /// Does one step: one frame; for a wait, as many as the time takes; for a
+    /// drag, a press, the moves and the release, a frame each.
     pub fn apply(&mut self, what: &Step) {
         if let Step::Wait(ms) = what {
             self.run_to(self.now + ms);
@@ -347,6 +366,16 @@ impl Scene {
         }
         let events = what.events(self.now);
         self.frame_with(&events);
+        if let Step::Drag((x0, y0), (x1, y1)) = what {
+            for i in 1..=DRAG_MOVES {
+                let t = f32::from(i) / f32::from(DRAG_MOVES);
+                let at = (x0 + (x1 - x0) * t, y0 + (y1 - y0) * t);
+                let moved = pointer_event(EventKind::PointerMove, at.0, at.1, u64::from(self.now));
+                self.frame_with(&[moved]);
+            }
+            let up = pointer_event(EventKind::PointerUp, *x1, *y1, u64::from(self.now));
+            self.frame_with(&[up]);
+        }
     }
 
     /// Runs frames until `at_ms` of app time has passed, then once more at
@@ -369,7 +398,12 @@ impl Scene {
         let mut still = 0_u32;
         while self.now < until {
             self.frame_with(&[]);
-            still = if self.interp.needs_another_frame() || self.interp.has_background_work() {
+            // A loop that never ends is a function of the clock, so it does not
+            // keep the frames in between from being skipped; anything that has
+            // to be stepped through does.
+            still = if self.interp.needs_another_frame_besides_loops()
+                || self.interp.has_background_work()
+            {
                 0
             } else {
                 still + 1

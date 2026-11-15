@@ -1041,7 +1041,7 @@ impl EventRouter {
     }
 
     /// Whether the press at `pos` is claimed only by something that taps or
-    /// presses, with no drag of its own and nothing to focus: a drag that
+    /// presses, with no drag of its own and no focus of its own: a drag that
     /// starts there can scroll a view around it and cancel the tap.
     #[must_use]
     pub fn press_only_taps(&self, pos: (f32, f32)) -> bool {
@@ -1050,6 +1050,17 @@ impl EventRouter {
                 .iter()
                 .any(|h| hits(h.rect, h.frame, pos) && kinds.contains(&h.kind))
         };
+        // What is focusable at the point counts only when it is the thing
+        // that taps: a focusable that merely holds the tapping element (a
+        // list that takes the arrow keys) is not a reason to keep the press
+        // from scrolling the view inside it.
+        let focus_taps = self.focusable_at(None, pos).is_some_and(|f| {
+            self.handlers.iter().any(|h| {
+                h.elem == f
+                    && hits(h.rect, h.frame, pos)
+                    && matches!(h.kind, EventKind::Tap | EventKind::PointerDown)
+            })
+        });
         at(&[EventKind::Tap, EventKind::PointerDown])
             && !at(&[
                 EventKind::PointerDrag,
@@ -1057,7 +1068,7 @@ impl EventRouter {
                 EventKind::Drag,
                 EventKind::Change,
             ])
-            && self.focusable_at(None, pos).is_none()
+            && !focus_taps
     }
 
     /// Gives up the press in flight: its release is no tap, and no drag of its

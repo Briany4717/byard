@@ -35,6 +35,7 @@ enum Act {
     Hold(Target),
     Release(Target),
     Hover(Target),
+    Drag(Target, Target),
     Key(Key, String),
     Type(String),
     Wait(u32),
@@ -99,7 +100,9 @@ const TEST_KEYS: &[&str] = &[
     "not",
     "not_exact",
 ];
-const ACT_KEYS: &[&str] = &["tap", "hold", "release", "hover", "key", "type", "wait"];
+const ACT_KEYS: &[&str] = &[
+    "tap", "hold", "release", "hover", "drag", "key", "type", "wait",
+];
 const CHECK_KEYS: &[&str] = &["expect", "exact", "not", "not_exact"];
 
 fn unknown_key(key: &str, allowed: &[&str]) -> String {
@@ -178,6 +181,32 @@ fn target_of(v: &Value, what: &str) -> Result<Target, String> {
     }
 }
 
+/// `drag = ["x,y", "x,y"]`: two points, each `"x,y"`, `[x, y]` or text from a
+/// line of the tree.
+fn drag_of(value: &Value) -> Result<(Target, Target), String> {
+    let two = "`drag` takes two points, [\"x,y\", \"x,y\"]";
+    let Value::Array(ends) = value else {
+        return Err(two.into());
+    };
+    let [from, to] = ends.as_slice() else {
+        return Err(two.into());
+    };
+    let end = |v: &Value| match v {
+        Value::String(text) => match parse_xy(text) {
+            Some((px, py)) => Ok(Target::Point(px, py)),
+            None => Ok(Target::Line(text.clone())),
+        },
+        other => target_of(other, "drag"),
+    };
+    Ok((end(from)?, end(to)?))
+}
+
+/// `"120, 340"` as a point.
+fn parse_xy(s: &str) -> Option<(f32, f32)> {
+    let (x, y) = s.split_once(',')?;
+    Some((x.trim().parse().ok()?, y.trim().parse().ok()?))
+}
+
 fn check_of(t: &Table) -> Result<Check, String> {
     let get = |k: &str| {
         t.get(k)
@@ -207,7 +236,7 @@ fn step_of(t: &Table) -> Result<TestStep, String> {
         ([], true) => Ok(TestStep::Check(check_of(t)?)),
         ([], false) => Err("an empty step".into()),
         ([_], true) | ([_, _, ..], _) => Err(
-            "a step does one thing: one of tap, hold, release, hover, key, type, wait, or checks \
+            "a step does one thing: one of tap, hold, release, hover, drag, key, type, wait, or checks \
              (expect, exact, not, not_exact)"
                 .into(),
         ),
@@ -218,6 +247,10 @@ fn step_of(t: &Table) -> Result<TestStep, String> {
                 "hold" => Act::Hold(target_of(v, act)?),
                 "release" => Act::Release(target_of(v, act)?),
                 "hover" => Act::Hover(target_of(v, act)?),
+                "drag" => {
+                    let (from, to) = drag_of(v)?;
+                    Act::Drag(from, to)
+                }
                 "key" => {
                     let chord = string_of(v, act)?;
                     let (mods, name) = byard_core::KeyModifiers::parse_chord(&chord)
@@ -425,6 +458,7 @@ fn describe(act: &Act) -> String {
         Act::Hold(t) => format!("hold {}", target(t)),
         Act::Release(t) => format!("release {}", target(t)),
         Act::Hover(t) => format!("hover {}", target(t)),
+        Act::Drag(a, b) => format!("drag {} to {}", target(a), target(b)),
         Act::Key(_, chord) => format!("key {chord}"),
         Act::Type(s) => format!("type {s:?}"),
         Act::Wait(ms) => format!("wait {ms}"),
@@ -490,6 +524,7 @@ fn shot_step(scene: &Scene, act: &Act) -> Result<Step, Vec<String>> {
             let (x, y) = point(t)?;
             Step::Hover(x, y)
         }
+        Act::Drag(a, b) => Step::Drag(point(a)?, point(b)?),
         Act::Key(k, _) => Step::Key(k.clone()),
         Act::Type(s) => Step::Type(s.clone()),
         Act::Wait(ms) => Step::Wait(*ms),

@@ -1,0 +1,27 @@
+// A path in a Canvas inside a Clip is cut at the Clip's edge, as every other
+// shape is. The wave in the first row is 400 wide and shown through 120.
+//
+//   byard shot crates/byard-cli/examples/path_in_clip --size 300x120 -o clip.png
+View Main() {
+    Column #[bg: 0x1C1B1F, p: 16, gap: 12] {
+        Clip #[width: 120, height: 24] {
+            Canvas #[width: 400, height: 24] {
+                path(stroke: 0xD0BCFF, stroke_width: 4, cap: round, join: round) {
+                    move(0, 12)
+                    cubic(40, -4, 60, 28, 100, 12)
+                    cubic(140, -4, 160, 28, 200, 12)
+                    cubic(240, -4, 260, 28, 300, 12)
+                    cubic(340, -4, 360, 28, 400, 12)
+                }
+            }
+        }
+        Canvas #[width: 200, height: 24] {
+            path(stroke: 0x4F378B, stroke_width: 4, cap: round) { move(0, 12) line(200, 12) }
+        }
+        Clip #[width: 120, height: 24] {
+            Canvas #[width: 400, height: 24] {
+                path(fill: 0xEADDFF) { move(0, 0) line(200, 0) line(200, 24) line(0, 24) close() }
+            }
+        }
+    }
+}

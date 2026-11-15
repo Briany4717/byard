@@ -365,6 +365,7 @@ impl Interpreter {
         }) {
             if !self.entered_prev.contains(&key) {
                 state = state.union(StyleState::ENTERING);
+                self.entering_seq = self.frame_seq;
                 // The frame after this one is where it moves to its own
                 // values, so one has to be asked for.
                 self.any_active = true;
@@ -439,30 +440,55 @@ impl Interpreter {
     /// Declares, before a view's body (a `when` branch, a `for` body, a slot's
     /// block) is lowered, the identity of every element in it tagged `as name`,
     /// so that a state block can name an element written after it
-    /// (RFC-0062 §5). The scan stops at a nested `when`, `for` or route, which
-    /// declare their own, and costs nothing when no element is named.
-    pub(super) fn declare_state_names(&mut self, members: &[crate::parser::ast::Member]) {
-        fn scan(members: &[crate::parser::ast::Member], names: &mut Vec<Symbol>) {
+    /// (RFC-0062 §5). The scan stops at a nested `for` or route, which declare
+    /// their own, and costs nothing when no element is named.
+    ///
+    /// It goes into a `when`'s branches: a name tagged there is declared here,
+    /// beside the elements that may name it from outside (`a11y_described_by`
+    /// on the box around the `when`), and marked, so the branch reuses the
+    /// identity instead of declaring another (`reuse`). A branch that is not
+    /// mounted has nothing at that identity, and the name points at nothing.
+    pub(super) fn declare_state_names(
+        &mut self,
+        members: &[crate::parser::ast::Member],
+        reuse: bool,
+    ) {
+        use crate::parser::ast::Member;
+        fn scan(members: &[Member], names: &mut Vec<(Symbol, bool)>, in_when: bool) {
             for member in members {
-                if let crate::parser::ast::Member::Element(el) = member {
-                    if let Some(name) = &el.anchor_name {
-                        if !names.contains(name) {
-                            names.push(name.clone());
+                match member {
+                    Member::Element(el) => {
+                        if let Some(name) = &el.anchor_name {
+                            if !names.iter().any(|(n, _)| n == name) {
+                                names.push((name.clone(), in_when));
+                            }
+                        }
+                        scan(&el.children, names, in_when);
+                    }
+                    Member::When { then, els, .. } => {
+                        scan(then, names, true);
+                        if let Some(els) = els {
+                            scan(els, names, true);
                         }
                     }
-                    scan(&el.children, names);
+                    _ => {}
                 }
             }
         }
         let mut names = Vec::new();
-        scan(members, &mut names);
-        for name in names {
+        scan(members, &mut names, false);
+        for (name, in_when) in names {
+            let key = Symbol::intern(&format!("@{}", name.as_str()));
+            let hoisted = Symbol::intern(&format!("@^{}", name.as_str()));
+            if reuse && self.env.lookup(&hoisted).is_some() && self.env.lookup(&key).is_some() {
+                continue;
+            }
             self.state_uses.names = true;
             let uid = self.fresh_elem_uid();
-            self.env.push(
-                Symbol::intern(&format!("@{}", name.as_str())),
-                Value::Int(i64::from(uid)),
-            );
+            self.env.push(key, Value::Int(i64::from(uid)));
+            if in_when {
+                self.env.push(hoisted, Value::Unit);
+            }
         }
     }
 
@@ -472,7 +498,7 @@ impl Interpreter {
         members: &[crate::parser::ast::Member],
         known_views: &[&str],
     ) -> Vec<super::RenderNode> {
-        self.declare_state_names(members);
+        self.declare_state_names(members, false);
         self.lower_members(members, known_views)
     }
 

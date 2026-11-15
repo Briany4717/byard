@@ -1334,6 +1334,7 @@ fn a_hovered_call_transitions_and_its_siblings_stay_put() {
     near(&radii(&mut p, 10), &[4.0, 4.0], "at rest");
     p.interp
         .dispatch_events(&[byard_core::platform::InputEvent {
+            surface: byard_core::SurfaceId::MAIN,
             kind: byard_core::platform::EventKind::PointerMove,
             pos: (10.0, 10.0),
             delta: (0.0, 0.0),
@@ -1365,6 +1366,7 @@ fn a_pressed_call_transitions_alone() {
     near(&scales(&mut p, 10), &[1.0, 1.0], "at rest");
     p.interp
         .dispatch_events(&[byard_core::platform::InputEvent {
+            surface: byard_core::SurfaceId::MAIN,
             kind: byard_core::platform::EventKind::PointerDown,
             pos: (10.0, 10.0),
             delta: (0.0, 0.0),

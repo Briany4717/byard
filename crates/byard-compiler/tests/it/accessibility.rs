@@ -749,6 +749,7 @@ fn a_request_for_something_that_cannot_be_focused_changes_nothing() {
         0
     );
     let forged = byard_core::InputEvent {
+        surface: byard_core::SurfaceId::MAIN,
         kind: byard_core::EventKind::AccessFocus,
         pos: (0.0, 0.0),
         delta: (0.0, 0.0),

@@ -477,12 +477,29 @@ struct ShapePass {
 /// behind.
 const MAX_SPARE_BUFFERS: usize = 256;
 
+/// What the text pipeline keeps for one surface (RFC-0068 §5): the shaped line
+/// cache, which is aligned by index with that surface's own text pool, and the
+/// glyphon viewport holding its resolution. Everything else the pipeline owns
+/// (fonts, the glyph atlas, the swash cache, the custom glyph table) is shared
+/// by every surface, so a second bar does not load a second copy of any of it.
+pub(crate) struct TextTarget {
+    cache: Vec<CachedLine>,
+    viewport: Viewport,
+}
+
 /// GPU text pipeline owned by [`EncoderSubsystem`](super::EncoderSubsystem).
 ///
 /// Wraps all glyphon state into a single struct so that it can be initialised
 /// once in [`EncoderSubsystem::init`](super::EncoderSubsystem::init) and driven frame-by-frame by
 /// [`prepare`](TextGlyphPipeline::prepare) + [`render_layer`](TextGlyphPipeline::render_layer).
 pub struct TextGlyphPipeline {
+    /// Whether the atlas is trimmed by the end of the round instead of at the
+    /// end of each [`prepare`](Self::prepare) (RFC-0068 §5). Set while a round
+    /// of frames is open, so that a glyph one surface just uploaded is not
+    /// evicted before the next surface of the round uses it.
+    defer_atlas_trim: bool,
+    /// How many times the atlas has been trimmed, so a test can count them.
+    atlas_trims: u64,
     /// glyphon font system, owns the loaded font data and shaped buffers.
     font_system: FontSystem,
     /// glyphon swash cache, rasterises shaped glyphs on demand.
@@ -590,6 +607,8 @@ impl TextGlyphPipeline {
         let mut font_system = crate::text::new_font_system();
         let empty_buffer = Buffer::new(&mut font_system, Metrics::new(12.0, 14.0));
         Ok(Self {
+            defer_atlas_trim: false,
+            atlas_trims: 0,
             font_system,
             swash_cache: SwashCache::new(),
             atlas,
@@ -900,9 +919,66 @@ impl TextGlyphPipeline {
                 .map_err(|e| ByardError::TextPrepare(e.to_string()))?;
         }
         // This frame's glyphs stay; the atlas may drop the rest when short of
-        // room. Without this nothing was ever evictable.
-        self.atlas.trim();
+        // room. Without this nothing was ever evictable. Inside a round the
+        // trim waits for every surface of the round to have prepared
+        // (`trim_atlas`), because it frees whatever *this* prepare did not use.
+        if !self.defer_atlas_trim {
+            self.trim_atlas();
+        }
         Ok(())
+    }
+
+    /// Whether [`prepare`](Self::prepare) leaves the atlas trim to
+    /// [`trim_atlas`](Self::trim_atlas) (a round is open).
+    pub(super) fn set_defer_atlas_trim(&mut self, defer: bool) {
+        self.defer_atlas_trim = defer;
+    }
+
+    /// Lets the glyph atlas drop what no prepare since the last trim used.
+    ///
+    /// Runs once per round, after every surface that drew in it: the swash
+    /// workaround (see `variation_glyphs`) needs the atlas trimmed to stay
+    /// bounded, and trimming between two surfaces of one round would evict a
+    /// glyph the first uploaded before the second drew it.
+    pub(super) fn trim_atlas(&mut self) {
+        self.atlas.trim();
+        self.atlas_trims += 1;
+    }
+
+    /// How many times the atlas has been trimmed (see
+    /// [`trim_atlas`](Self::trim_atlas)).
+    pub(super) const fn atlas_trims(&self) -> u64 {
+        self.atlas_trims
+    }
+
+    /// The per-surface text state of a new surface: no shaped lines yet, and
+    /// its own glyphon viewport at this size in physical pixels.
+    pub(super) fn new_target(
+        &self,
+        device: &wgpu::Device,
+        queue: &wgpu::Queue,
+        phys_w: u32,
+        phys_h: u32,
+    ) -> TextTarget {
+        let mut viewport = Viewport::new(device, &self.glyph_cache);
+        viewport.update(
+            queue,
+            Resolution {
+                width: phys_w,
+                height: phys_h,
+            },
+        );
+        TextTarget {
+            cache: Vec::new(),
+            viewport,
+        }
+    }
+
+    /// Makes `incoming` the text state in use and hands back the one that was.
+    pub(super) fn swap_target(&mut self, mut incoming: TextTarget) -> TextTarget {
+        std::mem::swap(&mut self.cache, &mut incoming.cache);
+        std::mem::swap(&mut self.viewport, &mut incoming.viewport);
+        incoming
     }
 
     /// When the table of custom glyph ids is nearly full, empties it and glyphon's atlas together, and

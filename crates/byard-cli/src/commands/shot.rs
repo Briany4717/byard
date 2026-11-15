@@ -69,6 +69,7 @@ impl Step {
             Self::Tap(x, y) => [EventKind::PointerDown, EventKind::PointerUp]
                 .into_iter()
                 .map(|kind| InputEvent {
+                    surface: byard_core::SurfaceId::MAIN,
                     kind,
                     pos: (*x, *y),
                     delta: (0.0, 0.0),
@@ -96,6 +97,7 @@ impl Step {
             Self::Key(Key { name, mods }) => [EventKind::KeyDown, EventKind::KeyUp]
                 .into_iter()
                 .map(|kind| InputEvent {
+                    surface: byard_core::SurfaceId::MAIN,
                     kind,
                     pos: (0.0, 0.0),
                     delta: (0.0, 0.0),
@@ -109,6 +111,7 @@ impl Step {
             Self::Type(text) => text
                 .chars()
                 .map(|c| InputEvent {
+                    surface: byard_core::SurfaceId::MAIN,
                     kind: EventKind::TextInput,
                     pos: (0.0, 0.0),
                     delta: (0.0, 0.0),
@@ -132,6 +135,7 @@ pub type Drag = ((f32, f32), (f32, f32));
 /// A pointer event at a logical point, with no payload or modifiers.
 fn pointer_event(kind: EventKind, x: f32, y: f32, time_ms: u64) -> InputEvent {
     InputEvent {
+        surface: byard_core::SurfaceId::MAIN,
         kind,
         pos: (x, y),
         delta: (0.0, 0.0),

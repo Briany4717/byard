@@ -63,6 +63,7 @@ fn build() -> (Interpreter, Vec<RenderNode>) {
 
 fn tap(pos: (f32, f32), t: u64) -> InputEvent {
     InputEvent {
+        surface: byard_core::SurfaceId::MAIN,
         kind: EventKind::Tap,
         pos,
         delta: (0.0, 0.0),

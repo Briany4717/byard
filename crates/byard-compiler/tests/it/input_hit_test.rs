@@ -14,6 +14,7 @@ const HELLO_WORLD: &str = include_str!("../../examples/hello_world.byd");
 
 fn down(pos: (f32, f32), t: u64) -> InputEvent {
     InputEvent {
+        surface: byard_core::SurfaceId::MAIN,
         kind: EventKind::PointerDown,
         pos,
         delta: (0.0, 0.0),
@@ -25,6 +26,7 @@ fn down(pos: (f32, f32), t: u64) -> InputEvent {
 
 fn up(pos: (f32, f32), t: u64) -> InputEvent {
     InputEvent {
+        surface: byard_core::SurfaceId::MAIN,
         kind: EventKind::PointerUp,
         pos,
         delta: (0.0, 0.0),

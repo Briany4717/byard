@@ -284,6 +284,7 @@ fn a_prop_bound_to_a_var_is_re_evaluated_every_tick() {
 
     // Tap the button, which writes the `var`, and render again.
     interp.dispatch_events(&[byard_core::InputEvent {
+        surface: byard_core::SurfaceId::MAIN,
         kind: byard_core::platform::EventKind::Tap,
         pos: (60.0, 30.0),
         delta: (0.0, 0.0),
@@ -323,6 +324,7 @@ fn a_pointer_event_over_the_view_reaches_it_in_its_own_coordinates() {
 
     // A tap inside the view's rect.
     interp.dispatch_events(&[byard_core::InputEvent {
+        surface: byard_core::SurfaceId::MAIN,
         kind: byard_core::platform::EventKind::Tap,
         pos: (60.0, 40.0),
         delta: (0.0, 0.0),
@@ -337,6 +339,7 @@ fn a_pointer_event_over_the_view_reaches_it_in_its_own_coordinates() {
 
     // And a tap far outside it does not.
     interp.dispatch_events(&[byard_core::InputEvent {
+        surface: byard_core::SurfaceId::MAIN,
         kind: byard_core::platform::EventKind::Tap,
         pos: (390.0, 290.0),
         delta: (0.0, 0.0),
@@ -385,6 +388,7 @@ fn tap_through(source: &str, pos: (f32, f32)) -> (String, u32) {
     let mut frame = RenderFrame::new();
     interp.render(&tree, &mut frame, 400.0, 300.0);
     interp.dispatch_events(&[byard_core::InputEvent {
+        surface: byard_core::SurfaceId::MAIN,
         kind: byard_core::platform::EventKind::Tap,
         pos,
         delta: (0.0, 0.0),

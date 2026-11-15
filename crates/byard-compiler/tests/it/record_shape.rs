@@ -31,6 +31,7 @@ fn written(place: &str, value: &str, taps: usize) -> Vec<String> {
     interp.render(&tree, &mut frame, 400.0, 200.0);
     for t in 0..taps {
         let at = |kind, time| InputEvent {
+            surface: byard_core::SurfaceId::MAIN,
             kind,
             pos: (20.0, 20.0),
             delta: (0.0, 0.0),
@@ -132,6 +133,7 @@ fn a_var_of_no_record_type_is_not_compared() {
     interp.tick();
     interp.render(&tree, &mut frame, 400.0, 200.0);
     let at = |kind, time| InputEvent {
+        surface: byard_core::SurfaceId::MAIN,
         kind,
         pos: (20.0, 20.0),
         delta: (0.0, 0.0),

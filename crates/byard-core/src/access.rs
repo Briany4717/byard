@@ -726,10 +726,23 @@ impl AccessRequest {
     /// reader: nothing happens, rather than something unintended.
     #[must_use]
     pub fn to_events(&self, tree: &AccessTree, time_ms: u64) -> Vec<InputEvent> {
+        self.to_events_on(crate::SurfaceId::MAIN, tree, time_ms)
+    }
+
+    /// [`to_events`](Self::to_events) for a request made of the tree of
+    /// `surface`: the events it becomes belong to that surface (RFC-0068 §6).
+    #[must_use]
+    pub fn to_events_on(
+        &self,
+        surface: crate::SurfaceId,
+        tree: &AccessTree,
+        time_ms: u64,
+    ) -> Vec<InputEvent> {
         let Some(node) = tree.node(self.target) else {
             return Vec::new();
         };
         let event = |kind, pos, payload| InputEvent {
+            surface,
             kind,
             pos,
             delta: (0.0, 0.0),
@@ -950,6 +963,27 @@ mod tests {
         assert_eq!(events[0].time_ms, 7);
         assert!(press(2).is_empty(), "a label does not allow a press");
         assert!(press(9).is_empty(), "a node that is gone does nothing");
+    }
+
+    #[test]
+    fn a_request_made_of_a_surfaces_tree_becomes_events_of_that_surface() {
+        let mut button = node(1, None, AccessRole::Button);
+        button.actions.insert(AccessActions::PRESS);
+        let tree = AccessTree {
+            nodes: vec![button],
+            focus: None,
+        };
+        let request = AccessRequest {
+            target: AccessId(1),
+            action: AccessAction::Press,
+        };
+        let on_main = request.to_events(&tree, 7);
+        assert_eq!(on_main.len(), 1);
+        assert!(on_main.iter().all(|e| e.surface == crate::SurfaceId::MAIN));
+        let second = crate::SurfaceId::new(2);
+        let on_second = request.to_events_on(second, &tree, 7);
+        assert_eq!(on_second.len(), on_main.len());
+        assert!(on_second.iter().all(|e| e.surface == second));
     }
 
     #[test]

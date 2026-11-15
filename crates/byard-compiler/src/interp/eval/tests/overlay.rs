@@ -162,6 +162,7 @@ fn modal_overlay_blocks_the_main_tree_and_dismisses_on_outside_tap() {
     let tap = |t: u64, p: (f32, f32)| {
         [
             byard_core::platform::InputEvent {
+                surface: byard_core::SurfaceId::MAIN,
                 kind: byard_core::platform::EventKind::PointerDown,
                 pos: p,
                 delta: (0.0, 0.0),
@@ -170,6 +171,7 @@ fn modal_overlay_blocks_the_main_tree_and_dismisses_on_outside_tap() {
                 mods: byard_core::KeyModifiers::default(),
             },
             byard_core::platform::InputEvent {
+                surface: byard_core::SurfaceId::MAIN,
                 kind: byard_core::platform::EventKind::PointerUp,
                 pos: p,
                 delta: (0.0, 0.0),
@@ -224,6 +226,7 @@ fn modal_overlay_content_wins_over_the_scrim() {
     // Centre of the viewport = centre of the confirm button.
     interp.dispatch_events(&[
         byard_core::platform::InputEvent {
+            surface: byard_core::SurfaceId::MAIN,
             kind: byard_core::platform::EventKind::PointerDown,
             pos: (200.0, 150.0),
             delta: (0.0, 0.0),
@@ -232,6 +235,7 @@ fn modal_overlay_content_wins_over_the_scrim() {
             mods: byard_core::KeyModifiers::default(),
         },
         byard_core::platform::InputEvent {
+            surface: byard_core::SurfaceId::MAIN,
             kind: byard_core::platform::EventKind::PointerUp,
             pos: (200.0, 150.0),
             delta: (0.0, 0.0),
@@ -273,6 +277,7 @@ fn escape_dismisses_the_topmost_modal_overlay() {
     interp.render(&tree, &mut frame, 400.0, 300.0);
 
     interp.dispatch_events(&[byard_core::platform::InputEvent {
+        surface: byard_core::SurfaceId::MAIN,
         kind: byard_core::platform::EventKind::KeyDown,
         pos: (0.0, 0.0),
         delta: (0.0, 0.0),
@@ -320,6 +325,7 @@ fn when_gated_overlay_unmounts_live_on_dismiss() {
     // Tap the scrim (top-left, outside the centred content).
     interp.dispatch_events(&[
         byard_core::platform::InputEvent {
+            surface: byard_core::SurfaceId::MAIN,
             kind: byard_core::platform::EventKind::PointerDown,
             pos: (5.0, 5.0),
             delta: (0.0, 0.0),
@@ -328,6 +334,7 @@ fn when_gated_overlay_unmounts_live_on_dismiss() {
             mods: byard_core::KeyModifiers::default(),
         },
         byard_core::platform::InputEvent {
+            surface: byard_core::SurfaceId::MAIN,
             kind: byard_core::platform::EventKind::PointerUp,
             pos: (5.0, 5.0),
             delta: (0.0, 0.0),
@@ -371,6 +378,7 @@ fn non_modal_overlay_lets_taps_fall_through() {
     // Tap top-left, away from the bottom-anchored surface.
     interp.dispatch_events(&[
         byard_core::platform::InputEvent {
+            surface: byard_core::SurfaceId::MAIN,
             kind: byard_core::platform::EventKind::PointerDown,
             pos: (10.0, 10.0),
             delta: (0.0, 0.0),
@@ -379,6 +387,7 @@ fn non_modal_overlay_lets_taps_fall_through() {
             mods: byard_core::KeyModifiers::default(),
         },
         byard_core::platform::InputEvent {
+            surface: byard_core::SurfaceId::MAIN,
             kind: byard_core::platform::EventKind::PointerUp,
             pos: (10.0, 10.0),
             delta: (0.0, 0.0),

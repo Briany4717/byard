@@ -44,11 +44,12 @@ pub mod text;
 pub use clipboard::{Clipboard, MemoryClipboard};
 pub use encoder::BoxInstance;
 pub use encoder::text_glyph::TextLine;
-pub use engine::{Census, Engine};
+pub use engine::{Census, Engine, Gpu, SurfaceTarget};
 pub use platform::{
     EventKind, ImeEvent, InputEvent, InputPayload, KeyModifiers, PlatformHost, PointerButton,
     PointerState, WindowSize,
 };
+pub use surface::{PerSurface, SurfaceChange, SurfaceId, SurfaceSpec};
 
 /// Trait representing a logic tick execution runner.
 pub trait LogicRuntime {

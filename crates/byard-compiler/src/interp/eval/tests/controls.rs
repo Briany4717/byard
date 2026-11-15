@@ -71,6 +71,7 @@ fn toggle_tap_flips_bound_var() {
     // Tap inside the Toggle rect.
     interp.dispatch_events(&[
         byard_core::platform::InputEvent {
+            surface: byard_core::SurfaceId::MAIN,
             kind: byard_core::platform::EventKind::PointerDown,
             pos: (5.0, 5.0),
             delta: (0.0, 0.0),
@@ -79,6 +80,7 @@ fn toggle_tap_flips_bound_var() {
             mods: byard_core::KeyModifiers::default(),
         },
         byard_core::platform::InputEvent {
+            surface: byard_core::SurfaceId::MAIN,
             kind: byard_core::platform::EventKind::PointerUp,
             pos: (5.0, 5.0),
             delta: (0.0, 0.0),
@@ -98,6 +100,7 @@ fn toggle_tap_flips_bound_var() {
     interp.render(&tree, &mut frame, 400.0, 300.0);
     interp.dispatch_events(&[
         byard_core::platform::InputEvent {
+            surface: byard_core::SurfaceId::MAIN,
             kind: byard_core::platform::EventKind::PointerDown,
             pos: (5.0, 5.0),
             delta: (0.0, 0.0),
@@ -106,6 +109,7 @@ fn toggle_tap_flips_bound_var() {
             mods: byard_core::KeyModifiers::default(),
         },
         byard_core::platform::InputEvent {
+            surface: byard_core::SurfaceId::MAIN,
             kind: byard_core::platform::EventKind::PointerUp,
             pos: (5.0, 5.0),
             delta: (0.0, 0.0),
@@ -227,6 +231,7 @@ fn checkbox_tap_flips_bound_var() {
     interp.render(&tree, &mut frame, 400.0, 300.0);
     interp.dispatch_events(&[
         byard_core::platform::InputEvent {
+            surface: byard_core::SurfaceId::MAIN,
             kind: byard_core::platform::EventKind::PointerDown,
             pos: (5.0, 5.0),
             delta: (0.0, 0.0),
@@ -235,6 +240,7 @@ fn checkbox_tap_flips_bound_var() {
             mods: byard_core::KeyModifiers::default(),
         },
         byard_core::platform::InputEvent {
+            surface: byard_core::SurfaceId::MAIN,
             kind: byard_core::platform::EventKind::PointerUp,
             pos: (5.0, 5.0),
             delta: (0.0, 0.0),
@@ -263,6 +269,7 @@ fn checkbox_space_key_toggles_when_focused() {
     // Click to focus the box, then press Space.
     interp.dispatch_events(&[
         byard_core::platform::InputEvent {
+            surface: byard_core::SurfaceId::MAIN,
             kind: byard_core::platform::EventKind::PointerDown,
             pos: (5.0, 5.0),
             delta: (0.0, 0.0),
@@ -271,6 +278,7 @@ fn checkbox_space_key_toggles_when_focused() {
             mods: byard_core::KeyModifiers::default(),
         },
         byard_core::platform::InputEvent {
+            surface: byard_core::SurfaceId::MAIN,
             kind: byard_core::platform::EventKind::KeyDown,
             pos: (0.0, 0.0),
             delta: (0.0, 0.0),
@@ -339,6 +347,7 @@ fn radio_tap_selects_its_value() {
     interp.render(&tree, &mut frame, 400.0, 300.0);
     interp.dispatch_events(&[
         byard_core::platform::InputEvent {
+            surface: byard_core::SurfaceId::MAIN,
             kind: byard_core::platform::EventKind::PointerDown,
             pos: (5.0, 5.0),
             delta: (0.0, 0.0),
@@ -347,6 +356,7 @@ fn radio_tap_selects_its_value() {
             mods: byard_core::KeyModifiers::default(),
         },
         byard_core::platform::InputEvent {
+            surface: byard_core::SurfaceId::MAIN,
             kind: byard_core::platform::EventKind::PointerUp,
             pos: (5.0, 5.0),
             delta: (0.0, 0.0),
@@ -387,6 +397,7 @@ fn radio_group_is_mutually_exclusive_via_the_shared_var() {
     // Tap the SECOND radio (below the first, gap 40 keeps hit rects apart).
     interp.dispatch_events(&[
         byard_core::platform::InputEvent {
+            surface: byard_core::SurfaceId::MAIN,
             kind: byard_core::platform::EventKind::PointerDown,
             pos: (20.0, 106.0),
             delta: (0.0, 0.0),
@@ -395,6 +406,7 @@ fn radio_group_is_mutually_exclusive_via_the_shared_var() {
             mods: byard_core::KeyModifiers::default(),
         },
         byard_core::platform::InputEvent {
+            surface: byard_core::SurfaceId::MAIN,
             kind: byard_core::platform::EventKind::PointerUp,
             pos: (20.0, 106.0),
             delta: (0.0, 0.0),
@@ -435,6 +447,7 @@ fn radio_arrow_keys_move_selection_with_wrap() {
     // stays "home").
     interp.render(&tree, &mut frame, 400.0, 300.0);
     interp.dispatch_events(&[byard_core::platform::InputEvent {
+        surface: byard_core::SurfaceId::MAIN,
         kind: byard_core::platform::EventKind::PointerDown,
         pos: (20.0, 20.0),
         delta: (0.0, 0.0),
@@ -451,6 +464,7 @@ fn radio_arrow_keys_move_selection_with_wrap() {
         let mut f = byard_core::frame::RenderFrame::new();
         interp.render(&tree, &mut f, 400.0, 300.0);
         interp.dispatch_events(&[byard_core::platform::InputEvent {
+            surface: byard_core::SurfaceId::MAIN,
             kind: byard_core::platform::EventKind::KeyDown,
             pos: (0.0, 0.0),
             delta: (0.0, 0.0),
@@ -502,6 +516,7 @@ fn slider_value_has_no_f32_widening_tail() {
 
     // x = 60 on a 100px track starting at x = 0 → exactly 60%.
     interp.dispatch_events(&[byard_core::platform::InputEvent {
+        surface: byard_core::SurfaceId::MAIN,
         kind: byard_core::platform::EventKind::PointerDown,
         pos: (60.0, 5.0),
         delta: (0.0, 0.0),
@@ -543,6 +558,7 @@ fn slider_with_step_does_not_emit_more_decimals_than_the_step() {
     interp.render(&tree, &mut frame, 400.0, 300.0);
 
     interp.dispatch_events(&[byard_core::platform::InputEvent {
+        surface: byard_core::SurfaceId::MAIN,
         kind: byard_core::platform::EventKind::PointerDown,
         pos: (60.0, 5.0),
         delta: (0.0, 0.0),
@@ -577,6 +593,7 @@ fn text_field_change_event_round_trips() {
 
     // Change event with new value.
     interp.dispatch_events(&[byard_core::platform::InputEvent {
+        surface: byard_core::SurfaceId::MAIN,
         kind: byard_core::platform::EventKind::Change,
         pos: (5.0, 5.0),
         delta: (0.0, 0.0),
@@ -589,6 +606,7 @@ fn text_field_change_event_round_trips() {
     // Re-delivering the same value is deduped (E1).
     let before = interp.peek(sig);
     interp.dispatch_events(&[byard_core::platform::InputEvent {
+        surface: byard_core::SurfaceId::MAIN,
         kind: byard_core::platform::EventKind::Change,
         pos: (5.0, 5.0),
         delta: (0.0, 0.0),
@@ -633,6 +651,7 @@ fn text_field_receives_keyboard_text_input() {
     // Focus the TextField by tapping it first.
     interp2.dispatch_events(&[
         byard_core::platform::InputEvent {
+            surface: byard_core::SurfaceId::MAIN,
             kind: byard_core::platform::EventKind::PointerDown,
             pos: (5.0, 5.0),
             delta: (0.0, 0.0),
@@ -641,6 +660,7 @@ fn text_field_receives_keyboard_text_input() {
             mods: byard_core::KeyModifiers::default(),
         },
         byard_core::platform::InputEvent {
+            surface: byard_core::SurfaceId::MAIN,
             kind: byard_core::platform::EventKind::PointerUp,
             pos: (5.0, 5.0),
             delta: (0.0, 0.0),
@@ -654,6 +674,7 @@ fn text_field_receives_keyboard_text_input() {
 
     // Type "ab".
     interp2.dispatch_events(&[byard_core::platform::InputEvent {
+        surface: byard_core::SurfaceId::MAIN,
         kind: byard_core::platform::EventKind::TextInput,
         pos: (5.0, 5.0),
         delta: (0.0, 0.0),
@@ -662,6 +683,7 @@ fn text_field_receives_keyboard_text_input() {
         mods: byard_core::KeyModifiers::default(),
     }]);
     interp2.dispatch_events(&[byard_core::platform::InputEvent {
+        surface: byard_core::SurfaceId::MAIN,
         kind: byard_core::platform::EventKind::TextInput,
         pos: (5.0, 5.0),
         delta: (0.0, 0.0),
@@ -679,6 +701,7 @@ fn text_field_receives_keyboard_text_input() {
     // Backspace removes last char.
     interp2.render(&tree2, &mut frame, 400.0, 300.0);
     interp2.dispatch_events(&[byard_core::platform::InputEvent {
+        surface: byard_core::SurfaceId::MAIN,
         kind: byard_core::platform::EventKind::KeyDown,
         pos: (5.0, 5.0),
         delta: (0.0, 0.0),
@@ -722,6 +745,7 @@ fn tab_key_advances_focus_through_text_fields() {
 
     // Tab: should focus the first field (none focused yet → index 0).
     interp.dispatch_events(&[byard_core::platform::InputEvent {
+        surface: byard_core::SurfaceId::MAIN,
         kind: byard_core::platform::EventKind::KeyDown,
         pos: (0.0, 0.0),
         delta: (0.0, 0.0),
@@ -740,6 +764,7 @@ fn tab_key_advances_focus_through_text_fields() {
     // Second Tab: advances to second field.
     interp.render(&tree, &mut frame, 400.0, 300.0);
     interp.dispatch_events(&[byard_core::platform::InputEvent {
+        surface: byard_core::SurfaceId::MAIN,
         kind: byard_core::platform::EventKind::KeyDown,
         pos: (0.0, 0.0),
         delta: (0.0, 0.0),

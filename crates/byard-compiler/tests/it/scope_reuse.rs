@@ -47,6 +47,7 @@ fn set(interp: &mut Interpreter, name: &str, value: Value) {
 
 fn tap(interp: &mut Interpreter, x: f32, y: f32) {
     let event = |kind, time_ms| InputEvent {
+        surface: byard_core::SurfaceId::MAIN,
         kind,
         pos: (x, y),
         delta: (0.0, 0.0),

@@ -239,6 +239,7 @@ impl App {
         for c in text.chars() {
             let t = u64::from(self.now);
             self.step(&[InputEvent {
+                surface: byard_core::SurfaceId::MAIN,
                 kind: EventKind::TextInput,
                 pos: (0.0, 0.0),
                 delta: (0.0, 0.0),
@@ -252,6 +253,7 @@ impl App {
     /// Presses and releases at a point of the window.
     pub fn tap_at(&mut self, pos: (f32, f32)) {
         let at = |kind, t| InputEvent {
+            surface: byard_core::SurfaceId::MAIN,
             kind,
             pos,
             delta: (0.0, 0.0),
@@ -366,6 +368,7 @@ impl App {
             .unwrap_or_else(|| panic!("a text {label}: {:?}", self.texts()));
         let pos = (line.x + 4.0, line.y + line.font_size * 0.5);
         let at = |kind, t| InputEvent {
+            surface: byard_core::SurfaceId::MAIN,
             kind,
             pos,
             delta: (0.0, 0.0),

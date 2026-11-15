@@ -49,6 +49,7 @@ impl App {
     fn event(&mut self, kind: EventKind, payload: Option<InputPayload>, shift: bool) -> InputEvent {
         self.t += 10;
         InputEvent {
+            surface: byard_core::SurfaceId::MAIN,
             kind,
             pos: (0.0, 0.0),
             delta: (0.0, 0.0),

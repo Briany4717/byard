@@ -179,6 +179,7 @@ fn dragging_pans_the_map() {
     let mut app = on_the_map(&server);
     let before = tiles_asked(&server).len();
     let at = |kind, pos, t| InputEvent {
+        surface: byard_core::SurfaceId::MAIN,
         kind,
         pos,
         delta: (0.0, 0.0),
@@ -226,6 +227,7 @@ fn panning_over_tiles_it_has_writes_and_asks_nothing() {
     let mut app = on_the_map(&server);
     let asked = tiles_asked(&server).len();
     let at = |kind, pos, t| InputEvent {
+        surface: byard_core::SurfaceId::MAIN,
         kind,
         pos,
         delta: (0.0, 0.0),
@@ -282,6 +284,7 @@ fn night_lanes(app: &App) -> Vec<f32> {
 
 fn system(dark: bool) -> byard_core::InputEvent {
     byard_core::InputEvent {
+        surface: byard_core::SurfaceId::MAIN,
         kind: byard_core::EventKind::SystemScheme,
         pos: (0.0, 0.0),
         delta: (0.0, 0.0),

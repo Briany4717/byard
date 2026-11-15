@@ -126,6 +126,7 @@ impl App {
 
     fn key_event(&self, kind: EventKind, payload: &str) -> InputEvent {
         InputEvent {
+            surface: byard_core::SurfaceId::MAIN,
             kind,
             pos: (0.0, 0.0),
             delta: (0.0, 0.0),
@@ -173,6 +174,7 @@ impl App {
     /// Presses and releases at a point of the window.
     pub fn tap_at(&mut self, pos: (f32, f32)) {
         let at = |kind, t| InputEvent {
+            surface: byard_core::SurfaceId::MAIN,
             kind,
             pos,
             delta: (0.0, 0.0),
@@ -259,6 +261,7 @@ impl App {
     pub fn tap_timed(&mut self, label: &str) -> std::time::Duration {
         let pos = self.find(label);
         let at = |kind, t| InputEvent {
+            surface: byard_core::SurfaceId::MAIN,
             kind,
             pos,
             delta: (0.0, 0.0),

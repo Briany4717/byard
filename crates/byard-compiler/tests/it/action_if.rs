@@ -61,6 +61,7 @@ impl App {
         self.clock += 1000;
         let base = self.clock;
         let at = |kind, time_ms| InputEvent {
+            surface: byard_core::SurfaceId::MAIN,
             kind,
             pos,
             delta: (0.0, 0.0),

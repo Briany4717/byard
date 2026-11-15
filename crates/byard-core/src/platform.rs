@@ -397,6 +397,7 @@ impl ImeEvent {
             Self::Disabled => (EventKind::CompositionEnd, None),
         };
         Some(InputEvent {
+            surface: crate::SurfaceId::MAIN,
             kind,
             pos: (0.0, 0.0),
             delta: (0.0, 0.0),
@@ -410,6 +411,10 @@ impl ImeEvent {
 /// A normalized, `Send`-able input event produced by the platform thread.
 #[derive(Clone, Debug, PartialEq)]
 pub struct InputEvent {
+    /// The surface the event happened on (RFC-0068 §6). [`SurfaceId::MAIN`](crate::SurfaceId::MAIN)
+    /// for every event of a single-surface program, which is every program
+    /// today. Positions are in this surface's coordinates.
+    pub surface: crate::surface::SurfaceId,
     /// The event kind.
     pub kind: EventKind,
     /// Absolute cursor position (logical px).
@@ -627,6 +632,37 @@ pub trait PlatformHost {
     /// Defaults to a no-op.
     fn on_access_request(&mut self, _request: crate::access::AccessRequest) {}
 
+    /// [`access_frame`](Self::access_frame) for the surface `surface`
+    /// (RFC-0068 §5): each surface has its own accessibility tree, and the
+    /// host keeps one adapter for each. The default answers for
+    /// [`SurfaceId::MAIN`](crate::SurfaceId::MAIN) with `access_frame` and for
+    /// every other surface with nothing, which is right for a program with one
+    /// surface.
+    fn access_frame_for(
+        &self,
+        surface: crate::SurfaceId,
+    ) -> Option<std::sync::Arc<crate::frame::RenderFrame>> {
+        if surface.is_main() {
+            self.access_frame()
+        } else {
+            None
+        }
+    }
+
+    /// [`on_access_request`](Self::on_access_request) for a request made of
+    /// the tree of `surface`. The default hands one for
+    /// [`SurfaceId::MAIN`](crate::SurfaceId::MAIN) to `on_access_request` and
+    /// drops the rest.
+    fn on_surface_access_request(
+        &mut self,
+        surface: crate::SurfaceId,
+        request: crate::access::AccessRequest,
+    ) {
+        if surface.is_main() {
+            self.on_access_request(request);
+        }
+    }
+
     /// Called on a trackpad-style scroll gesture at cursor position `(x, y)`,
     /// with `(dx, dy)` the scroll delta in logical pixels (RFC-0012 §A loose
     /// end: `scroll`'s hardware origin).
@@ -679,6 +715,65 @@ mod tests {
         fn on_redraw(&mut self) -> Result<(), ByardError> {
             Ok(())
         }
+    }
+
+    /// RFC-0068 §6: every event carries its surface, and the one implicit
+    /// window is `MAIN`, which is also what a default event says.
+    #[test]
+    fn an_input_event_names_its_surface_and_defaults_to_the_main_one() {
+        let event = InputEvent {
+            surface: crate::SurfaceId::default(),
+            kind: EventKind::Tap,
+            pos: (1.0, 2.0),
+            delta: (0.0, 0.0),
+            payload: None,
+            time_ms: 0,
+            mods: KeyModifiers::default(),
+        };
+        assert_eq!(event.surface, crate::SurfaceId::MAIN);
+        let elsewhere = InputEvent {
+            surface: crate::SurfaceId::new(4),
+            ..event.clone()
+        };
+        assert_ne!(elsewhere, event);
+    }
+
+    /// A host written for one window keeps working: its access frame and its
+    /// access requests are the main surface's, and no other surface has any.
+    #[test]
+    fn the_per_surface_access_hooks_default_to_the_one_window() {
+        struct Counting(u32);
+        impl PlatformHost for Counting {
+            fn on_resume(
+                &mut self,
+                _: &wgpu::Instance,
+                _: wgpu::Surface<'static>,
+                _: WindowSize,
+                _: crate::relay::FrameWaker,
+            ) -> Result<(), ByardError> {
+                Ok(())
+            }
+            fn on_resize(&mut self, _: WindowSize) {}
+            fn on_redraw(&mut self) -> Result<(), ByardError> {
+                Ok(())
+            }
+            fn access_frame(&self) -> Option<std::sync::Arc<crate::frame::RenderFrame>> {
+                Some(std::sync::Arc::new(crate::frame::RenderFrame::new()))
+            }
+            fn on_access_request(&mut self, _: crate::access::AccessRequest) {
+                self.0 += 1;
+            }
+        }
+        let mut host = Counting(0);
+        assert!(host.access_frame_for(crate::SurfaceId::MAIN).is_some());
+        assert!(host.access_frame_for(crate::SurfaceId::new(1)).is_none());
+        let request = crate::access::AccessRequest {
+            target: crate::access::AccessId(0),
+            action: crate::access::AccessAction::Press,
+        };
+        host.on_surface_access_request(crate::SurfaceId::MAIN, request.clone());
+        host.on_surface_access_request(crate::SurfaceId::new(1), request);
+        assert_eq!(host.0, 1, "only the main surface's request is delivered");
     }
 
     #[test]

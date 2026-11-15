@@ -24,7 +24,9 @@ pub use clipboard::SystemClipboard;
 use std::sync::Arc;
 
 use byard_core::relay::FrameWaker;
-use byard_core::{ByardError, KeyModifiers, PlatformHost, PointerButton, PointerState, WindowSize};
+use byard_core::{
+    ByardError, KeyModifiers, PlatformHost, PointerButton, PointerState, SurfaceId, WindowSize,
+};
 use std::sync::Mutex;
 use winit::application::ApplicationHandler;
 use winit::dpi::{LogicalSize, PhysicalSize};
@@ -55,8 +57,11 @@ mod access;
 /// the same few calls, so the host reads the same either way.
 #[cfg(not(feature = "a11y"))]
 mod access {
-    use byard_core::PlatformHost;
+    use byard_core::{PerSurface, PlatformHost};
     use winit::window::Window;
+
+    /// One (empty) adapter per surface, so the host reads the same either way.
+    pub(crate) type Bridges = PerSurface<Bridge>;
 
     /// A window needs no hiding when there is no adapter to build first.
     pub(crate) const NEEDS_HIDDEN_START: bool = false;
@@ -215,7 +220,7 @@ impl WinitHost {
             modifiers: KeyModifiers::default(),
             ime_caret: None,
             access_proxy,
-            access: None,
+            access: access::Bridges::new(),
         };
 
         event_loop
@@ -270,7 +275,7 @@ struct WinitApp<H: PlatformHost> {
     )]
     access_proxy: winit::event_loop::EventLoopProxy<UserEvent>,
     /// The window's screen-reader adapter, once the window exists (RFC-0042).
-    access: Option<access::Bridge>,
+    access: access::Bridges,
 }
 
 impl<H: PlatformHost> WinitApp<H> {
@@ -294,11 +299,15 @@ impl<H: PlatformHost> WinitApp<H> {
     fn attach_access(&mut self, event_loop: &ActiveEventLoop, window: &Window) {
         #[cfg(feature = "a11y")]
         {
-            self.access = Some(access::Bridge::new(
-                event_loop,
-                window,
-                self.access_proxy.clone(),
-            ));
+            self.access.insert(
+                byard_core::SurfaceId::MAIN,
+                access::Bridge::new(
+                    event_loop,
+                    window,
+                    self.access_proxy.clone(),
+                    byard_core::SurfaceId::MAIN,
+                ),
+            );
             window.set_visible(true);
         }
         #[cfg(not(feature = "a11y"))]
@@ -417,7 +426,7 @@ impl<H: PlatformHost> ApplicationHandler<UserEvent> for WinitApp<H> {
         let Some(window) = self.window.as_ref() else {
             return;
         };
-        if let Some(access) = self.access.as_mut() {
+        if let Some(access) = self.access.get_mut(SurfaceId::MAIN) {
             access.process_event(window, &event);
         }
 
@@ -459,7 +468,9 @@ impl<H: PlatformHost> ApplicationHandler<UserEvent> for WinitApp<H> {
                 // RFC-0042: sends the screen reader the tree the frame just
                 // presented carries, if it differs from the last one sent. A
                 // window with no reader connected does nothing here.
-                if let (Some(access), Some(window)) = (self.access.as_mut(), self.window.as_ref()) {
+                if let (Some(access), Some(window)) =
+                    (self.access.get_mut(SurfaceId::MAIN), self.window.as_ref())
+                {
                     access.sync(&self.host, window);
                 }
             }
@@ -561,9 +572,14 @@ impl<H: PlatformHost> ApplicationHandler<UserEvent> for WinitApp<H> {
             UserEvent::FramePublished => {}
             #[cfg(feature = "a11y")]
             UserEvent::Access(event) => {
-                if let Some(access) = self.access.as_mut() {
-                    access.handle(&mut self.host, event.window_event);
-                }
+                // The one window is `SurfaceId::MAIN`; with several, the window
+                // id on the event names the surface.
+                access::handle_event(
+                    &mut self.access,
+                    SurfaceId::MAIN,
+                    &mut self.host,
+                    event.window_event,
+                );
             }
         }
         if let Some(window) = &self.window {

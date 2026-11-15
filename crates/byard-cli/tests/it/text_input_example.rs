@@ -52,6 +52,7 @@ fn a_composition_shows_but_only_the_commit_reaches_the_echo() {
     let _ = step(&mut interp, vec![]);
     // The first field: 32 of padding, then the title line, then the field.
     let tap = |kind, t| InputEvent {
+        surface: byard_core::SurfaceId::MAIN,
         kind,
         pos: (200.0, 90.0),
         delta: (0.0, 0.0),
@@ -122,6 +123,7 @@ fn the_third_field_keeps_focus_as_its_message_appears_above_it() {
         interp.render(&tree, &mut frame, 600.0, 900.0);
     };
     let ev = |kind, pos, payload, t| InputEvent {
+        surface: byard_core::SurfaceId::MAIN,
         kind,
         pos,
         delta: (0.0, 0.0),

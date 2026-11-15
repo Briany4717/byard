@@ -13,11 +13,11 @@ use accesskit::{
     Action, ActionData, ActionRequest, Affine, Live, Node, NodeId, Rect, Role, Toggled, TreeId,
     TreeInfo, TreeUpdate,
 };
-use byard_core::PlatformHost;
 use byard_core::access::{
     AccessAction, AccessActions, AccessFlags, AccessId, AccessLive, AccessNode, AccessRequest,
     AccessRole, AccessTree, AccessValue,
 };
+use byard_core::{PerSurface, PlatformHost, SurfaceId};
 use winit::event_loop::{ActiveEventLoop, EventLoopProxy};
 use winit::window::Window;
 
@@ -313,6 +313,8 @@ pub(crate) fn request(r: &ActionRequest) -> Option<AccessRequest> {
 
 /// The AccessKit adapter of one window, and what it has been told.
 pub(crate) struct Bridge {
+    /// The surface whose tree this adapter carries (RFC-0068 §5).
+    surface: SurfaceId,
     adapter: accesskit_winit::Adapter,
     sender: TreeSender,
     /// Whether an assistive technology is connected.
@@ -325,8 +327,10 @@ impl Bridge {
         event_loop: &ActiveEventLoop,
         window: &Window,
         proxy: EventLoopProxy<UserEvent>,
+        surface: SurfaceId,
     ) -> Self {
         Self {
+            surface,
             adapter: accesskit_winit::Adapter::with_event_loop_proxy(event_loop, window, proxy),
             sender: TreeSender::default(),
             active: false,
@@ -339,12 +343,22 @@ impl Bridge {
         self.adapter.process_event(window, event);
     }
 
+    /// Whether an assistive technology is connected to this adapter.
+    pub(crate) const fn is_active(&self) -> bool {
+        self.active
+    }
+
     /// Handles what the adapter reported: a screen reader connecting or
     /// leaving, or asking a node to act.
+    ///
+    /// `others_active` says whether another surface's adapter is still
+    /// connected: the program is only told the reader left when the last one
+    /// has.
     pub(crate) fn handle<H: PlatformHost>(
         &mut self,
         host: &mut H,
         event: accesskit_winit::WindowEvent,
+        others_active: bool,
     ) {
         match event {
             accesskit_winit::WindowEvent::InitialTreeRequested => {
@@ -354,13 +368,15 @@ impl Bridge {
             }
             accesskit_winit::WindowEvent::ActionRequested(r) => {
                 if let Some(request) = request(&r) {
-                    host.on_access_request(request);
+                    host.on_surface_access_request(self.surface, request);
                 }
             }
             accesskit_winit::WindowEvent::AccessibilityDeactivated => {
                 self.active = false;
                 self.sender.reset();
-                host.on_access_active(false);
+                if !others_active {
+                    host.on_access_active(false);
+                }
             }
         }
     }
@@ -371,7 +387,7 @@ impl Bridge {
         if !self.active {
             return;
         }
-        let Some(frame) = host.access_frame() else {
+        let Some(frame) = host.access_frame_for(self.surface) else {
             return;
         };
         let Some(tree) = frame.access() else {
@@ -387,6 +403,23 @@ impl Bridge {
         if let Some(update) = self.sender.update(tree, &info) {
             self.adapter.update_if_active(|| update);
         }
+    }
+}
+
+/// One adapter per surface, keyed by the surface it carries the tree of.
+pub(crate) type Bridges = PerSurface<Bridge>;
+
+/// Hands what the adapter of `surface` reported to its bridge, telling it
+/// whether any other surface's adapter is still connected.
+pub(crate) fn handle_event<H: PlatformHost>(
+    bridges: &mut Bridges,
+    surface: SurfaceId,
+    host: &mut H,
+    event: accesskit_winit::WindowEvent,
+) {
+    let others_active = bridges.iter().any(|(id, b)| id != surface && b.is_active());
+    if let Some(bridge) = bridges.get_mut(surface) {
+        bridge.handle(host, event, others_active);
     }
 }
 

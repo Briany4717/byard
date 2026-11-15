@@ -41,6 +41,7 @@ View Main() {
 
 fn ev(kind: EventKind, pos: (f32, f32), t: u64) -> InputEvent {
     InputEvent {
+        surface: byard_core::SurfaceId::MAIN,
         kind,
         pos,
         delta: (1.0, 1.0),
@@ -98,6 +99,7 @@ impl App {
 
     fn escape(&mut self) {
         self.interp.dispatch_events(&[InputEvent {
+            surface: byard_core::SurfaceId::MAIN,
             kind: EventKind::KeyDown,
             pos: (0.0, 0.0),
             delta: (0.0, 0.0),

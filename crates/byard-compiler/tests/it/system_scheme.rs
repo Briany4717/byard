@@ -31,6 +31,7 @@ fn shown(interp: &mut Interpreter, tree: &[byard_compiler::interp::eval::RenderN
 
 fn system(dark: bool) -> InputEvent {
     InputEvent {
+        surface: byard_core::SurfaceId::MAIN,
         kind: EventKind::SystemScheme,
         pos: (0.0, 0.0),
         delta: (0.0, 0.0),

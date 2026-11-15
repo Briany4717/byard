@@ -1,6 +1,12 @@
-//! # Surface placement (RFC-0068 §9)
+//! # Surfaces (RFC-0068)
 //!
-//! The two pure solvers that headless screens rely on. A compositor decides
+//! What a program draws into, and where a compositor would put it.
+//!
+//! - [`id`]: [`SurfaceId`], [`SurfaceSpec`], [`SurfaceChange`] and [`PerSurface`],
+//!   the small types the engine and the relay use to tell surfaces apart
+//!   (§5, §6).
+//!
+//! The rest of this module is the two pure solvers that headless screens rely on (§9). A compositor decides
 //! where a layer surface and a popup go; `byard shot` has no compositor, so it
 //! asks these instead. Both are plain functions over plain data: no GPU, no
 //! Wayland connection, no `unsafe` and nothing that is platform specific, which
@@ -18,8 +24,11 @@
 //! (`int32` on the wire). Nothing uses these yet: step 5 of RFC-0068 wires them
 //! into `byard shot`.
 
+pub mod id;
 pub mod placement;
 pub mod positioner;
+
+pub use id::{PerSurface, SurfaceChange, SurfaceId, SurfaceSpec};
 
 /// A rectangle in whole logical pixels, with `y` growing downwards.
 ///

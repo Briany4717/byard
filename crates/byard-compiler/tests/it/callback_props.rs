@@ -20,6 +20,7 @@ use byard_compiler::interp::events::EventKind as RouterEventKind;
 
 fn ev(kind: EventKind, pos: (f32, f32)) -> InputEvent {
     InputEvent {
+        surface: byard_core::SurfaceId::MAIN,
         kind,
         pos,
         delta: (0.0, 0.0),

@@ -49,6 +49,7 @@ fn list_animations_example_checks_clean() {
 
 fn pointer(kind: EventKind, pos: (f32, f32), t: u64) -> InputEvent {
     InputEvent {
+        surface: byard_core::SurfaceId::MAIN,
         kind,
         pos,
         delta: (0.0, 0.0),

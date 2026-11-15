@@ -88,6 +88,7 @@ impl App {
     ) -> InputEvent {
         self.t += 50;
         InputEvent {
+            surface: byard_core::SurfaceId::MAIN,
             kind,
             pos,
             delta: (0.0, 0.0),
@@ -275,6 +276,7 @@ fn an_embedding_with_no_timer_driver_shows_a_steady_caret() {
     interp.tick();
     interp.render(&tree, &mut frame, 400.0, 300.0);
     let press = |t: u64, kind| InputEvent {
+        surface: byard_core::SurfaceId::MAIN,
         kind,
         pos: FIRST,
         delta: (0.0, 0.0),

@@ -823,6 +823,7 @@ impl Host {
     ) {
         if let Some(engine) = self.engine.as_ref() {
             engine.push_input(InputEvent {
+                surface: byard_core::SurfaceId::MAIN,
                 kind,
                 pos,
                 delta,

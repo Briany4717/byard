@@ -40,6 +40,7 @@ impl App {
 
     fn tap(&mut self, pos: (f32, f32)) {
         let ev = |kind, t| InputEvent {
+            surface: byard_core::SurfaceId::MAIN,
             kind,
             pos,
             delta: (0.0, 0.0),

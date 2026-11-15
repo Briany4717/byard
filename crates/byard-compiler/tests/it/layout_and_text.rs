@@ -744,6 +744,7 @@ impl App {
     ) -> InputEvent {
         self.t += 50;
         InputEvent {
+            surface: byard_core::SurfaceId::MAIN,
             kind,
             pos,
             delta: (0.0, 0.0),
@@ -1185,6 +1186,7 @@ impl Wheeler {
 
     fn wheel_at(&mut self, pos: (f32, f32), dy: f32) {
         self.interp.dispatch_events(&[InputEvent {
+            surface: byard_core::SurfaceId::MAIN,
             kind: EventKind::Wheel,
             pos,
             delta: (0.0, dy),

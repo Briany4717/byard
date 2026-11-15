@@ -59,6 +59,7 @@ impl App {
     ) -> InputEvent {
         self.t += 10;
         InputEvent {
+            surface: byard_core::SurfaceId::MAIN,
             kind,
             pos,
             delta: (0.0, 0.0),

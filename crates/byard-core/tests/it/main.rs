@@ -16,6 +16,7 @@ mod package_shader;
 mod paint_transform;
 mod scroll_cost;
 mod srgb_transfer;
+mod surface_targets;
 mod translucent_cost;
 mod variable_font_isolation;
 mod variable_glyph_ids;

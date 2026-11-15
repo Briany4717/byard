@@ -136,6 +136,7 @@ impl Harness {
     fn tap(&mut self, x: f32, y: f32) {
         use byard_core::platform::{EventKind, InputEvent};
         let down = InputEvent {
+            surface: byard_core::SurfaceId::MAIN,
             kind: EventKind::PointerDown,
             pos: (x, y),
             delta: (0.0, 0.0),
@@ -144,6 +145,7 @@ impl Harness {
             mods: byard_core::KeyModifiers::default(),
         };
         let up = InputEvent {
+            surface: byard_core::SurfaceId::MAIN,
             kind: EventKind::PointerUp,
             time_ms: 10,
             ..down.clone()

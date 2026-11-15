@@ -58,6 +58,7 @@ impl App {
             .unwrap_or_else(|| panic!("a text {label}: {:?}", self.texts()));
         let pos = (line.x + 2.0, line.y + line.font_size * 0.5);
         let at = |kind, t| InputEvent {
+            surface: byard_core::SurfaceId::MAIN,
             kind,
             pos,
             delta: (0.0, 0.0),

@@ -88,7 +88,7 @@
 use std::any::Any;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
-use std::sync::{Mutex, PoisonError};
+use std::sync::{Mutex, PoisonError, RwLock};
 use std::thread::{self, JoinHandle};
 
 use arc_swap::ArcSwapOption;
@@ -100,6 +100,7 @@ use crate::InputEvent;
 use crate::LogicRuntime;
 use crate::evaluator::ViewArena;
 use crate::frame::RenderFrame;
+use crate::surface::{SurfaceChange, SurfaceId};
 
 /// A type-erased result delivered from the async I/O pool back to the
 /// **logic** thread, a controller reply or a timer tick (RFC-0028 §7). See
@@ -240,6 +241,34 @@ impl IoSender {
     }
 }
 
+/// One surface's place in the relay: the latest frame published for it and the
+/// version of the last frame the render thread encoded for it (RFC-0068 §5).
+///
+/// Both halves are per surface because a surface that did not change is neither
+/// painted nor presented, so what has been drawn is a fact about one surface.
+/// The version counter that stamps the frames is the relay's and is shared, so
+/// versions never repeat across slots.
+#[derive(Default)]
+struct FrameSlot {
+    latest: ArcSwapOption<RenderFrame>,
+    /// The [`RenderFrame::version`] of the last frame the render thread
+    /// actually encoded, or `0` before the first one.
+    ///
+    /// [`Relay::publish`] compares it against the version of the frame it is
+    /// about to replace, to decide whether that frame still carries dirty bits
+    /// nobody has acted on (RFC-0032 §R3 step 6).
+    ///
+    /// **A version and not a flag.** A flag answers "has *something* been
+    /// rendered", and the two threads run free of each other: the render
+    /// thread reads a frame, spends milliseconds encoding it, and marks
+    /// afterwards, by which time the logic thread may have published one or
+    /// more newer frames into the slot. A flag set at that moment claims those
+    /// frames were drawn, and the next publish drops their dirty bits. The
+    /// version names the frame the mark is *about*, so a mark that lands late
+    /// can only ever clear the frame it belongs to.
+    rendered_version: AtomicU64,
+}
+
 /// Owns the atomic frame swap, the frame recycle pool, and the async I/O
 /// runtime described in RFC-0001 §5.
 ///
@@ -248,7 +277,19 @@ impl IoSender {
 /// `Engine`). All methods take `&self` and never block the caller for
 /// longer than an atomic load/store or a non-blocking channel operation.
 pub struct Relay {
-    latest: ArcSwapOption<RenderFrame>,
+    /// The frame slot of [`SurfaceId::MAIN`], the one surface every program
+    /// has. Inline, so a single-surface program's publish and read are the
+    /// same two loads they have always been: no map, no lock, no lookup
+    /// (RFC-0068 §10).
+    main: FrameSlot,
+    /// The slots of every other surface, created when a surface is. Empty, and
+    /// never locked, for a program with one surface.
+    others: RwLock<Vec<(SurfaceId, Arc<FrameSlot>)>>,
+    /// What the logic thread asks the main thread to do about surfaces
+    /// (RFC-0068 §5), in order. Nothing is ever sent in a single-surface
+    /// program.
+    surface_tx: Sender<SurfaceChange>,
+    surface_rx: Receiver<SurfaceChange>,
     recycle_tx: Sender<RenderFrame>,
     recycle_rx: Receiver<RenderFrame>,
     shutdown: AtomicBool,
@@ -291,22 +332,6 @@ pub struct Relay {
     /// or timer tick opens (RFC-0029 §2). See [`IdleGate`].
     idle: Arc<IdleGate>,
     publish_seq: AtomicU64,
-    /// The [`RenderFrame::version`] of the last frame the render thread
-    /// actually encoded, or `0` before the first one.
-    ///
-    /// [`Relay::publish`] compares it against the version of the frame it is
-    /// about to replace, to decide whether that frame still carries dirty bits
-    /// nobody has acted on (RFC-0032 §R3 step 6).
-    ///
-    /// **A version and not a flag.** A flag answers "has *something* been
-    /// rendered", and the two threads run free of each other: the render
-    /// thread reads a frame, spends milliseconds encoding it, and marks
-    /// afterwards, by which time the logic thread may have published one or
-    /// more newer frames into the slot. A flag set at that moment claims those
-    /// frames were drawn, and the next publish drops their dirty bits. The
-    /// version names the frame the mark is *about*, so a mark that lands late
-    /// can only ever clear the frame it belongs to.
-    rendered_version: AtomicU64,
 }
 
 /// A host-installed callback the logic thread fires after publishing a changed
@@ -352,9 +377,13 @@ impl Relay {
         let (io_result_tx, io_result_rx) = mpsc::unbounded_channel();
         let (decode_result_tx, decode_result_rx) = mpsc::unbounded_channel();
         let (input_tx, input_rx) = crossbeam_channel::unbounded();
+        let (surface_tx, surface_rx) = crossbeam_channel::unbounded();
 
         Ok(Self {
-            latest: ArcSwapOption::from(None),
+            main: FrameSlot::default(),
+            others: RwLock::new(Vec::new()),
+            surface_tx,
+            surface_rx,
             recycle_tx,
             recycle_rx,
             shutdown: AtomicBool::new(false),
@@ -369,7 +398,6 @@ impl Relay {
             frame_waker: Arc::new(Mutex::new(None)),
             idle: Arc::new(IdleGate::default()),
             publish_seq: AtomicU64::new(0),
-            rendered_version: AtomicU64::new(0),
         })
     }
 
@@ -470,7 +498,28 @@ impl Relay {
     /// Phase-1 demo loop, [`Relay::spawn_logic_thread`], and
     /// [`Relay::spawn_logic_from_view`] alike, piggybacks CPU samples on
     /// this same atomic exchange with no per-call-site wiring.
-    pub fn publish(&self, mut frame: RenderFrame) {
+    pub fn publish(&self, frame: RenderFrame) {
+        self.publish_slot(&self.main, frame);
+    }
+
+    /// [`publish`](Self::publish) for the surface `id`, creating its slot on
+    /// the first frame published for it. A surface other than
+    /// [`SurfaceId::MAIN`] is published through a read lock held for the
+    /// lookup only; the swap itself is the same lock-free one.
+    ///
+    /// The logic thread must not publish for a surface after it has asked for
+    /// its [`SurfaceChange::Destroy`]: the slot would be made again and live
+    /// until the relay does.
+    pub fn publish_to(&self, id: SurfaceId, frame: RenderFrame) {
+        if id.is_main() {
+            self.publish_slot(&self.main, frame);
+            return;
+        }
+        let slot = self.slot_or_create(id);
+        self.publish_slot(&slot, frame);
+    }
+
+    fn publish_slot(&self, slot: &FrameSlot, mut frame: RenderFrame) {
         // RFC-0030 §I1. This scope's own sample is written when the guard
         // drops, after `drain_telemetry` below, so it rides along with the
         // *next* tick's block rather than the one it timed. That one-tick lag
@@ -505,12 +554,12 @@ impl Relay {
         // rather than dropping them, see `RenderFrame::merge_dirty_from` for
         // why the union is the correct operation and why the alternative
         // (detect the skip, redraw everything) gives the whole win back.
-        if let Some(previous) = self.latest.load_full() {
-            if previous.version() != self.rendered_version.load(Ordering::Relaxed) {
+        if let Some(previous) = slot.latest.load_full() {
+            if previous.version() != slot.rendered_version.load(Ordering::Relaxed) {
                 frame.merge_dirty_from(&previous);
             }
         }
-        let previous = self.latest.swap(Some(Arc::new(frame)));
+        let previous = slot.latest.swap(Some(Arc::new(frame)));
         if let Some(arc) = previous {
             if let Ok(reclaimed) = Arc::try_unwrap(arc) {
                 let _ = self.recycle_tx.try_send(reclaimed);
@@ -535,10 +584,24 @@ impl Relay {
     /// called the slot usually holds a newer frame; naming the frame that was
     /// drawn means this can never be read as a claim about that newer one.
     pub fn mark_rendered(&self, version: u64) {
+        self.mark_slot_rendered(&self.main, version);
+    }
+
+    /// [`mark_rendered`](Self::mark_rendered) for the surface `id`. A surface
+    /// with no slot (it was destroyed meanwhile) is ignored.
+    pub fn mark_rendered_for(&self, id: SurfaceId, version: u64) {
+        if id.is_main() {
+            self.mark_slot_rendered(&self.main, version);
+        } else if let Some(slot) = self.slot(id) {
+            self.mark_slot_rendered(&slot, version);
+        }
+    }
+
+    fn mark_slot_rendered(&self, slot: &FrameSlot, version: u64) {
         // Monotonic: an out-of-order mark (two render threads, a retried
         // encode) must not walk the watermark backwards and make a frame that
         // was drawn look undrawn.
-        self.rendered_version.fetch_max(version, Ordering::Relaxed);
+        slot.rendered_version.fetch_max(version, Ordering::Relaxed);
         // An animating logic thread waits for its frame to be drawn before
         // computing the next one: this is the frame it waits for.
         self.idle.signal();
@@ -552,7 +615,81 @@ impl Relay {
     ///, this is exactly the "render thread never blocks" guarantee.
     #[must_use]
     pub fn current(&self) -> Option<Arc<RenderFrame>> {
-        self.latest.load_full()
+        self.main.latest.load_full()
+    }
+
+    /// [`current`](Self::current) for the surface `id`: `None` if nothing has
+    /// been published for it, or it has no slot.
+    #[must_use]
+    pub fn current_for(&self, id: SurfaceId) -> Option<Arc<RenderFrame>> {
+        if id.is_main() {
+            return self.main.latest.load_full();
+        }
+        self.slot(id)?.latest.load_full()
+    }
+
+    /// The slot of a surface other than `MAIN`, if it has one.
+    fn slot(&self, id: SurfaceId) -> Option<Arc<FrameSlot>> {
+        self.others
+            .read()
+            .unwrap_or_else(PoisonError::into_inner)
+            .iter()
+            .find(|(slot_id, _)| *slot_id == id)
+            .map(|(_, slot)| Arc::clone(slot))
+    }
+
+    fn slot_or_create(&self, id: SurfaceId) -> Arc<FrameSlot> {
+        if let Some(slot) = self.slot(id) {
+            return slot;
+        }
+        let mut others = self.others.write().unwrap_or_else(PoisonError::into_inner);
+        // Another thread may have made it between the read and the write.
+        if let Some((_, slot)) = others.iter().find(|(slot_id, _)| *slot_id == id) {
+            return Arc::clone(slot);
+        }
+        let slot = Arc::new(FrameSlot::default());
+        others.push((id, Arc::clone(&slot)));
+        slot
+    }
+
+    /// Drops the frame slot of a destroyed surface, and with it the frame held
+    /// there. [`SurfaceId::MAIN`]'s slot is not removable: it only forgets its
+    /// frame.
+    pub fn remove_surface(&self, id: SurfaceId) {
+        if id.is_main() {
+            self.main.latest.store(None);
+            return;
+        }
+        self.others
+            .write()
+            .unwrap_or_else(PoisonError::into_inner)
+            .retain(|(slot_id, _)| *slot_id != id);
+    }
+
+    /// How many surfaces have a frame slot besides [`SurfaceId::MAIN`], which
+    /// always has one. `0` for a single-surface program.
+    #[must_use]
+    pub fn extra_surface_count(&self) -> usize {
+        self.others
+            .read()
+            .unwrap_or_else(PoisonError::into_inner)
+            .len()
+    }
+
+    /// Asks the main thread to create, reconfigure or destroy a surface
+    /// (RFC-0068 §5), and wakes it. Changes are applied in the order they are
+    /// pushed. Called from the logic thread; only the main thread may touch the
+    /// platform's windows, which is why this is a queue and not a call.
+    pub fn push_surface_change(&self, change: SurfaceChange) {
+        let _ = self.surface_tx.send(change);
+        self.wake_renderer();
+    }
+
+    /// Takes every surface change queued so far, in order, without blocking.
+    /// The main thread calls this when it is woken. Empty, and one channel
+    /// check, for a single-surface program.
+    pub fn drain_surface_changes(&self) -> impl Iterator<Item = SurfaceChange> + '_ {
+        self.surface_rx.try_iter()
     }
 
     /// Returns a sender that lets a consumer (e.g. the render thread, after
@@ -982,6 +1119,166 @@ mod tests {
             relay.current().unwrap().texts()[0].dirty,
             "the change nobody drew is still owed"
         );
+    }
+
+    /// RFC-0068 §5: every surface has its own frame slot, so what one publishes
+    /// is never what another reads.
+    #[test]
+    fn each_surface_has_its_own_frame_slot() {
+        let relay = Relay::new().unwrap();
+        let bar = SurfaceId::new(1);
+        assert!(relay.current_for(bar).is_none());
+
+        let mut main = relay.acquire_recycled();
+        main.push_text(dirty_line("main"));
+        relay.publish(main);
+        let mut other = relay.acquire_recycled();
+        other.push_text(dirty_line("bar"));
+        relay.publish_to(bar, other);
+
+        assert_eq!(relay.current().unwrap().texts()[0].text, "main");
+        assert_eq!(
+            relay.current_for(SurfaceId::MAIN).unwrap().texts()[0].text,
+            "main"
+        );
+        assert_eq!(relay.current_for(bar).unwrap().texts()[0].text, "bar");
+        assert!(relay.current_for(SurfaceId::new(2)).is_none());
+        assert_eq!(relay.extra_surface_count(), 1);
+    }
+
+    /// Versions are stamped from one counter, so no two frames of the program
+    /// share one, whichever surface they are for.
+    #[test]
+    fn frames_of_different_surfaces_never_share_a_version() {
+        let relay = Relay::new().unwrap();
+        let bar = SurfaceId::new(1);
+        relay.publish(relay.acquire_recycled());
+        relay.publish_to(bar, relay.acquire_recycled());
+        relay.publish(relay.acquire_recycled());
+        let versions = [
+            relay.current().unwrap().version(),
+            relay.current_for(bar).unwrap().version(),
+        ];
+        assert_ne!(versions[0], versions[1]);
+    }
+
+    /// The dirty-bit carry-forward is per surface: drawing one surface's frame
+    /// says nothing about another's, and a frame nobody drew on one surface
+    /// still owes its changes however often the other is drawn.
+    #[test]
+    fn a_surface_that_was_not_drawn_keeps_its_owed_dirty_bits() {
+        let relay = Relay::new().unwrap();
+        let bar = SurfaceId::new(1);
+        let mut a = relay.acquire_recycled();
+        a.push_text(dirty_line("changed"));
+        relay.publish_to(bar, a);
+        // The main surface is drawn, which must not clear the bar's debt.
+        relay.publish(relay.acquire_recycled());
+        relay.mark_rendered(relay.current().unwrap().version());
+
+        let mut b = relay.acquire_recycled();
+        b.push_text(clean_line("changed"));
+        relay.publish_to(bar, b);
+        assert!(
+            relay.current_for(bar).unwrap().texts()[0].dirty,
+            "the bar's change nobody drew is still owed"
+        );
+
+        // Once the bar's own frame is drawn, its bits are not carried again.
+        relay.mark_rendered_for(bar, relay.current_for(bar).unwrap().version());
+        let mut c = relay.acquire_recycled();
+        c.push_text(clean_line("changed"));
+        relay.publish_to(bar, c);
+        assert!(!relay.current_for(bar).unwrap().texts()[0].dirty);
+    }
+
+    #[test]
+    fn a_removed_surface_gives_back_its_slot_and_main_keeps_only_its_place() {
+        let relay = Relay::new().unwrap();
+        let bar = SurfaceId::new(1);
+        relay.publish_to(bar, relay.acquire_recycled());
+        assert_eq!(relay.extra_surface_count(), 1);
+        relay.remove_surface(bar);
+        assert_eq!(relay.extra_surface_count(), 0);
+        assert!(relay.current_for(bar).is_none());
+        // A mark for a surface that is gone is ignored, not a panic.
+        relay.mark_rendered_for(bar, 3);
+
+        relay.publish(relay.acquire_recycled());
+        relay.remove_surface(SurfaceId::MAIN);
+        assert!(relay.current().is_none());
+    }
+
+    /// RFC-0068 §10: a program with one surface never touches the vector of
+    /// the others, and never queues a change.
+    #[test]
+    fn a_single_surface_program_makes_no_slot_but_main() {
+        let relay = Relay::new().unwrap();
+        for _ in 0..3 {
+            relay.publish(relay.acquire_recycled());
+            relay.mark_rendered(relay.current().unwrap().version());
+        }
+        assert_eq!(relay.extra_surface_count(), 0);
+        assert_eq!(relay.drain_surface_changes().count(), 0);
+    }
+
+    #[test]
+    fn surface_changes_reach_the_main_thread_in_order_and_wake_it() {
+        let relay = Relay::new().unwrap();
+        let woken = Arc::new(AtomicU64::new(0));
+        let counter = Arc::clone(&woken);
+        relay.set_frame_waker(Arc::new(move || {
+            counter.fetch_add(1, Ordering::SeqCst);
+        }));
+        let bar = SurfaceId::new(1);
+        let spec = crate::SurfaceSpec::new();
+        relay.push_surface_change(SurfaceChange::Create {
+            id: bar,
+            spec: spec.clone(),
+        });
+        relay.push_surface_change(SurfaceChange::Configure {
+            id: bar,
+            spec: spec.clone(),
+        });
+        relay.push_surface_change(SurfaceChange::Destroy { id: bar });
+        assert_eq!(woken.load(Ordering::SeqCst), 3);
+
+        let drained: Vec<_> = relay.drain_surface_changes().collect();
+        assert_eq!(
+            drained,
+            vec![
+                SurfaceChange::Create {
+                    id: bar,
+                    spec: spec.clone()
+                },
+                SurfaceChange::Configure { id: bar, spec },
+                SurfaceChange::Destroy { id: bar },
+            ]
+        );
+        assert_eq!(relay.drain_surface_changes().count(), 0, "drained once");
+    }
+
+    /// A surface's slot can be published to from the logic thread while the
+    /// render thread reads another's.
+    #[test]
+    fn surfaces_publish_and_read_concurrently() {
+        let relay = Arc::new(Relay::new().unwrap());
+        let bar = SurfaceId::new(1);
+        let writer = {
+            let relay = Arc::clone(&relay);
+            thread::spawn(move || {
+                for _ in 0..200 {
+                    relay.publish_to(bar, relay.acquire_recycled());
+                    relay.publish(relay.acquire_recycled());
+                }
+            })
+        };
+        for _ in 0..200 {
+            let _ = relay.current_for(bar);
+            let _ = relay.current();
+        }
+        writer.join().unwrap();
+        assert!(relay.current_for(bar).is_some() && relay.current().is_some());
     }
 
     /// The mark names the frame it is about, so a mark that lands after newer
@@ -1918,6 +2215,7 @@ mod tests {
 
         // Feed an input event; the next (input-bearing) tick must wake.
         relay.push_input(InputEvent {
+            surface: crate::SurfaceId::MAIN,
             kind: crate::platform::EventKind::PointerDown,
             pos: (1.0, 1.0),
             delta: (0.0, 0.0),

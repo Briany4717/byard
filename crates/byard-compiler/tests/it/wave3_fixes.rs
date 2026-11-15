@@ -72,6 +72,7 @@ impl App {
 
     fn tap(&mut self, pos: (f32, f32)) {
         let ev = |kind, t| InputEvent {
+            surface: byard_core::SurfaceId::MAIN,
             kind,
             pos,
             delta: (0.0, 0.0),
@@ -88,6 +89,7 @@ impl App {
     fn pointer(&mut self, kind: EventKind, pos: (f32, f32)) {
         self.now += 16;
         let ev = InputEvent {
+            surface: byard_core::SurfaceId::MAIN,
             kind,
             pos,
             delta: (0.0, 0.0),
@@ -617,6 +619,7 @@ fn a_click_fires_focus_in_but_does_not_show_focus() {
     // keyboard put it there.
     app.interp.dispatch_events(&[
         InputEvent {
+            surface: byard_core::SurfaceId::MAIN,
             kind: EventKind::KeyDown,
             pos: (0.0, 0.0),
             delta: (0.0, 0.0),
@@ -625,6 +628,7 @@ fn a_click_fires_focus_in_but_does_not_show_focus() {
             mods: KeyModifiers::default(),
         },
         InputEvent {
+            surface: byard_core::SurfaceId::MAIN,
             kind: EventKind::KeyDown,
             pos: (0.0, 0.0),
             delta: (0.0, 0.0),

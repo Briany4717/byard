@@ -1473,6 +1473,7 @@ impl PlatformHost for App {
                 // frame that mounts or dismisses the HUD has to be asked for.
                 if let Some(e) = self.engine.as_ref() {
                     e.push_input(byard_core::platform::InputEvent {
+                        surface: byard_core::SurfaceId::MAIN,
                         kind: byard_core::platform::EventKind::PointerMove,
                         pos: (-1.0, -1.0),
                         delta: (0.0, 0.0),
@@ -1500,6 +1501,7 @@ impl PlatformHost for App {
             let payload = (button == PointerButton::Right)
                 .then_some(byard_core::platform::InputPayload::Bool(true));
             engine.push_input(byard_core::platform::InputEvent {
+                surface: byard_core::SurfaceId::MAIN,
                 kind,
                 pos: (x, y),
                 delta: (0.0, 0.0),
@@ -1513,6 +1515,7 @@ impl PlatformHost for App {
     fn on_cursor_moved(&mut self, x: f32, y: f32) {
         if let Some(engine) = &self.engine {
             engine.push_input(byard_core::platform::InputEvent {
+                surface: byard_core::SurfaceId::MAIN,
                 kind: byard_core::platform::EventKind::PointerMove,
                 pos: (x, y),
                 delta: (0.0, 0.0),
@@ -1530,6 +1533,7 @@ impl PlatformHost for App {
     fn on_window_focus(&mut self, focused: bool) {
         if let Some(engine) = &self.engine {
             engine.push_input(byard_core::platform::InputEvent {
+                surface: byard_core::SurfaceId::MAIN,
                 kind: byard_core::platform::EventKind::WindowFocus,
                 pos: (0.0, 0.0),
                 delta: (0.0, 0.0),
@@ -1543,6 +1547,7 @@ impl PlatformHost for App {
     fn on_system_scheme(&mut self, dark: bool) {
         if let Some(engine) = &self.engine {
             engine.push_input(byard_core::platform::InputEvent {
+                surface: byard_core::SurfaceId::MAIN,
                 kind: byard_core::platform::EventKind::SystemScheme,
                 pos: (0.0, 0.0),
                 delta: (0.0, 0.0),
@@ -1564,6 +1569,7 @@ impl PlatformHost for App {
             // handling off this payload, dropping it here silently
             // breaks both, since every key would otherwise look identical.
             engine.push_input(byard_core::platform::InputEvent {
+                surface: byard_core::SurfaceId::MAIN,
                 kind,
                 pos: (0.0, 0.0),
                 delta: (0.0, 0.0),
@@ -1577,6 +1583,7 @@ impl PlatformHost for App {
     fn on_text(&mut self, text: &str) {
         if let Some(engine) = &self.engine {
             engine.push_input(byard_core::platform::InputEvent {
+                surface: byard_core::SurfaceId::MAIN,
                 kind: byard_core::platform::EventKind::TextInput,
                 pos: (0.0, 0.0),
                 delta: (0.0, 0.0),
@@ -1620,6 +1627,7 @@ impl PlatformHost for App {
     fn on_scroll(&mut self, dx: f32, dy: f32, x: f32, y: f32) {
         if let Some(engine) = &self.engine {
             engine.push_input(byard_core::platform::InputEvent {
+                surface: byard_core::SurfaceId::MAIN,
                 kind: byard_core::platform::EventKind::Scroll,
                 pos: (x, y),
                 delta: (dx, dy),
@@ -1633,6 +1641,7 @@ impl PlatformHost for App {
     fn on_wheel(&mut self, dx: f32, dy: f32, x: f32, y: f32) {
         if let Some(engine) = &self.engine {
             engine.push_input(byard_core::platform::InputEvent {
+                surface: byard_core::SurfaceId::MAIN,
                 kind: byard_core::platform::EventKind::Wheel,
                 pos: (x, y),
                 delta: (dx, dy),

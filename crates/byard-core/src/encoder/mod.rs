@@ -258,6 +258,157 @@ const QUAD_VERTICES: &[f32] = &[
     1.0, 1.0, // Bottom-Right
 ];
 
+/// Names one surface's state inside an [`EncoderSubsystem`] (RFC-0068 §5).
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub struct TargetKey(u64);
+
+/// Everything one surface keeps between frames: the persistent target
+/// incremental redraw draws into, what the last frame drew (so the next one can
+/// erase exactly what changed), its size and scale, and its share of the text
+/// pipeline (the shaped-line cache and the glyph viewport).
+///
+/// What is *not* here is shared by every surface: the device, the pipelines, the
+/// shader modules, the samplers, the glyph, image and MSDF atlases, and the
+/// scratch the encode path reuses from frame to frame (the instance arena, the
+/// clip table, the viewport uniform). That scratch is rewritten for each frame
+/// and each frame is submitted before the next is encoded, so surfaces take
+/// turns with it.
+#[allow(clippy::struct_excessive_bools)]
+pub(crate) struct TargetState {
+    key: TargetKey,
+    /// The viewport uniform for this surface (logical pixels), written to the
+    /// shared uniform buffer whenever this surface becomes the one drawn.
+    viewport: Viewport,
+    /// This surface's text state while it is parked; `None` while it is the
+    /// bound one, whose text state is the pipeline's.
+    text: Option<text_glyph::TextTarget>,
+    /// DPI scale factor, derived once per resize from the OS-reported value.
+    ///
+    /// Stored here so `encode_frame` can pass it to `TextGlyphPipeline::prepare`
+    /// without requiring the caller to supply it per-frame.
+    scale_factor: f32,
+    /// Set by [`update_viewport`](EncoderSubsystem::update_viewport) and
+    /// consumed (cleared) by [`encode_frame`](EncoderSubsystem::encode_frame).
+    ///
+    /// Forces `TextGlyphPipeline::prepare` to re-prepare even when no text
+    /// content has changed, necessary after a viewport resize because glyphon's
+    /// `Viewport` resolution changed.
+    viewport_dirty: bool,
+    /// Persistent off-screen colour target that incremental (scissored) draws
+    /// actually land on.
+    ///
+    /// RFC §3.3's scissor clipping only makes sense against a render target
+    /// with *retained* content across frames. The swapchain image returned by
+    /// `wgpu::Surface::get_current_texture` does not offer that guarantee
+    /// under multi-buffering, wgpu is free to rotate in a stale or
+    /// uninitialised image on any given frame. `persistent_color` is the
+    /// real, always-retained surface that `LoadOp::Load` + `set_scissor_rect`
+    /// draw into; the swapchain image only ever receives a full, unscissored
+    /// copy of this texture's current contents once per frame (see
+    /// `encode_frame`'s final `copy_texture_to_texture` call).
+    persistent_color: wgpu::Texture,
+    /// View of [`persistent_color`](Self::persistent_color), cached to avoid
+    /// recreating it every frame.
+    persistent_view: wgpu::TextureView,
+    /// Frame-local draw-order depth buffer (RFC-0011 cross-pass paint order):
+    /// cleared to the far plane every pass and rebuilt from the current
+    /// primitive list, so it needs no cross-frame bookkeeping. Recreated
+    /// alongside `persistent_color` on resize so the two always match in size.
+    persistent_depth_view: wgpu::TextureView,
+    /// Physical-pixel width of [`persistent_color`](Self::persistent_color).
+    phys_w: u32,
+    /// Physical-pixel height of [`persistent_color`](Self::persistent_color).
+    phys_h: u32,
+    /// `true` when the next [`encode_frame`](EncoderSubsystem::encode_frame)
+    /// must draw everything, ignoring per-`TextLine` dirty bits.
+    ///
+    /// Set on construction (nothing has been drawn into `persistent_color`
+    /// yet) and whenever the surface is resized (the recreated texture's
+    /// contents are undefined). Cleared at the end of every `encode_frame`
+    /// call. This is intentionally independent of `EvaluatorTick`'s dirty
+    /// collection: a freshly registered `Signal` reports an empty dirty set
+    /// on its very first collection (nothing has mutated yet), so relying on
+    /// `TextLine::dirty` alone would mean the first frame draws nothing.
+    needs_full_redraw: bool,
+    /// Number of `BoxInstance`s passed to the previous `encode_frame` call.
+    ///
+    /// `BoxInstance`s carry no per-instance dirty bit (nothing in the current
+    /// codebase mutates a `BoxInstance` after construction), so a *count*
+    /// change is the only structural signal
+    /// available that the instance list changed shape. A mismatch forces a
+    /// full redraw so a future caller that does start mutating the instance
+    /// list cannot silently lose a newly added box to the scissor rect.
+    last_instance_count: usize,
+    /// Number of `TextLine`s passed to the previous `encode_frame` call, for
+    /// the same structural-change reasoning as
+    /// [`last_instance_count`](Self::last_instance_count).
+    last_text_count: usize,
+    /// Digest of the previous frame's native-view batches (RFC-0039; see the
+    /// digest-completeness rule on [`crate::frame::PaintDigest`]).
+    ///
+    /// A native batch carries no dirty bit, because its instances are a
+    /// package's own type and nothing here can read one out of them. The bytes
+    /// are the dirty bit: if they differ from last frame's, the widget's
+    /// pixels differ, and the frame repaints.
+    last_native_digest: u64,
+    /// Per-line bounding boxes (logical pixels) from the previous
+    /// `encode_frame` call, positionally aligned with that call's `texts`
+    /// slice.
+    ///
+    /// A dirty line's scissor contribution must cover **both** its current
+    /// bounds and its bounds from the previous frame: if a line shrinks or
+    /// moves, its old footprint can fall entirely outside the new bounds,
+    /// leaving stale ink permanently outside the scissor rect (and
+    /// therefore never cleared). See [`dirty_text_bounds`].
+    last_text_bounds: Vec<Rect>,
+    /// Per-`BoxInstance` bounding boxes from the previous `encode_frame` call,
+    /// positionally aligned with that call's `instances` slice. Mirrors
+    /// [`last_text_bounds`](Self::last_text_bounds) for the solid-box pipeline
+    /// so a moved/shrunk box still clears its old footprint.
+    last_box_bounds: Vec<Rect>,
+    /// Per-`DecoratedBox` bounding boxes from the previous call, aligned
+    /// with that call's `decorated` slice. Same shrink/move-safety contract.
+    last_decorated_bounds: Vec<Rect>,
+    /// Previous-frame bounds of every `CanvasShape` (RFC-0020), for the
+    /// incremental dirty-scissor union, same contract as
+    /// [`last_decorated_bounds`](Self::last_decorated_bounds).
+    last_canvas_bounds: Vec<Rect>,
+    /// Previous-frame bounds of every `RippleInstance` (RFC-0023), for the
+    /// incremental dirty-scissor union. A ripple animates every frame it is
+    /// alive (all instances are treated dirty, like solids) and its element
+    /// rect must keep repainting until the last frame *after* it fades, the
+    /// previous-bounds union is what erases the final frame of ink.
+    last_ripple_bounds: Vec<Rect>,
+    /// Previous-frame bounds of every `BackdropInstance` (RFC-0023 §2), same
+    /// contract. A backdrop re-samples the scene behind it whenever anything
+    /// in the frame changed, so its pane is treated always-dirty like solids.
+    last_backdrop_bounds: Vec<Rect>,
+    /// Per-`TextureSampler` bounding boxes from the previous call,
+    /// aligned with that call's `textures` slice.
+    last_texture_bounds: Vec<Rect>,
+    /// The [`RenderFrame::version`] (the relay's publish sequence number) of
+    /// the last frame rendered via
+    /// [`encode_frame_from_relay`](Self::encode_frame_from_relay).
+    ///
+    /// Diagnostic only. It used to drive a forced full redraw whenever the
+    /// sequence jumped, on the reasoning that a skipped frame's dirty bits
+    /// were lost; `Relay::publish` now merges those bits forward instead, so
+    /// nothing is lost and nothing needs compensating. Kept because "which
+    /// published frame is on screen" is the first thing anyone debugging a
+    /// stale-frame report wants to know.
+    last_relay_version: u64,
+    /// Whether the last encoded frame was drawn under an incremental scissor
+    /// rather than as a full redraw (RFC-0001 §3.3).
+    ///
+    /// The third of the audit's inert incremental layers, made assertable: a
+    /// frame that changed one colour must not repaint the window, and there is
+    /// no way to see that from a timing.
+    last_frame_scissored: bool,
+    /// Whether the last encoded frame redrew everything (RFC-0001 §3.3), the
+    /// other half of [`last_frame_scissored`](Self::last_frame_scissored).
+    last_frame_full_redraw: bool,
+}
+
 /// Owns all wgpu resources for the `SolidBox` render pipeline.
 ///
 /// Initialised once via [`EncoderSubsystem::init`]. Holds `Arc` handles to
@@ -366,142 +517,17 @@ pub struct EncoderSubsystem {
     /// images), in that case [`encode_frame_with_decorations`] decodes
     /// synchronously, since there is no I/O pool to offload to.
     io: Option<IoContext>,
-    /// DPI scale factor, derived once per resize from the OS-reported value.
-    ///
-    /// Stored here so `encode_frame` can pass it to `TextGlyphPipeline::prepare`
-    /// without requiring the caller to supply it per-frame.
-    scale_factor: f32,
-    /// Set by [`update_viewport`](EncoderSubsystem::update_viewport) and
-    /// consumed (cleared) by [`encode_frame`](EncoderSubsystem::encode_frame).
-    ///
-    /// Forces `TextGlyphPipeline::prepare` to re-prepare even when no text
-    /// content has changed, necessary after a viewport resize because glyphon's
-    /// `Viewport` resolution changed.
-    viewport_dirty: bool,
-    /// Persistent off-screen colour target that incremental (scissored) draws
-    /// actually land on.
-    ///
-    /// RFC §3.3's scissor clipping only makes sense against a render target
-    /// with *retained* content across frames. The swapchain image returned by
-    /// `wgpu::Surface::get_current_texture` does not offer that guarantee
-    /// under multi-buffering, wgpu is free to rotate in a stale or
-    /// uninitialised image on any given frame. `persistent_color` is the
-    /// real, always-retained surface that `LoadOp::Load` + `set_scissor_rect`
-    /// draw into; the swapchain image only ever receives a full, unscissored
-    /// copy of this texture's current contents once per frame (see
-    /// `encode_frame`'s final `copy_texture_to_texture` call).
-    persistent_color: wgpu::Texture,
-    /// View of [`persistent_color`](Self::persistent_color), cached to avoid
-    /// recreating it every frame.
-    persistent_view: wgpu::TextureView,
-    /// Frame-local draw-order depth buffer (RFC-0011 cross-pass paint order):
-    /// cleared to the far plane every pass and rebuilt from the current
-    /// primitive list, so it needs no cross-frame bookkeeping. Recreated
-    /// alongside `persistent_color` on resize so the two always match in size.
-    persistent_depth_view: wgpu::TextureView,
     /// Pixel format shared by `persistent_color` and the swapchain surface.
     ///
     /// Stored so [`update_viewport`](Self::update_viewport) can recreate
     /// `persistent_color` at the new size on resize without requiring the
     /// caller to pass the format again every time.
     surface_format: wgpu::TextureFormat,
-    /// Physical-pixel width of [`persistent_color`](Self::persistent_color).
-    phys_w: u32,
-    /// Physical-pixel height of [`persistent_color`](Self::persistent_color).
-    phys_h: u32,
-    /// `true` when the next [`encode_frame`](EncoderSubsystem::encode_frame)
-    /// must draw everything, ignoring per-`TextLine` dirty bits.
-    ///
-    /// Set on construction (nothing has been drawn into `persistent_color`
-    /// yet) and whenever the surface is resized (the recreated texture's
-    /// contents are undefined). Cleared at the end of every `encode_frame`
-    /// call. This is intentionally independent of `EvaluatorTick`'s dirty
-    /// collection: a freshly registered `Signal` reports an empty dirty set
-    /// on its very first collection (nothing has mutated yet), so relying on
-    /// `TextLine::dirty` alone would mean the first frame draws nothing.
-    needs_full_redraw: bool,
-    /// Number of `BoxInstance`s passed to the previous `encode_frame` call.
-    ///
-    /// `BoxInstance`s carry no per-instance dirty bit (nothing in the current
-    /// codebase mutates a `BoxInstance` after construction), so a *count*
-    /// change is the only structural signal
-    /// available that the instance list changed shape. A mismatch forces a
-    /// full redraw so a future caller that does start mutating the instance
-    /// list cannot silently lose a newly added box to the scissor rect.
-    last_instance_count: usize,
-    /// Number of `TextLine`s passed to the previous `encode_frame` call, for
-    /// the same structural-change reasoning as
-    /// [`last_instance_count`](Self::last_instance_count).
-    last_text_count: usize,
-    /// Digest of the previous frame's native-view batches (RFC-0039; see the
-    /// digest-completeness rule on [`crate::frame::PaintDigest`]).
-    ///
-    /// A native batch carries no dirty bit, because its instances are a
-    /// package's own type and nothing here can read one out of them. The bytes
-    /// are the dirty bit: if they differ from last frame's, the widget's
-    /// pixels differ, and the frame repaints.
-    last_native_digest: u64,
-    /// Per-line bounding boxes (logical pixels) from the previous
-    /// `encode_frame` call, positionally aligned with that call's `texts`
-    /// slice.
-    ///
-    /// A dirty line's scissor contribution must cover **both** its current
-    /// bounds and its bounds from the previous frame: if a line shrinks or
-    /// moves, its old footprint can fall entirely outside the new bounds,
-    /// leaving stale ink permanently outside the scissor rect (and
-    /// therefore never cleared). See [`dirty_text_bounds`].
-    last_text_bounds: Vec<Rect>,
-    /// Per-`BoxInstance` bounding boxes from the previous `encode_frame` call,
-    /// positionally aligned with that call's `instances` slice. Mirrors
-    /// [`last_text_bounds`](Self::last_text_bounds) for the solid-box pipeline
-    /// so a moved/shrunk box still clears its old footprint.
-    last_box_bounds: Vec<Rect>,
-    /// Per-`DecoratedBox` bounding boxes from the previous call, aligned
-    /// with that call's `decorated` slice. Same shrink/move-safety contract.
-    last_decorated_bounds: Vec<Rect>,
-    /// Previous-frame bounds of every `CanvasShape` (RFC-0020), for the
-    /// incremental dirty-scissor union, same contract as
-    /// [`last_decorated_bounds`](Self::last_decorated_bounds).
-    last_canvas_bounds: Vec<Rect>,
-    /// Previous-frame bounds of every `RippleInstance` (RFC-0023), for the
-    /// incremental dirty-scissor union. A ripple animates every frame it is
-    /// alive (all instances are treated dirty, like solids) and its element
-    /// rect must keep repainting until the last frame *after* it fades, the
-    /// previous-bounds union is what erases the final frame of ink.
-    last_ripple_bounds: Vec<Rect>,
-    /// Previous-frame bounds of every `BackdropInstance` (RFC-0023 §2), same
-    /// contract. A backdrop re-samples the scene behind it whenever anything
-    /// in the frame changed, so its pane is treated always-dirty like solids.
-    last_backdrop_bounds: Vec<Rect>,
-    /// Per-`TextureSampler` bounding boxes from the previous call,
-    /// aligned with that call's `textures` slice.
-    last_texture_bounds: Vec<Rect>,
-    /// The [`RenderFrame::version`] (the relay's publish sequence number) of
-    /// the last frame rendered via
-    /// [`encode_frame_from_relay`](Self::encode_frame_from_relay).
-    ///
-    /// Diagnostic only. It used to drive a forced full redraw whenever the
-    /// sequence jumped, on the reasoning that a skipped frame's dirty bits
-    /// were lost; `Relay::publish` now merges those bits forward instead, so
-    /// nothing is lost and nothing needs compensating. Kept because "which
-    /// published frame is on screen" is the first thing anyone debugging a
-    /// stale-frame report wants to know.
-    last_relay_version: u64,
     /// The one GPU buffer every instanced pipeline's per-frame data lives in
     /// (RFC-0033).
     arena: instance_arena::InstanceArena,
     /// Reused per-frame staging bookkeeping for that arena.
     staging: FrameStaging,
-    /// Whether the last encoded frame was drawn under an incremental scissor
-    /// rather than as a full redraw (RFC-0001 §3.3).
-    ///
-    /// The third of the audit's inert incremental layers, made assertable: a
-    /// frame that changed one colour must not repaint the window, and there is
-    /// no way to see that from a timing.
-    last_frame_scissored: bool,
-    /// Whether the last encoded frame redrew everything (RFC-0001 §3.3), the
-    /// other half of [`last_frame_scissored`](Self::last_frame_scissored).
-    last_frame_full_redraw: bool,
     /// Async GPU pass timing (RFC-0013 §"GPU timing"), or `None` if the
     /// device lacks `wgpu::Features::TIMESTAMP_QUERY` (P5), checked once at
     /// construction, never re-probed per frame.
@@ -517,6 +543,22 @@ pub struct EncoderSubsystem {
     /// [`submit`](Self::submit), which must only call
     /// [`GpuTimer::request_map`] when there is a fresh copy to map.
     gpu_timing_pending: bool,
+    /// The surface the next [`encode_frame`](Self::encode_frame) draws for: its
+    /// persistent target and everything the incremental redraw remembers about
+    /// the last frame it drew (RFC-0068 §5). A single-surface program has this
+    /// one and nothing else.
+    t: TargetState,
+    /// The other surfaces' state, while they are not the one being drawn
+    /// ([`bind_target`](Self::bind_target) swaps one in). Empty, and never
+    /// touched, for a single-surface program.
+    parked: Vec<TargetState>,
+    /// The key the next [`add_target`](Self::add_target) hands out.
+    next_target_key: u64,
+    /// Whether a round of frames is open ([`begin_round`](Self::begin_round)):
+    /// the per-frame housekeeping that must not run between two surfaces of the
+    /// same round (the glyph atlas trim, the image cache's eviction) waits for
+    /// [`end_round`](Self::end_round).
+    round_open: bool,
 }
 
 impl EncoderSubsystem {
@@ -843,35 +885,43 @@ impl EncoderSubsystem {
             vector_atlas,
             vector_ack_tx: None,
             io: None,
-            scale_factor,
-            viewport_dirty: false,
-            persistent_depth_view,
-            persistent_color,
-            persistent_view,
             surface_format,
-            phys_w: width,
-            phys_h: height,
-            // Nothing has been drawn into `persistent_color` yet, the first
-            // `encode_frame` call must draw everything unconditionally.
-            needs_full_redraw: true,
-            last_instance_count: 0,
-            last_text_count: 0,
-            last_native_digest: 0,
-            last_text_bounds: Vec::new(),
-            last_box_bounds: Vec::new(),
-            last_decorated_bounds: Vec::new(),
-            last_canvas_bounds: Vec::new(),
-            last_ripple_bounds: Vec::new(),
-            last_backdrop_bounds: Vec::new(),
-            last_texture_bounds: Vec::new(),
-            last_relay_version: 0,
             arena,
             staging: FrameStaging::default(),
-            last_frame_scissored: false,
-            last_frame_full_redraw: false,
             gpu_timer,
             gpu_samples_scratch: Vec::new(),
             gpu_timing_pending: false,
+            t: TargetState {
+                key: TargetKey(0),
+                viewport: Viewport::default(),
+                text: None,
+                scale_factor,
+                viewport_dirty: false,
+                persistent_depth_view,
+                persistent_color,
+                persistent_view,
+                phys_w: width,
+                phys_h: height,
+                // Nothing has been drawn into `persistent_color` yet, the first
+                // `encode_frame` call must draw everything unconditionally.
+                needs_full_redraw: true,
+                last_instance_count: 0,
+                last_text_count: 0,
+                last_native_digest: 0,
+                last_text_bounds: Vec::new(),
+                last_box_bounds: Vec::new(),
+                last_decorated_bounds: Vec::new(),
+                last_canvas_bounds: Vec::new(),
+                last_ripple_bounds: Vec::new(),
+                last_backdrop_bounds: Vec::new(),
+                last_texture_bounds: Vec::new(),
+                last_relay_version: 0,
+                last_frame_scissored: false,
+                last_frame_full_redraw: false,
+            },
+            parked: Vec::new(),
+            next_target_key: 1,
+            round_open: false,
         })
     }
 
@@ -914,6 +964,177 @@ impl EncoderSubsystem {
         self.blur_auto_capable = capable;
     }
 
+    /// Writes the bound surface's viewport into the uniform every pipeline
+    /// reads. One uniform serves every surface, so it is written again whenever
+    /// the surface being drawn changes (16 bytes, and never for a program with
+    /// one surface).
+    fn write_viewport_uniform(&self) {
+        let size_data = [self.t.viewport.width, self.t.viewport.height, 0.0_f32, 0.0];
+        self.queue
+            .write_buffer(&self.viewport_buffer, 0, bytemuck::cast_slice(&size_data));
+    }
+
+    /// The surface the next frame is encoded for (RFC-0068 §5). The one made
+    /// by [`init`](Self::init) until [`bind_target`](Self::bind_target) says
+    /// otherwise.
+    #[must_use]
+    pub fn current_target(&self) -> TargetKey {
+        self.t.key
+    }
+
+    /// The target [`init`](Self::init) made, which stays its first however many
+    /// are added.
+    #[must_use]
+    pub const fn first_target(&self) -> TargetKey {
+        TargetKey(0)
+    }
+
+    /// Whether `key` names a surface this encoder holds state for.
+    #[must_use]
+    pub fn has_target(&self, key: TargetKey) -> bool {
+        self.t.key == key || self.parked.iter().any(|p| p.key == key)
+    }
+
+    /// The format every surface of this encoder draws in.
+    #[must_use]
+    pub const fn target_format(&self) -> wgpu::TextureFormat {
+        self.surface_format
+    }
+
+    /// How many surfaces this encoder holds state for. `1` for a
+    /// single-surface program.
+    #[must_use]
+    pub fn target_count(&self) -> usize {
+        1 + self.parked.len()
+    }
+
+    /// Adds the state for one more surface, at this size in physical pixels,
+    /// and returns the key that names it. The new surface starts with nothing
+    /// drawn, so its first frame draws everything, and it shares every
+    /// pipeline, sampler and atlas with the surfaces already here: what it
+    /// costs is its persistent target and depth buffer.
+    ///
+    /// It is not made the bound surface; [`bind_target`](Self::bind_target)
+    /// does that.
+    pub fn add_target(&mut self, phys_w: u32, phys_h: u32, scale: f32) -> TargetKey {
+        let key = TargetKey(self.next_target_key);
+        self.next_target_key += 1;
+        let (persistent_color, persistent_view) =
+            create_persistent_target(&self.device, self.surface_format, phys_w, phys_h);
+        let persistent_depth_view = create_depth_target(&self.device, phys_w, phys_h);
+        let text = self
+            .text_pipeline
+            .new_target(&self.device, &self.queue, phys_w, phys_h);
+        #[allow(clippy::cast_precision_loss)]
+        let viewport = Viewport::new(phys_w as f32 / scale, phys_h as f32 / scale);
+        self.parked.push(TargetState {
+            key,
+            viewport,
+            text: Some(text),
+            scale_factor: scale,
+            viewport_dirty: true,
+            persistent_depth_view,
+            persistent_color,
+            persistent_view,
+            phys_w,
+            phys_h,
+            needs_full_redraw: true,
+            last_instance_count: 0,
+            last_text_count: 0,
+            last_native_digest: 0,
+            last_text_bounds: Vec::new(),
+            last_box_bounds: Vec::new(),
+            last_decorated_bounds: Vec::new(),
+            last_canvas_bounds: Vec::new(),
+            last_ripple_bounds: Vec::new(),
+            last_backdrop_bounds: Vec::new(),
+            last_texture_bounds: Vec::new(),
+            last_relay_version: 0,
+            last_frame_scissored: false,
+            last_frame_full_redraw: false,
+        });
+        key
+    }
+
+    /// Makes `key` the surface [`encode_frame`](Self::encode_frame) and
+    /// [`update_viewport`](Self::update_viewport) act on. Does nothing, and
+    /// costs one comparison, when it already is. Returns `false` for a key this
+    /// encoder does not know (a surface already removed).
+    ///
+    /// The surface that was bound is parked with everything it remembered, so
+    /// binding back finds its incremental state as it left it.
+    pub fn bind_target(&mut self, key: TargetKey) -> bool {
+        if self.t.key == key {
+            return true;
+        }
+        let Some(index) = self.parked.iter().position(|p| p.key == key) else {
+            return false;
+        };
+        // A parked surface always holds its text state; the bound one never does.
+        let Some(incoming_text) = self.parked[index].text.take() else {
+            debug_assert!(false, "a parked surface keeps its text state");
+            return false;
+        };
+        self.t.text = Some(self.text_pipeline.swap_target(incoming_text));
+        std::mem::swap(&mut self.t, &mut self.parked[index]);
+        self.write_viewport_uniform();
+        true
+    }
+
+    /// Drops the state of one surface: its persistent target, its depth buffer
+    /// and its shaped lines. The other surfaces are untouched and keep drawing.
+    ///
+    /// Returns `false` if the key is unknown, and also if it is the only
+    /// surface left, which stays (an encoder always has one to draw into; the
+    /// caller drops the whole encoder to drop the last).
+    pub fn remove_target(&mut self, key: TargetKey) -> bool {
+        if let Some(index) = self.parked.iter().position(|p| p.key == key) {
+            self.parked.swap_remove(index);
+            return true;
+        }
+        if self.t.key != key || self.parked.is_empty() {
+            return false;
+        }
+        let next = self.parked[0].key;
+        self.bind_target(next);
+        // The removed surface was parked by that bind, at the slot the next one
+        // came from.
+        self.remove_target(key)
+    }
+
+    /// Opens a round: the frames of every surface that draws before the next
+    /// [`end_round`](Self::end_round) (RFC-0068 §5).
+    ///
+    /// The housekeeping that frees what the frame in hand did not use (the
+    /// glyph atlas trim, the image cache's eviction) is what a round defers to
+    /// its end, because between two surfaces of one round it would free what
+    /// the second is about to draw. Frames encoded with no round open do that
+    /// housekeeping themselves, one frame at a time, as they always did.
+    pub fn begin_round(&mut self) {
+        self.round_open = true;
+        self.text_pipeline.set_defer_atlas_trim(true);
+        self.texture_cache.begin_frame();
+    }
+
+    /// Closes the round: trims the glyph atlas and the image cache once, after
+    /// every surface that drew in it.
+    pub fn end_round(&mut self) {
+        if !self.round_open {
+            return;
+        }
+        self.round_open = false;
+        self.text_pipeline.set_defer_atlas_trim(false);
+        self.text_pipeline.trim_atlas();
+        self.texture_cache.trim();
+    }
+
+    /// How many times the glyph atlas has been trimmed, for the assertion that
+    /// a round trims it once however many surfaces drew.
+    #[must_use]
+    pub fn glyph_atlas_trims(&self) -> u64 {
+        self.text_pipeline.atlas_trims()
+    }
+
     /// Whether the last encoded frame redrew the whole target.
     ///
     /// The decision, exposed so a test can ask what the encoder *decided*
@@ -923,14 +1144,14 @@ impl EncoderSubsystem {
     /// everywhere.
     #[must_use]
     pub const fn last_frame_was_full_redraw(&self) -> bool {
-        self.last_frame_full_redraw
+        self.t.last_frame_full_redraw
     }
 
     /// Whether the last encoded frame took the incremental scissored path
     /// instead of redrawing the whole target (RFC-0001 §3.3).
     #[must_use]
     pub const fn last_frame_scissored(&self) -> bool {
-        self.last_frame_scissored
+        self.t.last_frame_scissored
     }
 
     /// The frame's shared instance arena (RFC-0033), for the assertions that
@@ -1034,7 +1255,7 @@ impl EncoderSubsystem {
         }
         let data = clip_entries(
             table,
-            self.scale_factor,
+            self.t.scale_factor,
             self.clip_masks.slots(),
             self.clip_masks.size(),
         );
@@ -1060,26 +1281,25 @@ impl EncoderSubsystem {
     /// incrementally patch stale (or garbage) pixels.
     pub fn update_viewport(&mut self, viewport: Viewport, phys_w: u32, phys_h: u32, scale: f32) {
         // SolidBox viewport uniform (logical pixels, padded to 16 bytes).
-        let size_data = [viewport.width, viewport.height, 0.0_f32, 0.0];
-        self.queue
-            .write_buffer(&self.viewport_buffer, 0, bytemuck::cast_slice(&size_data));
+        self.t.viewport = viewport;
+        self.write_viewport_uniform();
 
         // glyphon Viewport (physical pixels, glyphon always operates in physical px).
         self.text_pipeline
             .update_resolution(&self.queue, phys_w, phys_h);
 
-        self.scale_factor = scale;
-        self.viewport_dirty = true;
+        self.t.scale_factor = scale;
+        self.t.viewport_dirty = true;
 
-        if phys_w != self.phys_w || phys_h != self.phys_h {
+        if phys_w != self.t.phys_w || phys_h != self.t.phys_h {
             let (persistent_color, persistent_view) =
                 create_persistent_target(&self.device, self.surface_format, phys_w, phys_h);
-            self.persistent_color = persistent_color;
-            self.persistent_view = persistent_view;
-            self.persistent_depth_view = create_depth_target(&self.device, phys_w, phys_h);
-            self.phys_w = phys_w;
-            self.phys_h = phys_h;
-            self.needs_full_redraw = true;
+            self.t.persistent_color = persistent_color;
+            self.t.persistent_view = persistent_view;
+            self.t.persistent_depth_view = create_depth_target(&self.device, phys_w, phys_h);
+            self.t.phys_w = phys_w;
+            self.t.phys_h = phys_h;
+            self.t.needs_full_redraw = true;
         }
     }
 
@@ -1275,14 +1495,14 @@ impl EncoderSubsystem {
         // their extent is how a widget ends up half-painted. A digest over a
         // few kilobytes is cheap; a wrong rect is a bug nobody can see coming.
         let native_digest = native_batch_digest(native.batches);
-        let native_changed = native_digest != self.last_native_digest;
-        self.last_native_digest = native_digest;
+        let native_changed = native_digest != self.t.last_native_digest;
+        self.t.last_native_digest = native_digest;
 
         let full_redraw = needs_full_redraw_this_frame(
-            self.needs_full_redraw || dirty.full || native_changed,
-            self.last_instance_count,
+            self.t.needs_full_redraw || dirty.full || native_changed,
+            self.t.last_instance_count,
             instances.len(),
-            self.last_text_count,
+            self.t.last_text_count,
             texts.len(),
         );
         // `DecoratedBox`/`TextureSampler` no longer force a full,
@@ -1336,24 +1556,24 @@ impl EncoderSubsystem {
                 &ScissorInputs {
                     texts,
                     text_wrap: clips.text_wrap,
-                    prev_texts: &self.last_text_bounds,
+                    prev_texts: &self.t.last_text_bounds,
                     instances,
                     instances_dirty,
-                    prev_boxes: &self.last_box_bounds,
+                    prev_boxes: &self.t.last_box_bounds,
                     decorated,
-                    prev_decorated: &self.last_decorated_bounds,
+                    prev_decorated: &self.t.last_decorated_bounds,
                     textures,
-                    prev_textures: &self.last_texture_bounds,
+                    prev_textures: &self.t.last_texture_bounds,
                     canvas_shapes,
-                    prev_canvas: &self.last_canvas_bounds,
+                    prev_canvas: &self.t.last_canvas_bounds,
                     ripples,
-                    prev_ripples: &self.last_ripple_bounds,
+                    prev_ripples: &self.t.last_ripple_bounds,
                     backdrops,
-                    prev_backdrops: &self.last_backdrop_bounds,
+                    prev_backdrops: &self.t.last_backdrop_bounds,
                 },
-                self.scale_factor,
-                self.phys_w,
-                self.phys_h,
+                self.t.scale_factor,
+                self.t.phys_w,
+                self.t.phys_h,
             )
         };
 
@@ -1365,8 +1585,8 @@ impl EncoderSubsystem {
         // transition changes a `VectorInstance`'s content but not its rect,
         // the scissor union (rect-based) would otherwise miss it entirely.
         let should_draw = full_redraw || scissor.is_some() || !atlas_uploads.is_empty();
-        self.last_frame_scissored = !full_redraw && scissor.is_some();
-        self.last_frame_full_redraw = full_redraw;
+        self.t.last_frame_scissored = !full_redraw && scissor.is_some();
+        self.t.last_frame_full_redraw = full_redraw;
 
         // ── Pass segmentation (RFC-0017 z-layers × RFC-0023 backdrops) ────────
         let totals = LayerMark {
@@ -1387,8 +1607,8 @@ impl EncoderSubsystem {
         // container holds no extra texture at all.
         if !groups.is_empty() {
             let size = (
-                self.persistent_color.width(),
-                self.persistent_color.height(),
+                self.t.persistent_color.width(),
+                self.t.persistent_color.height(),
             );
             self.groups.ensure(&self.device, self.surface_format, size);
         }
@@ -1419,7 +1639,7 @@ impl EncoderSubsystem {
             // exists to skip for clean subtrees, so it has to be readable on
             // its own rather than folded into the pass recording next to it.
             crate::profile_scope!("encode.glyphs");
-            let viewport_dirty = self.viewport_dirty;
+            let viewport_dirty = self.t.viewport_dirty;
             // One glyph batch per pass segment (z-layer batches, further split
             // at backdrop barriers), shaping inside `prepare` stays global,
             // so this partition costs nothing beyond one extra small vertex
@@ -1431,7 +1651,7 @@ impl EncoderSubsystem {
                 &self.queue,
                 texts,
                 depths.text,
-                self.scale_factor,
+                self.t.scale_factor,
                 viewport_dirty,
                 clips.table,
                 clips.text,
@@ -1440,7 +1660,7 @@ impl EncoderSubsystem {
                 dev_text_start,
             )?;
         }
-        self.viewport_dirty = false;
+        self.t.viewport_dirty = false;
 
         // ── Command encoding ──────────────────────────────────────────────────
         let mut encoder = self
@@ -1458,7 +1678,7 @@ impl EncoderSubsystem {
             &self.queue,
             &mut encoder,
             clips.masks,
-            self.scale_factor,
+            self.t.scale_factor,
         );
         if masks_moved {
             // The strip grew, so the bind group that names it is stale.
@@ -1481,15 +1701,15 @@ impl EncoderSubsystem {
             let mut backdrop_draw = BackdropDraw {
                 pipes: &self.backdrop_pipelines,
                 scratch: &mut self.blur_scratch,
-                persistent: &self.persistent_color,
+                persistent: &self.t.persistent_color,
                 format: self.surface_format,
                 auto_capable: self.blur_auto_capable,
                 backdrops,
             };
             draw_ui_pass(
                 &mut encoder,
-                &self.persistent_view,
-                &self.persistent_depth_view,
+                &self.t.persistent_view,
+                &self.t.persistent_depth_view,
                 &self.device,
                 &DrawPipelines {
                     registry: &self.pipelines,
@@ -1500,7 +1720,7 @@ impl EncoderSubsystem {
                 &mut self.text_pipeline,
                 full_redraw,
                 scissor,
-                (self.scale_factor, self.phys_w, self.phys_h),
+                (self.t.scale_factor, self.t.phys_w, self.t.phys_h),
                 &DrawPrimitives {
                     instances,
                     decorated,
@@ -1526,7 +1746,7 @@ impl EncoderSubsystem {
                 GroupDraw {
                     compositor: &self.groups,
                     groups,
-                    scale: self.scale_factor,
+                    scale: self.t.scale_factor,
                 },
                 self.gpu_timer.as_ref(),
                 &mut self.arena,
@@ -1551,7 +1771,7 @@ impl EncoderSubsystem {
         // swapchain's own previous contents can never be assumed valid.
         encoder.copy_texture_to_texture(
             wgpu::TexelCopyTextureInfo {
-                texture: &self.persistent_color,
+                texture: &self.t.persistent_color,
                 mip_level: 0,
                 origin: wgpu::Origin3d::ZERO,
                 aspect: wgpu::TextureAspect::All,
@@ -1563,8 +1783,8 @@ impl EncoderSubsystem {
                 aspect: wgpu::TextureAspect::All,
             },
             wgpu::Extent3d {
-                width: self.phys_w,
-                height: self.phys_h,
+                width: self.t.phys_w,
+                height: self.t.phys_h,
                 depth_or_array_layers: 1,
             },
         );
@@ -1696,7 +1916,7 @@ impl EncoderSubsystem {
             },
             frame.dev_base(),
         )?;
-        self.last_relay_version = frame.version();
+        self.t.last_relay_version = frame.version();
         Ok(cmd)
     }
 
@@ -1710,7 +1930,11 @@ impl EncoderSubsystem {
     fn request_textures(&mut self, textures: &[crate::frame::TextureSampler]) {
         // Every frame is a tick of the cache's clock, whether or not it draws an
         // image: that is what lets an image that stopped being drawn age out.
-        self.texture_cache.begin_frame();
+        // Inside a round the clock ticks once, when the round begins, so a
+        // second surface does not make the first one's images look older.
+        if !self.round_open {
+            self.texture_cache.begin_frame();
+        }
         if let Some(io) = &self.io {
             let handle = io.handle.clone();
             let tx = io.tx.clone();
@@ -1734,8 +1958,10 @@ impl EncoderSubsystem {
             }
         }
         // After every image this frame draws has been marked, so none of them
-        // can be chosen.
-        self.texture_cache.trim();
+        // can be chosen. Inside a round, after every surface's has.
+        if !self.round_open {
+            self.texture_cache.trim();
+        }
     }
 
     /// Sets how much VRAM decoded images may hold before idle ones are
@@ -1815,9 +2041,9 @@ fn update_frame_bookkeeping(
     ripples: &[RippleInstance],
     backdrops: &[BackdropInstance],
 ) {
-    state.needs_full_redraw = false;
-    state.last_instance_count = instances.len();
-    state.last_text_count = texts.len();
+    state.t.needs_full_redraw = false;
+    state.t.last_instance_count = instances.len();
+    state.t.last_text_count = texts.len();
     // Recomputed for every primitive (not just dirty ones), a clean
     // primitive's bounds are unchanged from last frame anyway, so this is a
     // no-op for it, and it keeps each `last_*_bounds` positionally aligned with
@@ -1827,31 +2053,31 @@ fn update_frame_bookkeeping(
     // `collect`s here were seven heap allocations every frame, for a result
     // the same length as the one they replaced.
     refill(
-        &mut state.last_text_bounds,
+        &mut state.t.last_text_bounds,
         texts.iter().map(text_line_bounds),
     );
     refill(
-        &mut state.last_box_bounds,
+        &mut state.t.last_box_bounds,
         instances.iter().map(|b| rect_of(b.rect)),
     );
     refill(
-        &mut state.last_decorated_bounds,
+        &mut state.t.last_decorated_bounds,
         decorated.iter().map(|d| rect_of(d.base.rect)),
     );
     refill(
-        &mut state.last_canvas_bounds,
+        &mut state.t.last_canvas_bounds,
         canvas_shapes.iter().map(crate::frame::CanvasShape::bounds),
     );
     refill(
-        &mut state.last_ripple_bounds,
+        &mut state.t.last_ripple_bounds,
         ripples.iter().map(|r| rect_of(r.rect)),
     );
     refill(
-        &mut state.last_backdrop_bounds,
+        &mut state.t.last_backdrop_bounds,
         backdrops.iter().map(|b| rect_of(b.rect)),
     );
     refill(
-        &mut state.last_texture_bounds,
+        &mut state.t.last_texture_bounds,
         textures.iter().map(|t| rect_of(t.rect)),
     );
 }

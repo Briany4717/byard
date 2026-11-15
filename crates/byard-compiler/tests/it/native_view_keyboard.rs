@@ -50,6 +50,7 @@ impl NativeViewMeta for Greedy {
 
 fn ev(kind: EventKind, pos: (f32, f32), payload: Option<InputPayload>, t: u64) -> InputEvent {
     InputEvent {
+        surface: byard_core::SurfaceId::MAIN,
         kind,
         pos,
         delta: (0.0, 0.0),

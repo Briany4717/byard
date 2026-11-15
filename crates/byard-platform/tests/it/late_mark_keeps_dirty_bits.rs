@@ -109,6 +109,7 @@ impl Logic {
             (line.x + 4.0, line.y + 4.0)
         };
         let event = |kind, dt| InputEvent {
+            surface: byard_core::SurfaceId::MAIN,
             kind,
             pos,
             delta: (0.0, 0.0),

@@ -48,6 +48,7 @@ fn the_header_command_selects_the_typo_it_describes() {
         interp.render(&tree, &mut frame, 440.0, 880.0);
     };
     let event = |t: u64, kind, pos, payload, shift| InputEvent {
+        surface: byard_core::SurfaceId::MAIN,
         kind,
         pos,
         delta: (0.0, 0.0),

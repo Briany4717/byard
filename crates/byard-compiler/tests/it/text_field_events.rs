@@ -60,6 +60,7 @@ impl App {
     fn event(&mut self, kind: EventKind, pos: (f32, f32), payload: Option<InputPayload>) {
         self.t += 50;
         let e = InputEvent {
+            surface: byard_core::SurfaceId::MAIN,
             kind,
             pos,
             delta: (0.0, 0.0),

@@ -1,6 +1,6 @@
 # RFC-0068: Windows, panels and screens
 
-- **Status:** Draft
+- **Status:** Accepted
 - **Author(s):** Briany4717
 - **Created:** 2026-11-15
 - **Last updated:** 2026-11-15
@@ -37,6 +37,12 @@ own several surfaces, all of them sharing its state:
 
 A program that writes none of these still has its one window, through the same
 code it runs through now, and pays nothing for the rest.
+
+The simple path and the deep one are kept apart on purpose. A bar is three
+lines of Byld with defaults that do what a first bar should. Below that, Rust
+code can reach the Wayland connection, every global the compositor offers and
+the SCTK object behind each surface (§8b), for anything the attributes do not
+cover.
 
 This is the engine half of **Mantle** (`byard-mantle`), a package for building
 Wayland desktop shells in Byld, the way Quickshell builds them in QML. Mantle's
@@ -119,12 +125,27 @@ content, and `[project]`'s title and size are its own. A program that writes
 view has to be a `Window` or a `Panel`: a `Text` loose between two windows
 would have no window to be drawn in (`ContentOutsideSurface`).
 
+### The smallest bar
+
+```byld
+View Main() {
+    Panel #[edge: top] {
+        Text("Hello from the bar") #[p: 8]
+    }
+}
+```
+
+That is a whole program. `byard dev` runs it on the desktop with hot reload:
+the bar sits at the top of the screen the compositor picks, as tall as its
+text, and windows make room for it. Every attribute below is something to add
+when the default stops being enough. None of them is needed to start.
+
 ### A bar on every screen
 
 ```byld
 View Main() {
     for s in screens key s.name {
-        Panel #[screen: s, edge: top, height: 40, exclusive: true, namespace: "bar"] {
+        Panel #[screen: s, edge: top, height: 40, namespace: "bar"] {
             Row #[px: 12, gap: 8, align: center, bg: 0xE01C1B22, radius: 12, mx: 8, my: 4] {
                 Text(s.name)
                 Spacer
@@ -137,9 +158,9 @@ View Main() {
 
 `edge: top` puts the panel against the top of the screen, across its width.
 `height: 40` is its thickness, and without it the panel takes the height of
-its content. `exclusive: true` reserves those 40 pixels, so maximised windows
-start below the bar. `namespace` is the name the compositor's rules match
-(Hyprland's `layerrule = blur, bar`).
+its content. A panel on an `edge` reserves its thickness, so maximised windows
+start below the bar (`exclusive: false` lets them go under it). `namespace` is
+the name the compositor's rules match (Hyprland's `layerrule = blur, bar`).
 
 A panel's background is transparent: only what the program draws is drawn. The
 pointer goes through to whatever is below wherever the program put nothing that
@@ -284,7 +305,7 @@ compositor offers it, else 3).
 | `edge` | `top \| bottom \| left \| right` | none | anchor that edge and both perpendicular ones |
 | `anchor` | edge or tuple of edges | none | `set_anchor` |
 | `layer` | `background \| bottom \| top \| overlay` | `top` | the layer at creation, `set_layer` after |
-| `exclusive` | `Bool`, `Float` or `ignore` | `false` | `set_exclusive_zone` |
+| `exclusive` | `Bool`, `Float` or `ignore` | `true` with `edge`, else `false` | `set_exclusive_zone` |
 | `keyboard` | `none \| on_demand \| exclusive` | `none` | `set_keyboard_interactivity` |
 | `namespace` | `Str` | the program's app id | the namespace at creation |
 | `width`, `height` | `Float` | the content's size | `set_size` |
@@ -308,8 +329,10 @@ size.
 height for `top` and `bottom`, its width for `left` and `right`, plus the
 margin on that edge. A number reserves that many logical pixels. `false` sends
 0, so the panel respects the space others reserved. `ignore` sends -1, so it
-covers them too, as a wallpaper or a full-screen overlay should. `exclusive: true`
-on a panel with no `edge` and fewer than three anchors is
+covers them too, as a wallpaper or a full-screen overlay should. The default
+is `true` for a panel on an `edge`, because a bar that windows slide under is
+the surprise nobody wants on the first run, and `false` for anything else.
+`exclusive: true` on a panel with no `edge` and fewer than three anchors is
 `ExclusiveNeedsEdge`, because the protocol ignores it there.
 
 **`keyboard`.** With `none`, the panel never has keyboard focus. Its text
@@ -537,6 +560,90 @@ way an edit that does not compile keeps it.
 `Adapter` per surface, each a window under the application's AT-SPI root, which
 is what `accesskit_winit` does on Linux underneath.
 
+### 8b. Going below: the Wayland API
+
+The attributes cover what most shells need. For everything else, a program can
+reach the Wayland connection, the compositor's globals and every surface
+Byard made, from Rust, on the shell backend. The rule is that nothing a
+person writes in Byld depends on this. It is a door for the one panel that needs
+`ext-background-effect`, a KDE blur, `set_exclusive_edge` or a protocol Byard
+has never heard of, and nobody prototyping a bar has to know it exists.
+
+**The crates, at Byard's versions.** `byard::wayland` re-exports
+`smithay_client_toolkit` (as `sctk`), `wayland_client`, `wayland_protocols`,
+`wayland_protocols_wlr` and `calloop`, so an extension compiles against exactly the
+objects Byard holds and never against a second copy of them.
+
+**An extension.**
+
+```rust,ignore
+use byard::wayland::{SurfaceHandle, SurfaceKind, WaylandContext, WaylandExtension};
+
+struct Blur { manager: Option<OrgKdeKwinBlurManager>, queue: Option<QueueHandle<BlurState>> }
+
+impl WaylandExtension for Blur {
+    fn connected(&mut self, cx: &mut WaylandContext<'_>) {
+        // Every global the compositor advertises, with its version.
+        // An extension binds what it wants on its own event queue, with its own
+        // `Dispatch` impls, inserted into Byard's event loop.
+        let (globals, queue) = cx.own_queue::<BlurState>();
+        self.manager = globals.bind(&queue.handle(), 1..=1, ()).ok();
+        self.queue = Some(queue.handle());
+        cx.insert_queue(queue, BlurState::default());
+    }
+
+    fn surface_configured(&mut self, cx: &mut WaylandContext<'_>, surface: &SurfaceHandle<'_>) {
+        if surface.name() == Some("bar") {
+            if let (Some(m), Some(q)) = (&self.manager, &self.queue) {
+                let blur = m.create(surface.wl_surface(), q, ());
+                blur.commit();
+                cx.request_commit(surface.id());
+            }
+        }
+    }
+}
+
+byard::App::new("shell/main.byd").wayland(Blur { manager: None, queue: None }).run()
+```
+
+- **`WaylandContext`** gives the `Connection`, the `GlobalList` (all globals
+  and their versions, not only the ones Byard uses), the calloop `LoopHandle`,
+  `own_queue()` (a new `EventQueue` on Byard's connection, with the globals
+  listed on it) and `insert_queue()` (dispatched on the main thread with
+  Byard's own). Two queues on one connection is how `wayland-client` keeps one
+  library's `Dispatch` state from another's, so an extension never touches
+  Byard's state type, and Byard never needs to know the extension's protocols.
+- **`SurfaceHandle`** is one of Byard's surfaces: `id()`, `name()` (the `as`
+  name, else the `namespace`, else the title), `screen()`, `size()`, `scale()`,
+  `wl_surface()`, and `kind()`, which is `SurfaceKind::Layer(&sctk::shell::wlr_layer::LayerSurface)`,
+  `Window(&sctk::shell::xdg::window::Window)` or `Popup(&sctk::shell::xdg::popup::Popup)`.
+  Anything those types offer can be called on them.
+- **The hooks** are `connected`, `surface_created` (before the first commit,
+  for state that must be set before it, like a `wp_fractional_scale` or an
+  alpha modifier), `surface_configured`, `before_commit` (each frame that is about
+  to be committed, only for surfaces that draw one), `surface_destroyed`,
+  and `screens_changed`. All of them run on the main thread, between frames, and
+  have empty default bodies.
+- **Who owns what.** Byard owns the roles it created (`xdg_toplevel`, the layer
+  surface, `xdg_popup`) and the commits that carry its buffers. An extension may
+  call requests on them and attach its own objects to a `wl_surface`, and asks for
+  a commit with `request_commit` if its change has no frame behind it. It must not
+  destroy Byard's objects or attach buffers to its surfaces; the docs say so, and
+  a debug build checks the second with an assertion in `before_commit`.
+- **Talking to Byld.** An extension that is also a controller (`App::provide`)
+  can be called from a view, and shares its state with the extension half through
+  an `Arc`. Values that arrive on their own, a compositor's event, reach a view
+  through a controller method that resolves on the next event, which the view
+  calls again from its `ok` arm. A proper stream from Rust into a signal is the
+  first thing Mantle's RFC needs, and it will propose one. This RFC does not
+  invent it on the side.
+- **On winit** there is no Wayland connection to share, and `App::wayland` is a
+  startup error that says the program has no `Panel` and so runs on winit. Raw
+  window handles for winit windows stay out of this RFC, as they are today.
+
+The cost is zero for a program that registers no extension: the module is types
+and re-exports, and the hooks are a `Vec` that is empty.
+
 ### 9. Headless
 
 `byard shot` and `byard test` gain a simulated screen set and draw every surface.
@@ -734,7 +841,18 @@ Svelte's keyed `each`. It is an addition to `for`, not a requirement: lists of
 plain elements keep working unkeyed, and only surfaces get the warning, since for them
 an unkeyed rebuild is visible.
 
-### Q15, whether `shot` should simulate the compositor
+### Q15, how much of Wayland is exposed
+
+All of it, below a floor the simple path never sees (§8b). Byld gets the attributes
+nearly every shell uses, with defaults that make a three-line bar work, and
+Rust gets the connection, every global, Byard's own surfaces and their SCTK
+types. Exposing SCTK's own types is a promise to follow its versions, and Byard
+already follows them through winit. The alternative, a curated Rust API of
+Byard's own, would always lag behind the protocols people actually want,
+and the point of the door is that it does not need Byard to have thought of the
+case first.
+
+### Q16, whether `shot` should simulate the compositor
 
 Yes, and this is what makes the RFC worth doing in Byard instead of another
 toolkit. A bar's layout depends on its anchors, margins and the exclusive zones
@@ -774,7 +892,10 @@ Each step is a branch and a PR, and each ends in something testable.
    `screens` from `wl_output`, the input region, transparency, `PanelsUnsupported`.
    Checked by hand on Hyprland: a bar on two screens, hotplug, the exclusive
    zone, and `WAYLAND_DEBUG=1` silent while still.
-4. **Popups.** The positioner, grabs, nesting, `popup_done`.
+4. **Popups and the Wayland API.** The positioner, grabs, nesting, `popup_done`.
+   Then `byard::wayland` (§8b): the re-exports, `WaylandExtension`, the hooks,
+   and an example extension in `examples/` that binds a protocol Byard does not
+   use and attaches it to a panel.
 5. **Headless screens.** The placement and positioner solvers, `--screens`,
    `--surface`, composited shots, cross-surface tests. A gallery page in
    `examples/` with a bar, a dock and a popup, shot in CI.

@@ -1175,7 +1175,7 @@ impl Interpreter {
                     // stays while the content scrolls under it. The header keeps its
                     // laid-out height; its descendants read `scroll_fraction` to
                     // interpolate their own size/opacity (RFC-0021 §4 mechanism).
-                    if let Some(frac_sig) = *bound_sig {
+                    if let Some(frac_sig) = (*bound_sig).filter(|_| self.collapse_header_on(attrs)) {
                         let h_max = self
                             .atlas
                             .children(atlas_node)

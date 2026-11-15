@@ -307,7 +307,11 @@ end for infinite lists, and can pull to refresh (`pull_refresh: true` with
 `refresh =>`). A header that shrinks as you scroll is `collapse_header: true`
 with `collapse_min`; the header is its first child, and keeps the `height` it is given
 whatever the content below measures; the children of that header read the engine's
-`scroll_fraction`, from 0 to 1. The `scroll_snap` and `collapse_header` examples
+`scroll_fraction`, from 0 to 1. The header is the first thing the `ScrollView` draws: a
+box, a `when` arm or a view you wrote, which may take `scroll_fraction` as an argument
+(`TopBar(fraction: scroll_fraction)`). `collapse_header` may be a value as well as `true`
+(`collapse_header: top != none`); when it is `false` nothing is pinned and `scroll_fraction`
+stays 0. The `scroll_snap` and `collapse_header` examples
 show each one working.
 
 ## Overlay

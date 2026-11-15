@@ -661,6 +661,10 @@ pub struct Interpreter {
     /// re-evaluated later must capture them now, exactly as it would inside the
     /// `for` body or route body the snapshot came from.
     restored_depth: u32,
+    /// Depth of collapsing-header lowering: while a header is being lowered,
+    /// `scroll_fraction` is a name in the environment that a `when` branch in
+    /// the header (lowered later, away from here) has to be given back.
+    collapse_depth: u32,
     /// Stack of caller-supplied child-block slots, one frame per active
     /// user-view instance (RFC-0007 D-A). The block is
     /// pre-lowered in the *caller* scope so a `content` element reference inside

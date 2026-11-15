@@ -281,6 +281,16 @@ impl Interpreter {
         })
     }
 
+    /// Whether a `ScrollView`'s `collapse_header` is on now: the literal
+    /// `true`, or a value that is `true` (`collapse_header: top != none`).
+    pub(super) fn collapse_header_on(&mut self, attrs: &[Attr]) -> bool {
+        match Self::enum_prop(attrs, "collapse_header") {
+            Some("true") => true,
+            Some("false") => false,
+            _ => self.eval_bool_prop(attrs, "collapse_header") == Some(true),
+        }
+    }
+
     pub(super) fn eval_bool_prop(&mut self, attrs: &[Attr], name: &str) -> Option<bool> {
         attrs.iter().find_map(|a| {
             if a.name.as_str() == name {

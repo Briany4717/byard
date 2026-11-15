@@ -154,6 +154,11 @@ fn a_variable_font_draws_the_same_after_another_at_a_heavy_weight() {
     let mut kept = encoder(&device, &queue);
     let _ = render(&mut kept, &device, &queue, &heavy);
     let after = render(&mut kept, &device, &queue, &icon);
+    eprintln!(
+        "second frame: full redraw {}, scissored {}",
+        kept.last_frame_was_full_redraw(),
+        kept.last_frame_scissored()
+    );
     let mut fresh = encoder(&device, &queue);
     let alone = render(&mut fresh, &device, &queue, &icon);
     assert!(alone.iter().any(|&b| b != 0), "the icon drew something");
@@ -185,6 +190,24 @@ fn a_variable_font_draws_the_same_after_another_at_a_heavy_weight() {
         }
         b
     };
+    if after != alone {
+        // Both pictures as text, two pixels a character, so a CI log shows
+        // what the other one drew.
+        for (name, px) in [("after", &after), ("alone", &alone)] {
+            eprintln!("{name}:");
+            for y in (0..SIZE as usize).step_by(2) {
+                let row: String = (0..SIZE as usize)
+                    .step_by(2)
+                    .map(|x| match px[(y * SIZE as usize + x) * 4] {
+                        0 => '.',
+                        1..=127 => '+',
+                        _ => '#',
+                    })
+                    .collect();
+                eprintln!("{row}");
+            }
+        }
+    }
     eprintln!(
         "ink after {} alone {}; box after {:?} alone {:?}",
         ink(&after),

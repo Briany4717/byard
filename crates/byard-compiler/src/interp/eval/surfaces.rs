@@ -754,8 +754,16 @@ impl Interpreter {
             })
             .collect();
         let force = self.surfaces.as_ref().is_some_and(|s| s.force);
-        for (index, node) in live_now {
-            let RenderNode::Box { children, .. } = node else {
+        for (_, node) in live_now {
+            let RenderNode::Box { children, uid, .. } = node else {
+                continue;
+            };
+            // Closing a popup moves the surfaces after it: find this one again.
+            let Some(index) = self
+                .surfaces
+                .as_ref()
+                .and_then(|s| s.live.iter().position(|l| l.uid == *uid))
+            else {
                 continue;
             };
             let is_panel = self

@@ -25,6 +25,9 @@ use byard_core::ScreenInfo;
 use byard_core::encoder::EncoderSubsystem;
 use byard_core::frame::{RenderFrame, Viewport};
 use byard_core::platform::{EventKind, InputEvent};
+use byard_core::{SurfaceId, SurfaceKind};
+
+use super::screens::{Canvas, Compositor};
 
 use crate::deps::resolve_project;
 use crate::manifest::Manifest;
@@ -126,6 +129,44 @@ impl Step {
 }
 
 impl Step {
+    /// Where the pointer is when this step starts, for a step that is a pointer's.
+    pub fn first_point(&self) -> Option<(f32, f32)> {
+        match self {
+            Self::Tap(x, y) | Self::Hold(x, y) | Self::Release(x, y) | Self::Hover(x, y) => {
+                Some((*x, *y))
+            }
+            Self::Drag(from, _) => Some(*from),
+            Self::Key(_) | Self::Type(_) | Self::Wait(_) => None,
+        }
+    }
+
+    /// This step with every point moved by `-origin`: the points of the screens
+    /// as the points of the surface whose top-left corner is `origin`.
+    #[must_use]
+    pub fn offset(&self, origin: (f32, f32)) -> Self {
+        let at = |(x, y): (f32, f32)| (x - origin.0, y - origin.1);
+        match self {
+            Self::Tap(x, y) => {
+                let (x, y) = at((*x, *y));
+                Self::Tap(x, y)
+            }
+            Self::Hold(x, y) => {
+                let (x, y) = at((*x, *y));
+                Self::Hold(x, y)
+            }
+            Self::Release(x, y) => {
+                let (x, y) = at((*x, *y));
+                Self::Release(x, y)
+            }
+            Self::Hover(x, y) => {
+                let (x, y) = at((*x, *y));
+                Self::Hover(x, y)
+            }
+            Self::Drag(a, b) => Self::Drag(at(*a), at(*b)),
+            other => other.clone(),
+        }
+    }
+
     /// This step's input, for surface `surface` (RFC-0068 §6): in a program
     /// with windows every event names the surface it is for.
     fn events_on(&self, now: u32, surface: byard_core::SurfaceId) -> Vec<InputEvent> {
@@ -194,6 +235,12 @@ pub struct ShotArgs<'a> {
     /// The window to draw, in a program with several (RFC-0068 §9): its `as`
     /// name, else its title. The steps are for it too.
     pub surface: Option<&'a str>,
+    /// The simulated screens (RFC-0068 §9); one `screen-1` of `size` when
+    /// absent.
+    pub screens: Option<&'a [ScreenInfo]>,
+    /// Which screen's instance of a surface made per screen `surface` names, or,
+    /// without `surface`, the one screen to draw.
+    pub screen: Option<&'a str>,
 }
 
 /// A project read and checked, ready to be run any number of times.
@@ -302,23 +349,29 @@ pub struct Scene {
     windows: Option<Windows>,
 }
 
-/// What a [`Scene`] keeps of a program with windows: the last frame each was
-/// drawn into, and where keys go.
+/// What a [`Scene`] keeps of a program with surfaces: the last frame each was
+/// drawn into, the simulated compositor that says where each is, and where
+/// keys go.
 struct Windows {
-    frames: Vec<(byard_core::SurfaceId, RenderFrame)>,
-    /// The window that has the keyboard: the one last tapped, else the first.
-    focus: Option<byard_core::SurfaceId>,
-    /// The panels the simulated compositor knows, in creation order.
-    panels: Vec<(byard_core::SurfaceId, byard_core::SurfaceSpec)>,
-    /// The simulated screen the panels are placed on.
-    screen: ScreenInfo,
+    frames: Vec<(SurfaceId, RenderFrame)>,
+    /// The surface that has the keyboard: the one last tapped, else the first.
+    focus: Option<SurfaceId>,
+    /// The surface a press is held on, which the pointer stays with until it is
+    /// let go.
+    capture: Option<SurfaceId>,
+    /// The screens, and where each surface is on them.
+    comp: Compositor,
+    /// Whether `--screens` said the screens, so a lone window is on one among
+    /// them and not the picture itself.
+    explicit_screens: bool,
 }
 
-/// One window of a [`Scene`], as the CLI needs it.
+/// One surface of a [`Scene`], as the CLI needs it.
 pub struct SurfaceView<'a> {
     /// Which surface it is.
-    pub id: byard_core::SurfaceId,
-    /// The name `--surface` finds it by: its `as` name, else its title.
+    pub id: SurfaceId,
+    /// The name `--surface` finds it by: its `as` name, else its namespace (a
+    /// panel) or its title (a window).
     pub name: &'a str,
     /// Its title.
     pub title: &'a str,
@@ -326,11 +379,15 @@ pub struct SurfaceView<'a> {
     pub size: (f32, f32),
     /// Its last frame.
     pub frame: &'a RenderFrame,
-    /// Whether it is a panel: drawn with no background, so its picture has
-    /// transparent pixels.
-    pub is_panel: bool,
-    /// Its screen's name, for a panel.
+    /// What kind of surface it is.
+    pub kind: SurfaceKind,
+    /// Whether it is drawn with no background of its own (a panel, a popup), so
+    /// its picture has transparent pixels.
+    pub transparent: bool,
+    /// The name of the screen it is on.
     pub screen: &'a str,
+    /// Where it is in the layout of the screens, logical pixels.
+    pub at: (f32, f32),
 }
 
 /// One line of the accessibility dump, with where its node is.
@@ -353,6 +410,9 @@ pub struct SceneOptions<'a> {
     pub wall_clock: Option<&'a str>,
     /// Build the accessibility tree on every frame.
     pub access: bool,
+    /// The simulated screens of a program of windows and panels; one
+    /// `screen-1` of `size` when absent (RFC-0068 §9).
+    pub screens: Option<Vec<ScreenInfo>>,
 }
 
 /// How long a frame waits for work on another thread before it draws
@@ -387,17 +447,20 @@ impl Scene {
         // from the view that is drawn: `--view` can pick one that has none.
         let multi =
             byard_compiler::surfaces::surface_shape_of(&project.program.views, view).is_multi();
+        #[allow(clippy::cast_precision_loss)]
+        let screens = options.screens.clone().unwrap_or_else(|| {
+            // The headless screen: one, of the shot's size (RFC-0068 §9).
+            vec![ScreenInfo::new(
+                "screen-1",
+                options.size.0 as f32,
+                options.size.1 as f32,
+            )]
+        });
         if multi {
             interp.enable_surfaces();
             interp.set_default_window_title(&project.manifest.name);
             interp.set_default_namespace(&project.manifest.name);
-            // The headless screen: one, of the shot's size (RFC-0068 §9).
-            #[allow(clippy::cast_precision_loss)]
-            interp.set_screens(vec![ScreenInfo::new(
-                "screen-1",
-                options.size.0 as f32,
-                options.size.1 as f32,
-            )]);
+            interp.set_screens(screens.clone());
         }
         let known: Vec<&str> = project
             .program
@@ -419,21 +482,44 @@ impl Scene {
             windows: multi.then(|| Windows {
                 frames: Vec::new(),
                 focus: None,
-                panels: Vec::new(),
-                screen: ScreenInfo::new("screen-1", size.0, size.1),
+                capture: None,
+                explicit_screens: options.screens.is_some(),
+                comp: Compositor::new(screens),
             }),
         };
         scene.frame_with(&[]);
         Ok(scene)
     }
 
-    /// Whether the program has windows, and is drawn by surface.
+    /// Whether the program has surfaces (windows, panels), and is drawn by
+    /// surface.
     pub fn has_windows(&self) -> bool {
         self.windows.is_some()
     }
 
-    /// The windows that are open, in the order they opened, each with its last
-    /// frame. Empty for a program with none.
+    /// The screens a program of surfaces is on.
+    pub fn screens(&self) -> &[ScreenInfo] {
+        self.windows.as_ref().map_or(&[], |w| w.comp.screens())
+    }
+
+    /// Whether the program has only one surface and it is a window, on the one
+    /// screen nobody asked for: a shot of it is the window itself, as it was
+    /// before there were screens to put it on (RFC-0068 §9).
+    pub fn is_lone_window(&self) -> bool {
+        let Some(w) = &self.windows else {
+            return false;
+        };
+        let ids = self.interp.surface_ids();
+        !w.explicit_screens
+            && ids.len() == 1
+            && self
+                .interp
+                .surface_spec(ids[0])
+                .is_some_and(|s| s.kind == SurfaceKind::Window)
+    }
+
+    /// The surfaces that are open, in the order they opened, each with its last
+    /// frame and where it is. Empty for a program with none.
     pub fn surfaces(&self) -> Vec<SurfaceView<'_>> {
         let Some(w) = &self.windows else {
             return Vec::new();
@@ -444,37 +530,62 @@ impl Scene {
             .filter_map(|id| {
                 let spec = self.interp.surface_spec(id)?;
                 let frame = &w.frames.iter().find(|(i, _)| *i == id)?.1;
+                let screens = w.comp.screens();
                 Some(SurfaceView {
                     id,
                     name: &spec.name,
                     title: &spec.title,
                     size: self.interp.surface_size(id)?,
                     frame,
-                    is_panel: spec.layer.is_some(),
-                    screen: &w.screen.name,
+                    kind: spec.kind,
+                    transparent: spec.transparent,
+                    screen: w.comp.screen_name(id).unwrap_or(&screens[0].name),
+                    at: w.comp.global(id).unwrap_or((screens[0].x, screens[0].y)),
                 })
             })
             .collect()
     }
 
-    /// The window `name` names (an `as` name, else a title), or an error that
-    /// lists them.
-    pub fn surface_named(&self, name: &str) -> Result<byard_core::SurfaceId, String> {
+    /// The surface `name` names (an `as` name, else a namespace or a title), on
+    /// `screen` when a surface of that name is made for each screen; or an error
+    /// that lists them.
+    pub fn surface_named_on(&self, name: &str, screen: Option<&str>) -> Result<SurfaceId, String> {
         let all = self.surfaces();
-        if let Some(found) = all.iter().find(|s| s.name == name) {
-            return Ok(found.id);
+        let found: Vec<&SurfaceView<'_>> = all
+            .iter()
+            .filter(|s| s.name == name && screen.is_none_or(|on| s.screen == on))
+            .collect();
+        match found.as_slice() {
+            [one] => Ok(one.id),
+            [] if screen.is_some() && all.iter().any(|s| s.name == name) => Err(format!(
+                "no surface named `{name}` on screen `{}`; it is on {}",
+                screen.unwrap_or_default(),
+                all.iter()
+                    .filter(|s| s.name == name)
+                    .map(|s| format!("`{}`", s.screen))
+                    .collect::<Vec<_>>()
+                    .join(", ")
+            )),
+            [] => Err(format!(
+                "no surface named `{name}`; the surfaces are {}",
+                names_of(&all)
+            )),
+            many => Err(format!(
+                "`{name}` is made once per screen, on {}; say which with `--screen NAME`",
+                many.iter()
+                    .map(|s| format!("`{}`", s.screen))
+                    .collect::<Vec<_>>()
+                    .join(", ")
+            )),
         }
-        Err(format!(
-            "no window named `{name}`; the windows are {}",
-            names_of(&all)
-        ))
     }
 
-    /// The accessibility dump of every window: each starts with a
-    /// `Window "title"` line and has its tree indented below it (RFC-0068 §9).
-    /// For a program with one implicit window, that window's tree as it is.
+    /// The accessibility dump of every surface: each starts with a
+    /// `Window "title"`, `Panel "namespace" @ DP-1` or `Popup "name" @ DP-1`
+    /// line and has its tree indented below it (RFC-0068 §9). For a program with
+    /// one implicit window, that window's tree as it is.
     pub fn access_lines(&self) -> Vec<AccessLine> {
-        let main = byard_core::SurfaceId::MAIN;
+        let main = SurfaceId::MAIN;
         let tree_lines = |surface, tree: &byard_core::access::AccessTree, indent: &str| {
             let text = tree.to_text();
             text.lines()
@@ -496,10 +607,10 @@ impl Scene {
         let mut out = Vec::new();
         for s in self.surfaces() {
             out.push(AccessLine {
-                text: if s.is_panel {
-                    format!("Panel {:?} @ {}", s.title, s.screen)
-                } else {
-                    format!("Window {:?}", s.title)
+                text: match s.kind {
+                    SurfaceKind::Panel => format!("Panel {:?} @ {}", s.title, s.screen),
+                    SurfaceKind::Popup => format!("Popup {:?} @ {}", s.title, s.screen),
+                    _ => format!("Window {:?}", s.title),
                 },
                 surface: s.id,
                 bounds: None,
@@ -521,13 +632,17 @@ impl Scene {
         out
     }
 
-    /// Where keys go: the window last tapped, else the first.
-    fn key_surface(&self) -> byard_core::SurfaceId {
+    /// Where keys go: the popup that has the grab, else the surface last
+    /// tapped, else the first.
+    fn key_surface(&self) -> SurfaceId {
+        if let Some(grab) = self.interp.grab_surface() {
+            return grab;
+        }
         let focus = self.windows.as_ref().and_then(|w| w.focus);
         focus
             .filter(|id| self.interp.surface_ids().contains(id))
             .or_else(|| self.interp.surface_ids().first().copied())
-            .unwrap_or(byard_core::SurfaceId::MAIN)
+            .unwrap_or(SurfaceId::MAIN)
     }
 
     /// One frame: the events, a tick, a full render. 16 ms pass.
@@ -557,18 +672,106 @@ impl Scene {
         self.apply_on(None, what);
     }
 
-    /// [`apply`](Self::apply) for a program with windows, with the window the
-    /// step is for: a tap or a drag goes to it, and the keyboard follows it.
-    /// `None` is the window that has the keyboard.
-    pub fn apply_on(&mut self, surface: Option<byard_core::SurfaceId>, what: &Step) {
+    /// [`apply`](Self::apply) for a program with surfaces, with the surface the
+    /// step is for. `Some` is that surface, and the point is in its own
+    /// coordinates. `None` is how a person would do it: a point is a point of the
+    /// screens, and goes to the topmost surface that takes the pointer there, or
+    /// is the compositor's `popup_done` when it is outside the popup that has the
+    /// grab; a key goes to the surface that has the keyboard.
+    pub fn apply_on(&mut self, surface: Option<SurfaceId>, what: &Step) {
         if let Step::Wait(ms) = what {
             self.run_to(self.now + ms);
             return;
         }
+        if self.windows.is_none() {
+            self.send(SurfaceId::MAIN, what);
+            return;
+        }
+        // A program that is one window, on the screen nobody described, is the
+        // window itself: the points are its own.
+        let surface = surface.or_else(|| {
+            self.is_lone_window()
+                .then(|| self.interp.surface_ids().first().copied())
+                .flatten()
+        });
+        match surface {
+            Some(surface) => self.send(surface, what),
+            None => self.apply_routed(what),
+        }
+    }
+
+    /// A step for the screens as a whole.
+    fn apply_routed(&mut self, what: &Step) {
+        let Some(first) = what.first_point() else {
+            // A key or text: the surface that has the keyboard.
+            let surface = self.key_surface();
+            self.send(surface, what);
+            return;
+        };
+        let press = Self::moves_focus(what);
+        // A held press stays with the surface it began on until it is let go.
+        let held = self.windows.as_ref().and_then(|w| w.capture);
+        let w = self.windows.as_ref();
+        let target = match (what, held.and_then(|id| Some((id, w?.comp.global(id)?)))) {
+            (Step::Release(..), Some((id, o))) => Some((id, (first.0 - o.0, first.1 - o.1))),
+            _ => w.and_then(|w| w.comp.hit(first.0, first.1)),
+        };
+        // The popup that has the grab: a press outside it and the popups it hangs
+        // from is the compositor taking the popup away (`popup_done`).
+        if press {
+            if let Some(grab) = self.interp.grab_surface() {
+                let chain = self
+                    .windows
+                    .as_ref()
+                    .map(|w| w.comp.popup_chain(grab))
+                    .unwrap_or_default();
+                if target.is_none_or(|(id, _)| !chain.contains(&id)) {
+                    self.dismiss_popups(&chain);
+                    return;
+                }
+            }
+        }
+        let Some((id, local)) = target else {
+            // Nothing takes the pointer there: the frame passes.
+            self.frame_with(&[]);
+            return;
+        };
+        let origin = (first.0 - local.0, first.1 - local.1);
+        let moved = what.offset(origin);
+        if let Some(w) = self.windows.as_mut() {
+            match what {
+                Step::Hold(..) | Step::Drag(..) => w.capture = Some(id),
+                Step::Release(..) | Step::Tap(..) => w.capture = None,
+                _ => {}
+            }
+        }
+        self.send(id, &moved);
+    }
+
+    /// The compositor dismisses the popups of a grab, the innermost first.
+    fn dismiss_popups(&mut self, chain: &[SurfaceId]) {
+        let events: Vec<InputEvent> = chain
+            .iter()
+            .map(|&id| InputEvent {
+                surface: id,
+                kind: EventKind::PopupDone,
+                pos: (0.0, 0.0),
+                delta: (0.0, 0.0),
+                payload: None,
+                time_ms: u64::from(self.now),
+                mods: byard_core::KeyModifiers::default(),
+            })
+            .collect();
+        self.frame_with(&events);
+    }
+
+    /// One step for one surface, in its own coordinates: the input it is, the
+    /// frames a drag takes.
+    fn send(&mut self, surface: SurfaceId, what: &Step) {
         let surface = if self.windows.is_some() {
-            surface.unwrap_or_else(|| self.key_surface())
+            surface
         } else {
-            byard_core::SurfaceId::MAIN
+            SurfaceId::MAIN
         };
         let mut events = Vec::new();
         if self.windows.is_some() && Self::moves_focus(what) {
@@ -591,18 +794,26 @@ impl Scene {
         }
     }
 
-    /// Whether a step is a pointer press, which gives its window the keyboard.
+    /// Whether a step is a pointer press, which gives its surface the keyboard.
     fn moves_focus(what: &Step) -> bool {
         matches!(what, Step::Tap(..) | Step::Hold(..) | Step::Drag(..))
     }
 
-    /// The events that give `surface` the keyboard: the window that had it
-    /// loses it, as the platform says when another window is clicked.
-    fn focus_events(&mut self, surface: byard_core::SurfaceId) -> Vec<InputEvent> {
+    /// The events that give `surface` the keyboard: the one that had it loses
+    /// it, as the platform says when another is clicked. A popup that is not
+    /// the grab does not take it, and one that is has it already.
+    fn focus_events(&mut self, surface: SurfaceId) -> Vec<InputEvent> {
         let previous = self.key_surface();
+        let is_popup = self
+            .interp
+            .surface_spec(surface)
+            .is_some_and(|s| s.kind == SurfaceKind::Popup);
         let Some(w) = self.windows.as_mut() else {
             return Vec::new();
         };
+        if is_popup {
+            return Vec::new();
+        }
         w.focus = Some(surface);
         if previous == surface {
             return Vec::new();
@@ -619,14 +830,15 @@ impl Scene {
         vec![focus(previous, false), focus(surface, true)]
     }
 
-    /// A tick of a program with windows: each window with something new is
-    /// drawn into a frame of its own, and the rest keep the one they have.
+    /// A tick of a program with surfaces: each with something new is drawn into
+    /// a frame of its own, and the rest keep the one they have.
     fn surface_frames(&mut self) {
         let access = self.access;
         // A panel is drawn once the simulated compositor has given it a size,
-        // which is a round after the program asked for one: a few rounds are
-        // run until nothing is asked of the platform any more.
-        for _ in 0..6 {
+        // and a popup once its parent has been, which is a round after the
+        // program asked for one: a few rounds are run until nothing is asked of
+        // the platform any more.
+        for _ in 0..8 {
             let mut out = Vec::new();
             self.interp.render_surfaces(
                 &self.tree,
@@ -649,62 +861,30 @@ impl Scene {
                     }
                 }
                 w.frames.retain(|(id, _)| open.contains(id));
+                if w.capture.is_some_and(|id| !open.contains(&id)) {
+                    w.capture = None;
+                }
             }
-            if !self.compose_panels() {
+            if !self.compose() {
                 break;
             }
         }
     }
 
-    /// What the compositor does with the panels the program asked for: places
-    /// them on the screen by layer shell's rules and tells the program the size
-    /// each got. Returns whether anything changed, so the program is drawn again.
-    fn compose_panels(&mut self) -> bool {
-        use byard_core::surface::Size;
+    /// What the compositor does with the surfaces the program asked for: places
+    /// them on the screens by layer shell's rules and the positioner's, and tells
+    /// the program the size each panel got. Returns whether anything changed, so
+    /// the program is drawn again.
+    fn compose(&mut self) -> bool {
         let Some(w) = self.windows.as_mut() else {
             return false;
         };
         let mut asked = false;
         for change in self.interp.take_surface_changes() {
             asked = true;
-            match change {
-                byard_core::SurfaceChange::Create { id, spec } if spec.layer.is_some() => {
-                    w.panels.push((id, spec));
-                }
-                byard_core::SurfaceChange::Configure { id, spec } => {
-                    if let Some(p) = w.panels.iter_mut().find(|(i, _)| *i == id) {
-                        p.1 = spec;
-                    }
-                }
-                byard_core::SurfaceChange::Destroy { id } => w.panels.retain(|(i, _)| *i != id),
-                _ => {}
-            }
+            w.comp.apply(change);
         }
-        #[allow(clippy::cast_possible_truncation)]
-        let layers: Vec<_> = w
-            .panels
-            .iter()
-            .filter_map(|(_, spec)| {
-                let size = Size::new(spec.size.0.round() as i32, spec.size.1.round() as i32);
-                Some(spec.layer.as_ref()?.layer_surface(size))
-            })
-            .collect();
-        #[allow(clippy::cast_possible_truncation)]
-        let screen = Size::new(w.screen.width as i32, w.screen.height as i32);
-        // A panel the protocol would refuse (a size of 0 with nothing to stretch)
-        // is left as it is: the compositor would have closed it.
-        let Ok(placed) = byard_core::surface::placement::arrange(screen, &layers) else {
-            return asked;
-        };
-        let mut moved = false;
-        for ((id, _), p) in w.panels.iter().zip(&placed.surfaces) {
-            #[allow(clippy::cast_precision_loss)]
-            let size = (p.configure.width as f32, p.configure.height as f32);
-            if self.interp.surface_size(*id) != Some(size) {
-                self.interp.set_surface_size(*id, size);
-                moved = true;
-            }
-        }
+        let moved = w.comp.arrange(&mut self.interp);
         asked || moved
     }
 
@@ -753,6 +933,61 @@ impl Scene {
         }
     }
 
+    /// The first surface that is open: what a lone window is.
+    pub fn interp_first_surface(&self) -> Option<SurfaceId> {
+        self.interp.surface_ids().first().copied()
+    }
+
+    /// The picture of the screens, or of the one named: the area they cover over
+    /// a checkerboard, every surface composited over it in layer order. RGBA8
+    /// rows, and the picture's size in device pixels (RFC-0068 §9).
+    #[allow(clippy::cast_precision_loss)]
+    pub fn composite(
+        &self,
+        gpu: &Gpu,
+        scale: f32,
+        only: Option<&str>,
+    ) -> Result<(Vec<u8>, u32, u32), String> {
+        let w = self
+            .windows
+            .as_ref()
+            .ok_or("this program draws no surfaces to put on screens")?;
+        let comp = &w.comp;
+        let only_index = only.and_then(|n| comp.screens().iter().position(|s| s.name == n));
+        let shown: Vec<&ScreenInfo> = comp
+            .screens()
+            .iter()
+            .enumerate()
+            .filter(|(i, _)| only_index.is_none_or(|o| o == *i))
+            .map(|(_, s)| s)
+            .collect();
+        let mut canvas = Canvas::new(comp.bounds(only_index), &shown, scale);
+        for id in comp.back_to_front() {
+            let Some(view) = self.surfaces().into_iter().find(|s| s.id == id) else {
+                continue;
+            };
+            let Some(placed) = comp.placed(id) else {
+                continue;
+            };
+            if only_index.is_some_and(|o| o != placed.screen) {
+                continue;
+            }
+            #[allow(clippy::cast_sign_loss)]
+            let size = (
+                placed.rect.width.max(1) as u32,
+                placed.rect.height.max(1) as u32,
+            );
+            let pixels = gpu.paint(view.frame, size, scale, view.transparent)?;
+            #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
+            let dims = (
+                (size.0 as f32 * scale).round() as u32,
+                (size.1 as f32 * scale).round() as u32,
+            );
+            canvas.over(view.at.0, view.at.1, dims.0, dims.1, &pixels);
+        }
+        Ok((canvas.pixels, canvas.width, canvas.height))
+    }
+
     /// The last frame. For a program with windows, the frame of the first
     /// (see [`surfaces`](Self::surfaces) for each).
     pub fn frame(&self) -> &RenderFrame {
@@ -780,6 +1015,7 @@ fn names_of(surfaces: &[SurfaceView<'_>]) -> String {
         .join(", ")
 }
 
+#[allow(clippy::too_many_lines)]
 pub fn run(args: &ShotArgs<'_>) -> Result<(), String> {
     let started = std::time::Instant::now();
     let project = Project::load(args.path, "render")?;
@@ -792,20 +1028,44 @@ pub fn run(args: &ShotArgs<'_>) -> Result<(), String> {
             dark: args.dark,
             wall_clock: args.wall_clock,
             access: args.a11y.is_some(),
+            screens: args.screens.map(<[ScreenInfo]>::to_vec),
         },
     )
     .map_err(|e| format!("--{e}"))?;
-    if args.surface.is_some() && !scene.has_windows() {
-        return Err(
-            "`--surface` picks one of a program's windows, and this program writes no \
-                    `Window`: it is one window, drawn whole"
-                .to_string(),
-        );
+    if !scene.has_windows() {
+        for (given, flag) in [
+            (args.surface.is_some(), "--surface"),
+            (args.screens.is_some(), "--screens"),
+            (args.screen.is_some(), "--screen"),
+        ] {
+            if given {
+                return Err(format!(
+                    "`{flag}` is for a program of windows and panels, and this program writes no \
+                     `Window` or `Panel`: it is one window, drawn whole"
+                ));
+            }
+        }
+    }
+    if let Some(name) = args.screen {
+        if scene.has_windows() && !scene.screens().iter().any(|s| s.name == name) {
+            return Err(format!(
+                "no screen named `{name}`; the screens are {}",
+                scene
+                    .screens()
+                    .iter()
+                    .map(|s| format!("`{}`", s.name))
+                    .collect::<Vec<_>>()
+                    .join(", ")
+            ));
+        }
     }
     for what in args.steps {
-        // The steps are for the window `--surface` names, when it is open; until
-        // then, for the one that has the keyboard, which is the first.
-        let target = args.surface.and_then(|name| scene.surface_named(name).ok());
+        // The steps are for the surface `--surface` names, when it is open, in its
+        // own coordinates; without it they are for the screens, as a person's
+        // would be.
+        let target = args
+            .surface
+            .and_then(|name| scene.surface_named_on(name, args.screen).ok());
         scene.apply_on(target, what);
     }
     scene.settle(args.at_ms);
@@ -833,42 +1093,50 @@ pub fn run(args: &ShotArgs<'_>) -> Result<(), String> {
     let Some(out) = args.out else {
         return Ok(());
     };
-    // What is drawn, and at what size: the one window as it always was, or one
-    // window of several at the size it opens at (RFC-0068 §9).
-    let (frame, size, transparent): (&RenderFrame, (u32, u32), bool) = if scene.has_windows() {
-        let all = scene.surfaces();
-        let picked = match (args.surface, all.as_slice()) {
-            (Some(name), _) => all.iter().find(|s| s.name == name).ok_or_else(|| {
-                format!(
-                    "no window named `{name}`; the windows are {}",
-                    names_of(&all)
-                )
-            })?,
-            (None, [only]) => only,
-            (None, _) => {
-                return Err(format!(
-                    "this program has {} windows ({}); say which one to draw with \
-                     `--surface NAME` (its `as` name, else its title). Drawing every window \
-                     together on a screen is RFC-0068's headless screens, step 5",
-                    all.len(),
-                    names_of(&all)
-                ));
-            }
+    // What is drawn: the one window as it always was, one surface alone, or the
+    // screens with every surface on them (RFC-0068 §9).
+    let (pixels, pw, ph) = if scene.has_windows() {
+        let one = match (args.surface, scene.is_lone_window()) {
+            (Some(name), _) => Some(scene.surface_named_on(name, args.screen)?),
+            (None, true) => scene.interp_first_surface(),
+            (None, false) => None,
         };
-        #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
-        let size = (picked.size.0.round() as u32, picked.size.1.round() as u32);
-        (picked.frame, size, picked.is_panel)
+        match one {
+            Some(id) => {
+                let all = scene.surfaces();
+                let picked = all.iter().find(|s| s.id == id).ok_or_else(|| {
+                    format!("no surface drawn yet; the surfaces are {}", names_of(&all))
+                })?;
+                #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
+                let size = (picked.size.0.round() as u32, picked.size.1.round() as u32);
+                let pixels =
+                    Gpu::open()?.paint(picked.frame, size, args.scale, picked.transparent)?;
+                #[allow(
+                    clippy::cast_possible_truncation,
+                    clippy::cast_sign_loss,
+                    clippy::cast_precision_loss
+                )]
+                let dims = (
+                    (size.0 as f32 * args.scale).round() as u32,
+                    (size.1 as f32 * args.scale).round() as u32,
+                );
+                (pixels, dims.0, dims.1)
+            }
+            None => scene.composite(&Gpu::open()?, args.scale, args.screen)?,
+        }
     } else {
-        (scene.frame(), args.size, false)
+        let pixels = Gpu::open()?.paint(scene.frame(), args.size, args.scale, false)?;
+        #[allow(
+            clippy::cast_possible_truncation,
+            clippy::cast_sign_loss,
+            clippy::cast_precision_loss
+        )]
+        let dims = (
+            (args.size.0 as f32 * args.scale).round() as u32,
+            (args.size.1 as f32 * args.scale).round() as u32,
+        );
+        (pixels, dims.0, dims.1)
     };
-    #[allow(clippy::cast_precision_loss)]
-    let (w, h) = (size.0 as f32, size.1 as f32);
-    let pixels = Gpu::open()?.paint(frame, size, args.scale, transparent)?;
-    #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
-    let (pw, ph) = (
-        (w * args.scale).round() as u32,
-        (h * args.scale).round() as u32,
-    );
     image::save_buffer(out, &pixels, pw, ph, image::ColorType::Rgba8)
         .map_err(|e| format!("{}: {e}", out.display()))?;
     style::ok(

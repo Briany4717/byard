@@ -164,19 +164,30 @@ when something it shows changed, like any surface.
 
 ## Drawing and testing without a compositor
 
-`byard shot` has no compositor, so it places the panels itself, by layer shell's rules
-(`byard_core::surface::placement`), on one simulated screen of the shot's size. Name the
-panel to draw: its `as` name, else its `namespace`.
+`byard shot` has no compositor, so it is one. `--screens` describes the screens, and the
+picture is all of them side by side with every surface on them, over a checkerboard where
+the panels are transparent. Panels are placed by layer shell's rules (anchors, margins and
+exclusive zones, in the order the compositor applies them), windows are centred in the area
+the panels left, and popups are positioned and flipped by the same rules a compositor uses
+(`byard_core::surface::placement` and `positioner`).
 
 ```sh
-byard shot crates/byard-cli/examples/simple_bar --surface bar -o bar.png
-byard shot crates/byard-cli/examples/simple_bar --surface clock --at 12000 -o clock.png
+byard shot crates/byard-cli/examples/shell_demo --screens "DP-1:1600x900, HDMI-A-1:1280x720" --scale 1 -o screens.png
+byard shot crates/byard-cli/examples/shell_demo --screens "DP-1:1600x900, HDMI-A-1:1280x720" --surface bar --screen DP-1 -o bar.png
+byard shot crates/byard-cli/examples/shell_demo --screens "DP-1:1600x900, HDMI-A-1:1280x720" --scale 1 --tap 40,30 -o menu.png
 ```
 
-The picture is the panel alone, at the size it was given, and its pixels are transparent
-where nothing was drawn. `byard test` sees a panel like a window: its dump has a
-`Panel "namespace" @ screen-1` line with the tree indented below, and a step that names
-an element finds it on whichever surface it is on.
+`--surface` draws one surface alone, by its `as` name, else its `namespace`, at the size it
+was given, with transparent pixels where nothing was drawn; `--screen` says which screen's
+instance of a bar made once per screen. Without `--surface`, `--tap` and the others take
+points of the screens and go to the topmost surface whose input region holds the point, so
+a tap on a panel's transparent part reaches the window below it; a tap outside the popup
+that has the grab closes it, as the compositor would. See [the CLI reference](cli-reference.md#screens).
+
+`byard test` sees every surface: its dump has a `Panel "namespace" @ DP-1` line (a `Popup
+"name" @ DP-1` line for a popup) with the tree indented below, a step that names an element
+finds it on whichever surface it is on, and `screens = "DP-1:1600x900, HDMI-A-1:1280x720"`
+at the top of a scenario file, or in one test, says the screens.
 
 Running panels on the desktop needs the Wayland shell backend, which comes after the
 language and the interpreter (RFC-0068 step 3b). `byard dev` and a built app say so and

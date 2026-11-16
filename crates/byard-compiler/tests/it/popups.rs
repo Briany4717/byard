@@ -739,3 +739,27 @@ View Main() {
     assert_eq!(gone, [id, bar], "the popup is destroyed before its parent");
     assert_eq!(s.interp.surface_ids().len(), 0);
 }
+
+#[test]
+fn closing_a_popup_does_not_disturb_the_surfaces_made_after_it() {
+    let src = r#"
+View Main() {
+    var open = true
+    var n = 0
+    Panel #[edge: top, height: 40, namespace: "first"] {
+        Box #[width: 60, height: 20] as label {}
+        when open {
+            Overlay #[modal: false] {
+                Box #[anchor_to: label, width: 80, height: 30, bg: 0x333333] {}
+            }
+        }
+    }
+    Panel #[edge: bottom, height: 40, namespace: "second"] { Text("n {n}") }
+}
+"#;
+    let mut s = Shell::new(src);
+    s.set("open", Value::Bool(false));
+    s.set("n", Value::Int(3));
+    assert_eq!(s.texts(s.id_of("second")), ["n 3"]);
+    s.assert_no_popups();
+}

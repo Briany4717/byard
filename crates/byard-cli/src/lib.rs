@@ -33,6 +33,7 @@ struct Cli {
     command: Command,
 }
 
+#[allow(clippy::large_enum_variant)]
 #[derive(Subcommand)]
 enum Command {
     /// Scaffold a new Byard project.
@@ -209,6 +210,19 @@ enum Command {
         /// is required for a picture.
         #[arg(long, value_name = "NAME")]
         surface: Option<String>,
+        /// The screens a program of windows and panels is drawn on,
+        /// `NAME:WxH[@SCALE][+X+Y]`, separated by commas: `WxH` is the mode in
+        /// device pixels, so the logical size is that divided by the scale,
+        /// and a screen with no `+X+Y` sits right of the one before. The
+        /// default is one `screen-1` of `--size`. Without `--surface` the
+        /// picture is the screens side by side with every surface on them, over
+        /// a checkerboard; taps and the rest are points of the screens.
+        #[arg(long, value_name = "SCREENS", value_parser = parse_screens_arg)]
+        screens: Option<ScreensArg>,
+        /// The screen to draw alone, or, with `--surface`, whose instance of a
+        /// surface made once per screen.
+        #[arg(long, value_name = "NAME")]
+        screen: Option<String>,
     },
     /// Run the project's scenario files, `tests/*.toml`, without a window or
     /// a GPU (RFC-0058).
@@ -237,6 +251,16 @@ enum Command {
         /// Path to a `.byd` file or project dir. Defaults to `byard.toml`.
         file: Option<PathBuf>,
     },
+}
+
+/// The list `--screens` takes, as one value (clap would read a `Vec` as
+/// several).
+#[derive(Clone, Debug)]
+struct ScreensArg(Vec<byard_core::ScreenInfo>);
+
+/// `NAME:WxH[@SCALE][+X+Y], …`, for `byard shot --screens`.
+fn parse_screens_arg(s: &str) -> Result<ScreensArg, String> {
+    commands::screens::parse_screens(s).map(ScreensArg)
 }
 
 /// `WIDTHxHEIGHT`, for `byard shot --size`.
@@ -433,8 +457,12 @@ pub fn main() {
             type_text,
             wait,
             surface,
+            screens,
+            screen,
         } => commands::shot::run(&commands::shot::ShotArgs {
             surface: surface.as_deref(),
+            screens: screens.as_ref().map(|s| s.0.as_slice()),
+            screen: screen.as_deref(),
             path: path.as_deref(),
             view: view.as_deref(),
             out: match (out.as_deref(), a11y.is_some()) {

@@ -1,0 +1,26 @@
+# A shell on two screens (RFC-0068 §9): every surface is dumped under its own
+# line, a step that names an element finds it on whichever surface it is on, and
+# a menu that hangs from the bar is a surface of its own.
+screens = "DP-1:1600x900, HDMI-A-1:1280x720"
+
+[[test]]
+name = "each screen has a bar and a dock"
+expect = ['Panel "bar" @ DP-1', 'Panel "bar" @ HDMI-A-1', 'Panel "dock" @ DP-1', 'Panel "dock" @ HDMI-A-1', 'Window "Settings"']
+not = ['Popup']
+
+[[test]]
+name = "the Apps button opens the menu as a popup of that screen"
+steps = [{ tap = 'Button "Apps on HDMI-A-1"' }]
+expect = ['Popup "menu" @ HDMI-A-1', 'MenuItem "Settings Open the window"']
+not = ['Popup "menu" @ DP-1']
+
+[[test]]
+name = "a tap outside the menu closes it"
+steps = [{ tap = 'Button "Apps on DP-1"' }, { expect = 'Popup "menu" @ DP-1' }, { tap = [800, 600] }]
+not = ['Popup']
+
+[[test]]
+name = "a menu item acts and closes the menu"
+steps = [{ tap = 'Button "Done"' }, { tap = 'Button "Apps on DP-1"' }, { tap = 'MenuItem "Settings Open the window"' }]
+expect = ['Window "Settings"']
+not = ['Popup']

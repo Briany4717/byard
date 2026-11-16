@@ -1435,6 +1435,7 @@ mod tests {
             native_views: Vec::new(),
             icon: None,
             bundle: crate::manifest::BundleConfig::default(),
+            edition: byard_compiler::edition::Edition::BASELINE,
         };
         let (program, provider) = resolve_project(&manifest).unwrap();
         assert!(program.errors.is_empty(), "{:?}", program.errors);

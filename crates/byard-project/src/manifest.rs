@@ -6,6 +6,7 @@
 //! warn-on-unknown policy for this table, silently ignoring a dependency is
 //! a reproducibility hazard).
 
+use byard_compiler::edition::Edition;
 use byard_compiler::interp::theme::{DeclaredFont, FontWeight, Theme, TypoToken};
 use std::path::{Path, PathBuf};
 
@@ -183,6 +184,10 @@ pub struct Manifest {
     /// The `[bundle]` table: what `byard bundle` writes into the package an
     /// app ships as.
     pub bundle: BundleConfig,
+    /// `edition` in `[project]` or `[package]`. A manifest that names none is
+    /// the baseline edition, the language as it was before editions, and
+    /// stays that until `byard fix` moves it.
+    pub edition: Edition,
 }
 
 /// The `[bundle]` table: how the app is named to the operating system once
@@ -325,6 +330,7 @@ impl Manifest {
                 native_views: Vec::new(),
                 icon: None,
                 bundle: BundleConfig::default(),
+                edition: Edition::BASELINE,
             });
         }
 
@@ -356,6 +362,7 @@ impl Manifest {
             native_views: Vec::new(),
             icon: None,
             bundle: BundleConfig::default(),
+            edition: Edition::BASELINE,
         }
     }
 
@@ -444,6 +451,7 @@ impl Manifest {
         let native_views = parse_native_views(&table).map_err(in_manifest)?;
         let icon = parse_icon(project, &project_root).map_err(in_manifest)?;
         let bundle = parse_bundle(&table).map_err(in_manifest)?;
+        let edition = parse_edition(&table).map_err(in_manifest)?;
 
         Ok(Self {
             project_root,
@@ -460,8 +468,76 @@ impl Manifest {
             native_views,
             icon,
             bundle,
+            edition,
         })
     }
+}
+
+/// `edition = "2027"` in `[project]` (or `[package]`): the edition the sources
+/// are written in. Absent, the baseline.
+fn parse_edition(table: &toml::Table) -> Result<Edition, String> {
+    let written = ["project", "package"]
+        .into_iter()
+        .find_map(|section| table.get(section).and_then(|t| t.get("edition")));
+    match written {
+        None => Ok(Edition::BASELINE),
+        Some(toml::Value::String(text)) => {
+            Edition::parse(text).map_err(|e| format!("byard.toml: [project]: {e}"))
+        }
+        Some(_) => Err(
+            "byard.toml: [project]: `edition` is text, the year, as in `edition = \"2026\"`"
+                .to_string(),
+        ),
+    }
+}
+
+/// `manifest` (the text of a `byard.toml`) with the edition it names set to
+/// `edition`, and nothing else in it changed: its comments, its order and its
+/// spacing stay. The key goes under `[project]`, or under `[package]` for a
+/// library, replacing the one that is there or after the table's header when
+/// there is none.
+///
+/// # Errors
+///
+/// A manifest with neither table has nowhere to put it.
+pub fn with_edition(manifest: &str, edition: Edition) -> Result<String, String> {
+    let line_of = |text: &str| format!("edition = \"{edition}\"{text}");
+    let mut lines: Vec<String> = manifest.lines().map(str::to_string).collect();
+    let header = |line: &str, name: &str| line.trim() == format!("[{name}]");
+    let Some(at) = lines
+        .iter()
+        .position(|l| header(l, "project"))
+        .or_else(|| lines.iter().position(|l| header(l, "package")))
+    else {
+        return Err(
+            "byard.toml has no `[project]` or `[package]` table to name an edition in".to_string(),
+        );
+    };
+    let end = lines[at + 1..]
+        .iter()
+        .position(|l| l.trim_start().starts_with('['))
+        .map_or(lines.len(), |i| at + 1 + i);
+    let existing = (at + 1..end).find(|&i| {
+        let line = lines[i].trim_start();
+        line.strip_prefix("edition")
+            .is_some_and(|rest| rest.trim_start().starts_with('='))
+    });
+    match existing {
+        Some(i) => {
+            // Keep a comment that follows the value.
+            let comment = lines[i]
+                .find('#')
+                .map(|c| format!("  {}", &lines[i][c..]))
+                .unwrap_or_default();
+            lines[i] = line_of(&comment);
+        }
+        None => lines.insert(at + 1, line_of("")),
+    }
+    let mut out = lines.join("\n");
+    if manifest.ends_with('\n') {
+        out.push('\n');
+    }
+    Ok(out)
 }
 
 /// Every table of a project or package manifest is read strictly: a key
@@ -484,8 +560,8 @@ fn reject_unknown_manifest_keys(table: &toml::Table) -> Result<(), String> {
         ],
     )?;
     for (section, keys) in [
-        ("project", &["name", "entry", "icon"][..]),
-        ("package", &["name", "version"][..]),
+        ("project", &["name", "entry", "icon", "edition"][..]),
+        ("package", &["name", "version", "edition"][..]),
         ("assets", &["fonts", "vectors"][..]),
     ] {
         if let Some(t) = table.get(section).and_then(toml::Value::as_table) {
@@ -2561,6 +2637,63 @@ mod tests {
         assert!(
             err.contains("[theme.color]") && err.contains("`darker`"),
             "{err}"
+        );
+    }
+
+    fn edition_of(text: &str) -> Result<Edition, String> {
+        parse_edition(&text.parse::<toml::Table>().expect("toml"))
+    }
+
+    #[test]
+    fn a_manifest_names_its_edition_or_is_the_baseline() {
+        assert_eq!(
+            edition_of("[project]\nname = \"x\"\n"),
+            Ok(Edition::BASELINE)
+        );
+        assert_eq!(
+            edition_of("[project]\nedition = \"2027\"\n"),
+            Ok(Edition::E2027)
+        );
+        assert_eq!(
+            edition_of("[package]\nedition = \"2026\"\n"),
+            Ok(Edition::E2026)
+        );
+        let err = edition_of("[project]\nedition = \"2099\"\n").expect_err("unknown");
+        assert!(
+            err.contains("`2099`") && err.contains("`2026`, `2027`"),
+            "{err}"
+        );
+        let err = edition_of("[project]\nedition = 2026\n").expect_err("not text");
+        assert!(err.contains("is text"), "{err}");
+    }
+
+    #[test]
+    fn the_edition_is_written_into_the_manifest_and_nothing_else_moves() {
+        let before = "# my app\n[project]\nname = \"x\"   # the name\nentry = \"main.byd\"\n\n[theme]\nscheme = \"dark\"\n";
+        let after = with_edition(before, Edition::E2027).expect("a project");
+        assert_eq!(
+            after,
+            "# my app\n[project]\nedition = \"2027\"\nname = \"x\"   # the name\nentry = \"main.byd\"\n\n[theme]\nscheme = \"dark\"\n"
+        );
+        // Again: the key is replaced, with its comment kept, and not repeated.
+        let again = with_edition(
+            "[project]\nname = \"x\"\nedition = \"2026\"  # old\n[dev]\nhud = true\n",
+            Edition::E2027,
+        )
+        .expect("a project");
+        assert_eq!(
+            again,
+            "[project]\nname = \"x\"\nedition = \"2027\"  # old\n[dev]\nhud = true\n"
+        );
+        // A library has `[package]`.
+        let lib = with_edition("[package]\nname = \"k\"\nversion = \"1\"", Edition::E2027)
+            .expect("a package");
+        assert!(lib.starts_with("[package]\nedition = \"2027\"\n") && !lib.ends_with('\n'));
+        assert!(with_edition("[dev]\nhud = true\n", Edition::E2027).is_err());
+        // Whatever it writes is read back.
+        assert_eq!(
+            edition_of(&with_edition(before, Edition::E2027).unwrap()),
+            Ok(Edition::E2027)
         );
     }
 

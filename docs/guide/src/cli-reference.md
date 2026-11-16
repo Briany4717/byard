@@ -186,6 +186,24 @@ Formats `.byd` files in place, with the one layout there is. See [the dev loop](
 A file that does not parse, or that formatting would change the meaning of, is reported and left as it
 was, and the command exits 1. Finding no `.byd` file at all is an error.
 
+## `byard fix`
+
+```text
+byard fix [PATH]
+```
+
+Moves a project to the next [edition](language-reference.md#editions): rewrites its `.byd` files so they
+mean in the next edition what they mean in the one `byard.toml` names, prints each one it changed through
+the formatter, and then writes the new `edition` into the manifest.
+
+| Argument | |
+|----------|-|
+| `[PATH]` | The project directory. Defaults to the current project. |
+
+Nothing is written until every file has been rewritten, so a file that does not parse leaves the project as
+it was. Only the project's own files are rewritten: a path dependency is a project with an edition of its
+own, and is fixed where it is. A project already on the newest edition says so and changes nothing.
+
 ## `byard build`
 
 ```text
@@ -285,8 +303,8 @@ Removes `.byard/cache` and `.byard/generated` from the project. Package checkout
 
 | Table | Holds | Chapter |
 |-------|-------|---------|
-| `[project]` | `name`, `entry`, `icon` | [Getting started](getting-started.md) |
-| `[package]` | `name`, `version`, for a library | [Packages](packages.md) |
+| `[project]` | `name`, `entry`, `icon`, `edition` | [Getting started](getting-started.md) |
+| `[package]` | `name`, `version`, `edition`, for a library | [Packages](packages.md) |
 | `[dependencies]` | Packages the project uses | [Packages](packages.md) |
 | `[theme]` | Scheme, seed, colours, type, shapes, breakpoints | [Theming](theming.md) |
 | `[assets.fonts]` | Typefaces | [Theming](theming.md) |

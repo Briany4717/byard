@@ -909,6 +909,30 @@ evaluates nothing and draws nothing.
 | `navigate`, `back`, `replace` | Moves in a navigation stack |
 | `match(name)` | The width of the element an overlay is anchored to |
 
+## Editions
+
+A change that would alter what a program means, or refuse one that is accepted, does not
+happen in a release. It happens in a new *edition*, and a project says which one it is
+written in:
+
+```toml
+[project]
+edition = "2026"
+```
+
+A manifest with no `edition` is the first edition, `2026`, the language as it was before
+editions, and it keeps that behaviour for as long as the edition exists: a program that
+checked and drew `3` yesterday draws `3` tomorrow. An edition the compiler does not know is an
+error that lists the ones it does. A library package names its edition under `[package]`.
+
+[`byard fix`](cli-reference.md#byard-fix) moves a project to the next edition. It rewrites the
+sources so they mean what they meant, through the formatter, and then writes the new edition
+into the manifest.
+
+Today there are two editions and they differ by nothing: `2027` is the one the changes marked
+*(edition)* in [the roadmap](https://github.com/Briany4717/byard/blob/main/docs/language/roadmap.md)
+will land in.
+
 ## One mistake, one error
 
 The checker means to report each mistake once, at the place it was made, and to go on to

@@ -78,15 +78,14 @@ This part closes that. Nothing here adds syntax.
 
 ### 2. Editions, and `byard fix`
 
-No case: this is the mechanism the rest need.
-
-`edition = "2027"` in `[project]`. A program without the key is the edition it was written
-in, and keeps its behaviour. `byard fix` rewrites a project to the next edition, through
-the formatter's printer. Steps marked **(edition)** change what an accepted program means,
-or reject one that was accepted, and go behind it.
-
-Do this before step 3, not after: the first stricter check will otherwise break every
-program in the wild on a patch release.
+*Done, except for what only the first **(edition)** change can show.* `edition = "…"` is read
+from `[project]` or `[package]`, a manifest without it is `2026`, and `byard fix` moves a
+project to `2027`, rewriting its sources through the formatter and naming the edition in the
+manifest. The two editions differ by nothing yet. What is left is the first rewrite: step 6's
+`equality-ignores-field-order` or step 12's ternary, whichever comes first, adds a migration to
+`Edition::migrations` in `byard-compiler/src/edition.rs`, and the case that proves `byard fix`
+keeps a program's meaning. Until then `byard new` writes no edition, and a project without one
+stays on `2026`.
 
 ### 3. Assignments and first values
 

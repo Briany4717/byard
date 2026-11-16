@@ -841,6 +841,9 @@ pub struct Interpreter {
     /// The elements marked `autofocus` that have already been drawn (and so
     /// been given focus, or not, once), by identity.
     autofocused: std::collections::HashSet<u32>,
+    /// The identity of the surface being drawn when it is a focus scope of its
+    /// own: a `Panel` with `keyboard: exclusive` (RFC-0068 §3).
+    panel_scope: Option<u32>,
     /// The layout indices of the focused element and its ancestors, for this
     /// frame, once something asked.
     focus_chain: Option<Vec<u32>>,
@@ -1976,6 +1979,10 @@ impl Interpreter {
         // gesture state (a pending `down`, the focused element) so a tap that
         // spans this re-render is still recognized (RFC-0003 E4).
         self.router.clear_handlers();
+        // RFC-0068 §3: an exclusive panel's frame is a focus scope.
+        if let Some(key) = self.panel_scope {
+            self.router.begin_scope(key, false);
+        }
         // RFC-0068 §7: a popup's frame is a focus scope, dismisses, or leaves.
         if self.popup.frame.is_some() {
             self.begin_popup_frame(width, height);
@@ -2281,6 +2288,9 @@ impl Interpreter {
         self.anim_slot = AnimSlot::default();
         if self.popup.frame.is_some() {
             self.end_popup_frame();
+        }
+        if let Some(key) = self.panel_scope {
+            self.router.close_scope(key);
         }
         // RFC-0066 §1: focus goes into the scopes that opened, back out of the
         // ones that closed, and where a bound `focused:` asks.

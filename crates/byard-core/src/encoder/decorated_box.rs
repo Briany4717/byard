@@ -206,7 +206,7 @@ pub async fn build_pipeline(
             entry_point: Some("fs_main"),
             targets: &[Some(wgpu::ColorTargetState {
                 format: surface_format,
-                blend: Some(wgpu::BlendState::ALPHA_BLENDING),
+                blend: Some(super::STRAIGHT_ALPHA_OVER),
                 write_mask: wgpu::ColorWrites::ALL,
             })],
             compilation_options: wgpu::PipelineCompilationOptions::default(),
@@ -252,7 +252,7 @@ pub async fn build_pipeline(
 /// this pass; the compiler routes them to `SolidBox`, which occludes correctly.
 /// Stages this batch's instances into the frame's arena (RFC-0033 §G1).
 ///
-/// Split from [`draw`] because `wgpu` binds a buffer *range* eagerly: the
+/// Split from the pass because `wgpu` binds a buffer *range* eagerly: the
 /// arena's GPU buffer has to be final, and therefore fully staged and
 /// uploaded, before the first render pass opens.
 pub fn stage(
@@ -279,47 +279,97 @@ pub fn stage(
     arena.push_vertex(scratch)
 }
 
-/// Draws this segment's staged decorations, in content-clip runs (RFC-0005).
-#[allow(clippy::too_many_arguments)]
-pub fn draw(
-    render_pass: &mut wgpu::RenderPass<'_>,
-    arena: &super::instance_arena::InstanceArena,
-    region: super::instance_arena::Region,
-    pipeline: &wgpu::RenderPipeline,
-    bind_group: &wgpu::BindGroup,
-    quad_buffer: &wgpu::Buffer,
-    count: usize,
-    clip_slice: &[Option<u16>],
-    ctx: super::ClipCtx<'_>,
-) {
-    if region.is_empty() {
-        return;
-    }
-    render_pass.set_pipeline(pipeline);
-    render_pass.set_bind_group(0, bind_group, &[super::clip_offset(None)]);
-    render_pass.set_vertex_buffer(0, quad_buffer.slice(..));
-    render_pass.set_vertex_buffer(1, arena.slice(region));
-    // Content-clip runs (RFC-0005): scissor each run to its ScrollView viewport.
-    super::for_each_clip_run(render_pass, count, clip_slice, ctx, |p, s, e| {
-        p.draw(0..4, s..e);
-    });
-}
-
 /// The registered `DecoratedBox` pipeline (RFC-0039).
 ///
 /// A thin wrapper over the `wgpu` pipeline this module already built. What it
 /// adds is the answer to "who draws, and when", which used to be a line of
 /// source in the encoder and is now an entry in the registry.
+///
+/// It also draws the solid boxes' fringe, and that is why it is the one that
+/// does. The fringe (the partially covered pixels the opaque pass leaves, see
+/// `solid_box.wgsl`) is transparent geometry, and the transparent pass is where
+/// paint order against translucent boxes is decided: a box's edge has to land
+/// over a translucent background painted before it and under a scrim painted
+/// after it. Both pools are in emission order, so the two are merged by their
+/// draw-order depth into alternating runs.
 pub struct DecoratedBoxPipeline {
     pipeline: wgpu::RenderPipeline,
+    /// The solid boxes' fringe pipeline, drawing the solid pool's own staged
+    /// instances.
+    solid_fringe: wgpu::RenderPipeline,
 }
 
 impl DecoratedBoxPipeline {
-    /// Wraps a built pipeline for registration.
+    /// Wraps a built pipeline, and the solid fringe pipeline it interleaves
+    /// with, for registration.
     #[must_use]
-    pub const fn new(pipeline: wgpu::RenderPipeline) -> Self {
-        Self { pipeline }
+    pub const fn new(pipeline: wgpu::RenderPipeline, solid_fringe: wgpu::RenderPipeline) -> Self {
+        Self {
+            pipeline,
+            solid_fringe,
+        }
     }
+
+    /// Draws the decorated boxes and the solid boxes' fringe in paint order.
+    fn draw_merged(&self, pass: &mut wgpu::RenderPass<'_>, cx: &super::pipeline::SegmentDraw<'_>) {
+        let decorated = &cx.ranges.decorated;
+        let solid = &cx.ranges.solid;
+        let dec_clips = super::sub_slice(cx.clips.decorated, decorated);
+        let sol_clips = super::sub_slice(cx.clips.solid, solid);
+        let (nd, ns) = (decorated.len(), solid.len());
+        let have_dec = !cx.staged.decorated.is_empty();
+        let have_sol = !cx.staged.solid.0.is_empty();
+        let (mut i, mut j) = (0, 0);
+        // The depth of an entry past the end is "never": the far plane, which
+        // loses every comparison below.
+        let depth = |slice: &[f32], at: usize| {
+            slice
+                .get(at)
+                .copied()
+                .unwrap_or(crate::frame::DRAW_DEPTH_CLEAR)
+        };
+        while (i < ns && have_sol) || (j < nd && have_dec) {
+            // A larger depth is an earlier primitive. Decorated boxes first on a
+            // tie: no two primitives share a depth, so a tie is a missing one.
+            let from = j;
+            while j < nd && (i >= ns || depth(cx.decorated_depths, j) >= depth(cx.solid_depths, i))
+            {
+                j += 1;
+            }
+            if have_dec && j > from {
+                pass.set_pipeline(&self.pipeline);
+                pass.set_vertex_buffer(0, cx.quad_buffer.slice(..));
+                pass.set_vertex_buffer(1, cx.arena.slice(cx.staged.decorated));
+                draw_run(pass, from, j, dec_clips, cx);
+            }
+            let from = i;
+            while i < ns && (j >= nd || depth(cx.solid_depths, i) > depth(cx.decorated_depths, j)) {
+                i += 1;
+            }
+            if have_sol && i > from {
+                pass.set_pipeline(&self.solid_fringe);
+                pass.set_vertex_buffer(0, cx.quad_buffer.slice(..));
+                pass.set_vertex_buffer(1, cx.arena.slice(cx.staged.solid.0));
+                pass.set_vertex_buffer(2, cx.arena.slice(cx.staged.solid.1));
+                draw_run(pass, from, i, sol_clips, cx);
+            }
+        }
+    }
+}
+
+/// Draws instances `from..to` of the bound pool, in content-clip runs.
+fn draw_run(
+    pass: &mut wgpu::RenderPass<'_>,
+    from: usize,
+    to: usize,
+    clips: &[Option<u16>],
+    cx: &super::pipeline::SegmentDraw<'_>,
+) {
+    let clips = &clips[from.min(clips.len())..to.min(clips.len())];
+    super::for_each_clip_run(pass, to - from, clips, cx.clip_ctx, |p, s, e| {
+        #[allow(clippy::cast_possible_truncation)]
+        p.draw(0..4, from as u32 + s..from as u32 + e);
+    });
 }
 
 impl super::pipeline::RenderPipeline for DecoratedBoxPipeline {
@@ -331,18 +381,8 @@ impl super::pipeline::RenderPipeline for DecoratedBoxPipeline {
     }
 
     fn draw(&self, pass: &mut wgpu::RenderPass<'_>, cx: &super::pipeline::SegmentDraw<'_>) {
-        let range = &cx.ranges.decorated;
-        draw(
-            pass,
-            cx.arena,
-            cx.staged.decorated,
-            &self.pipeline,
-            cx.viewport_bind_group,
-            cx.quad_buffer,
-            range.len(),
-            super::sub_slice(cx.clips.decorated, range),
-            cx.clip_ctx,
-        );
+        pass.set_bind_group(0, cx.viewport_bind_group, &[super::clip_offset(None)]);
+        self.draw_merged(pass, cx);
     }
 
     fn draw_batch(&self, pass: &mut wgpu::RenderPass<'_>, cx: &super::pipeline::BatchDraw<'_>) {

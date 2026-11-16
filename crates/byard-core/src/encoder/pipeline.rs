@@ -376,6 +376,13 @@ pub struct SegmentDraw<'a> {
     pub texture_cache: &'a super::texture_sampler::TextureCache,
     /// This segment's texture instances (the texture pipeline binds per image).
     pub textures: &'a [crate::frame::TextureSampler],
+    /// Draw-order depths of this segment's solid boxes, parallel to
+    /// `ranges.solid`. The decorated pipeline merges the solids' fringes into
+    /// its own draws by these.
+    pub solid_depths: &'a [f32],
+    /// Draw-order depths of this segment's decorated boxes, parallel to
+    /// `ranges.decorated`.
+    pub decorated_depths: &'a [f32],
 }
 
 /// Rejects an instance layout that could not run on some conformant GPU.

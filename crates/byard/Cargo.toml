@@ -38,17 +38,23 @@ crossbeam-channel.workspace = true
 image = { workspace = true, features = ["png"] }
 # The `byard` command (`cli` feature). Never linked into an app: only the
 # binary above uses it.
-byard-cli = { workspace = true, optional = true }
+byard-cli = { workspace = true, optional = true, default-features = false }
 
 [features]
 # On by default so that `cargo install byard` gives the `byard` command. An app
 # that depends on `byard` does not link it either way; `default-features =
 # false` only saves compiling it.
 default = ["cli"]
-cli = ["dep:byard-cli"]
+cli = ["dep:byard-cli", "byard-cli/wayland-shell"]
 # RFC-0042 Q4: hands the accessibility tree to the platform's screen reader
 # through AccessKit. Opt-in: `byard = { ..., features = ["a11y"] }`.
 a11y = ["byard-platform/a11y", "byard-cli?/a11y"]
+# RFC-0068 §8: the Wayland shell backend, which runs a program with a `Panel`
+# (Linux only). Opt-in, because an app with no panel would carry it for nothing:
+# `byard = { version = "0.1", features = ["wayland-shell"] }`. The `byard`
+# command has it through `cli`, so `cargo install byard` runs panels; an app is
+# not charged for that, since only this feature lets `App::run` reach it.
+wayland-shell = ["byard-platform/wayland-shell", "byard-cli?/wayland-shell"]
 
 [lints]
 workspace = true

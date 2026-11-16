@@ -5,8 +5,10 @@
 //! the platform reports (a close request, focus, a published frame) into
 //! actions against a [`Backend`]: create, configure, destroy, request a
 //! redraw, tell the program a window was asked to close, exit. The winit host
-//! implements `Backend` with real windows; the tests implement it with a log.
+//! implements `Backend` with real windows, the Wayland shell backend with
+//! windows and layer surfaces (RFC-0068 §8); the tests implement it with a log.
 
+use byard_core::surface::InputRegion;
 use byard_core::{SurfaceChange, SurfaceId, SurfaceSpec};
 
 /// What [`Windows`] does to the outside world.
@@ -24,6 +26,9 @@ pub(crate) trait Backend {
     fn send_close(&mut self, id: SurfaceId);
     /// Ends the event loop.
     fn exit(&mut self);
+    /// The part of an open panel that takes the pointer changed (RFC-0068
+    /// §6). A backend with no panels has nothing to do.
+    fn input_region(&mut self, _id: SurfaceId, _region: &InputRegion) {}
 }
 
 struct Open {
@@ -45,9 +50,26 @@ pub(crate) struct Windows {
     ever_opened: bool,
     focused: Option<SurfaceId>,
     exiting: bool,
+    /// Whether the program runs when it has no surface open: a shell has no
+    /// last window (RFC-0068 §2, Q11), and a screen being unplugged takes its
+    /// panels with it without ending the program.
+    keeps_running: bool,
 }
 
 impl Windows {
+    /// The bookkeeping of a program with panels: it ends when it is stopped,
+    /// never because its last surface went (RFC-0068 Q11).
+    #[cfg_attr(
+        not(all(target_os = "linux", feature = "wayland-shell")),
+        allow(dead_code, reason = "only the Wayland shell backend keeps panels")
+    )]
+    pub(crate) fn for_shell() -> Self {
+        Self {
+            keeps_running: true,
+            ..Self::default()
+        }
+    }
+
     /// Applies the changes the logic thread queued, in order, as far as order
     /// matters: everything made or reconfigured first, everything destroyed
     /// after, so a `when` that swaps one window for another never has a moment
@@ -97,10 +119,14 @@ impl Windows {
                         }
                     }
                 }
+                SurfaceChange::InputRegion { id, region } => {
+                    if self.open.iter().any(|o| o.id == *id) {
+                        backend.input_region(*id, region);
+                    }
+                }
                 // Destroys are applied after every create and configure of
-                // the batch, below. An input region is only ever sent for a
-                // panel, and the winit host makes no panels.
-                SurfaceChange::Destroy { .. } | SurfaceChange::InputRegion { .. } => {}
+                // the batch, below.
+                SurfaceChange::Destroy { .. } => {}
             }
         }
         for change in changes {
@@ -118,12 +144,36 @@ impl Windows {
                 backend.destroy(*id);
             }
         }
-        if self.ever_opened && self.open.is_empty() && !self.exiting {
+        if self.ever_opened && self.open.is_empty() && !self.exiting && !self.keeps_running {
             // The last window closed and there is no panel (RFC-0068 §2).
             self.exiting = true;
             backend.exit();
         }
         Ok(())
+    }
+
+    /// The platform took the surface of `id` away by itself: the compositor
+    /// closed a layer surface, which is what it does to the panels of a screen
+    /// that was unplugged (RFC-0068 §3). The surface is torn down as a destroy
+    /// would, and nothing ends: the program learns of the screen going from
+    /// `screens`, and its `for` destroys the panel (a `Destroy` for an id that
+    /// is already gone is ignored).
+    #[cfg_attr(
+        not(all(target_os = "linux", feature = "wayland-shell")),
+        allow(
+            dead_code,
+            reason = "only the Wayland shell backend has layer surfaces"
+        )
+    )]
+    pub(crate) fn platform_closed<B: Backend>(&mut self, id: SurfaceId, backend: &mut B) {
+        let Some(i) = self.open.iter().position(|o| o.id == id) else {
+            return;
+        };
+        self.open.remove(i);
+        if self.focused == Some(id) {
+            self.focused = None;
+        }
+        backend.destroy(id);
     }
 
     /// The platform asked to close the window of `id`: its `close =>` runs if
@@ -205,6 +255,7 @@ mod tests {
         Redraw(u32),
         Close(u32),
         Exit,
+        Region(u32, InputRegion),
     }
 
     #[derive(Default)]
@@ -229,6 +280,9 @@ mod tests {
         }
         fn exit(&mut self) {
             self.0.push(Act::Exit);
+        }
+        fn input_region(&mut self, id: SurfaceId, region: &InputRegion) {
+            self.0.push(Act::Region(id.index(), region.clone()));
         }
     }
 
@@ -446,5 +500,90 @@ mod tests {
             w.apply(&[create(1, false)], &mut Refuses),
             Err("no display".to_string())
         );
+    }
+
+    fn panel(n: u32) -> SurfaceChange {
+        SurfaceChange::Create {
+            id: id(n),
+            spec: SurfaceSpec::panel(format!("bar{n}")),
+        }
+    }
+
+    #[test]
+    fn a_shell_does_not_end_when_its_last_surface_goes() {
+        let (mut w, mut log) = (Windows::for_shell(), Log::default());
+        w.apply(&[panel(1), create(2, true)], &mut log).unwrap();
+        take(&mut log);
+        // The window closes, then the panel: a shell has no last window.
+        w.apply(
+            &[
+                SurfaceChange::Destroy { id: id(2) },
+                SurfaceChange::Destroy { id: id(1) },
+            ],
+            &mut log,
+        )
+        .unwrap();
+        assert_eq!(take(&mut log), [Act::Destroy(2), Act::Destroy(1)]);
+        // The same batch on the bookkeeping of a program of windows ends it.
+        let (mut plain, mut log) = (Windows::default(), Log::default());
+        plain.apply(&[create(1, true)], &mut log).unwrap();
+        take(&mut log);
+        plain
+            .apply(&[SurfaceChange::Destroy { id: id(1) }], &mut log)
+            .unwrap();
+        assert_eq!(take(&mut log), [Act::Destroy(1), Act::Exit]);
+    }
+
+    #[test]
+    fn a_panel_the_compositor_closed_is_torn_down_once_and_ends_nothing() {
+        let (mut w, mut log) = (Windows::for_shell(), Log::default());
+        w.apply(&[panel(1), panel(2)], &mut log).unwrap();
+        take(&mut log);
+        w.platform_closed(id(1), &mut log);
+        assert_eq!(take(&mut log), [Act::Destroy(1)]);
+        assert!(!w.is_open(id(1)));
+        assert!(w.is_open(id(2)));
+        // Closed again, and then destroyed by the program's `for`: nothing
+        // more happens, and the id is never made again.
+        w.platform_closed(id(1), &mut log);
+        w.apply(&[SurfaceChange::Destroy { id: id(1) }, panel(1)], &mut log)
+            .unwrap();
+        assert_eq!(take(&mut log), []);
+    }
+
+    #[test]
+    fn an_input_region_reaches_an_open_panel_and_no_other() {
+        let (mut w, mut log) = (Windows::for_shell(), Log::default());
+        w.apply(&[panel(1)], &mut log).unwrap();
+        take(&mut log);
+        let region = InputRegion::Rects(vec![byard_core::surface::Rect::new(0, 0, 40, 40)]);
+        w.apply(
+            &[
+                SurfaceChange::InputRegion {
+                    id: id(1),
+                    region: region.clone(),
+                },
+                SurfaceChange::InputRegion {
+                    id: id(9),
+                    region: InputRegion::None,
+                },
+            ],
+            &mut log,
+        )
+        .unwrap();
+        assert_eq!(take(&mut log), [Act::Region(1, region)]);
+    }
+
+    #[test]
+    fn a_panel_is_asked_to_draw_when_its_frame_is_new_and_not_again() {
+        let (mut w, mut log) = (Windows::for_shell(), Log::default());
+        w.apply(&[panel(1), panel(2)], &mut log).unwrap();
+        take(&mut log);
+        // Only the first has a newer frame.
+        w.frames_published(|i| if i == id(1) { Some(7) } else { Some(3) }, &mut log);
+        let first = take(&mut log);
+        assert_eq!(first, [Act::Redraw(1), Act::Redraw(2)]);
+        w.frames_published(|i| if i == id(1) { Some(8) } else { Some(3) }, &mut log);
+        assert_eq!(take(&mut log), [Act::Redraw(1)]);
     }
 }

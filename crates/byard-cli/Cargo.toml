@@ -47,6 +47,9 @@ fontcull-write-fonts = "0.44.3"
 
 
 [features]
+# The Wayland shell backend, so `byard dev` runs panels out of the box (Linux).
+default = ["wayland-shell"]
+wayland-shell = ["byard-platform/wayland-shell"]
 # RFC-0042 Q4: the dev runner's window with the accessibility bridge, to try
 # an app under a screen reader: `cargo run -p byard-cli --features a11y -- dev`.
 a11y = ["byard-platform/a11y"]

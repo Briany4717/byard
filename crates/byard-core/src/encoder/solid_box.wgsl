@@ -192,22 +192,68 @@ fn sd_rounded_box(p: vec2<f32>, b: vec2<f32>, r: vec4<f32>, n: f32) -> f32 {
     return (inner + lp.x - r_corner) / lp.y;
 }
 
-@fragment
-fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
+/// The paint this fragment would produce, straight alpha: the shape's colour
+/// with its edge coverage, the instance's opacity and the clip's coverage folded
+/// into `a`. One function for both fragment stages below, so the two cannot
+/// disagree about which pixels are whole and which are partial.
+fn shade(in: VertexOutput) -> vec4<f32> {
     let distance = sd_rounded_box(in.local_pos, in.half_size, in.radii, in.corner_n);
 
     // Anti-alias the edge over one pixel using the Euclidean gradient magnitude.
     // We use length([dpdx, dpdy]) instead of fwidth (Manhattan norm) to get a
     // uniform anti-alias band in every direction, fwidth is up to √2 wider at
     // diagonals, which makes circles look slightly diamond-shaped.
-    let edge_softness = length(vec2<f32>(dpdx(distance), dpdy(distance)));
+    //
+    // The floor is for a driver whose derivatives come out 0 where they cannot
+    // be: WARP, Windows' software adapter, along the diagonal the quad's two
+    // triangles share (the bug #436 met in the clear quad). A softness of 0
+    // makes `smoothstep(0, 0, d)` divide by zero, which reads as no coverage
+    // for a pixel well inside the shape, and the pixel vanishes. On a real GPU
+    // the softness is about a pixel's worth of distance, far above the floor,
+    // so nothing changes there.
+    let edge_softness = max(length(vec2<f32>(dpdx(distance), dpdy(distance))), 1e-4);
     let alpha = smoothstep(edge_softness, 0.0, distance);
+    return vec4<f32>(in.color.rgb, in.color.a * alpha * in.opacity * clip_coverage(in.position.xy));
+}
 
-    if (alpha <= 0.0) {
+/// A fragment at least this covered is drawn by the opaque pass (and writes
+/// depth); a fragment below it is the *fringe*, drawn by `fs_fringe`. The two
+/// stages overlap in the sliver between this and 1.0 on purpose: both are the
+/// same arithmetic, so the only way a pixel could belong to neither is a
+/// rounding difference between two compilations of it, and the overlap (half an
+/// 8-bit step wide, drawn once, by the opaque pass, because the fringe pass
+/// loses its depth test against what the opaque pass wrote) is what rules that
+/// out.
+const WHOLE: f32 = 0.998;
+
+/// The opaque pass (RFC-0017): only fragments the shape fully covers. They
+/// write depth, which is what lets a later pass cull what they hide, and
+/// nothing a partial fragment does can do that, because a partial fragment
+/// hides nothing: whatever is behind it shows through in proportion, and that
+/// is the transparent pass's to draw, in paint order.
+@fragment
+fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
+    let c = shade(in);
+    if (c.a < WHOLE) {
         discard;
     }
+    return byard_out(c);
+}
 
-    return byard_out(vec4<f32>(in.color.rgb, in.color.a * alpha * in.opacity * clip_coverage(in.position.xy)));
+/// The fringe: the partially covered fragments the opaque pass left, the
+/// anti-aliased edge of an opaque shape and the whole body of a translucent one.
+/// Drawn in the transparent pass, in paint order against the decorated boxes
+/// (see `DecoratedBoxPipeline::draw`), blending over whatever is behind and
+/// writing depth so what is drawn after it, but was painted before it, stays
+/// hidden. Its depth test is `Less`, so a pixel the opaque pass already drew
+/// (whose depth is this instance's own) is rejected before the shader runs.
+@fragment
+fn fs_fringe(in: VertexOutput) -> @location(0) vec4<f32> {
+    let c = shade(in);
+    if (c.a >= WHOLE || c.a <= 0.0) {
+        discard;
+    }
+    return byard_out(c);
 }
 
 // The clear quad's fragment stage (`EncoderSubsystem::clear_pipeline`): wipe

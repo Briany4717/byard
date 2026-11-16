@@ -72,7 +72,10 @@ nothing, which is `ExclusiveNeedsEdge`.
 keys from the window being typed in. A `TextField` or a `key_down` handler in such a panel
 could never be used, and the checker warns (`PanelTakesNoKeys`): write
 `keyboard: on_demand` for a panel that takes the keys when clicked, or `exclusive` for a
-launcher, which has every key while it is shown.
+launcher, which has every key while it is shown. A panel with `keyboard: exclusive` is also a
+focus scope, like a modal overlay: when it appears, focus goes to its element marked
+`autofocus: true`, else to the first element Tab reaches, so a launcher's field can be typed
+into at once. `on_demand` and `none` do not move focus.
 
 **`namespace` and `screen`** are fixed when the surface is made, so changing them destroys
 the panel and makes it again, with its state. The checker warns when they read a `var`
@@ -189,7 +192,66 @@ that has the grab closes it, as the compositor would. See [the CLI reference](cl
 finds it on whichever surface it is on, and `screens = "DP-1:1600x900, HDMI-A-1:1280x720"`
 at the top of a scenario file, or in one test, says the screens.
 
-Running panels on the desktop needs the Wayland shell backend, which comes after the
-language and the interpreter (RFC-0068 step 3b). `byard dev` and a built app say so and
-stop for now. A program that has a view called `Panel` must call it something else, as
-`Panel` is the element.
+A program that has a view called `Panel` must call it something else, as `Panel` is the
+element.
+
+## Running a panel
+
+```sh
+byard dev crates/byard-cli/examples/simple_bar
+```
+
+A program with a `Panel` runs on the Wayland shell backend, in `byard dev` with hot reload
+and in a built app (`byard::App::run`) the same way. The backend is chosen when the program
+starts, from whether it has a `Panel` anywhere: an edit under `byard dev` that adds the first
+panel (or takes the last away) says it needs a restart and keeps the program that is running.
+A program without panels runs as it always did, on every platform.
+
+**Which builds include the backend.** `byard dev`, `byard shot` and `byard test` from this
+repository (`byard-cli`) include it on Linux. An app of your own does not, because a program
+with no panel would carry it for nothing: add the feature in its `Cargo.toml`,
+
+```toml
+byard = { version = "0.1", features = ["wayland-shell"] }
+```
+
+and without it `App::run` on a program with a `Panel` stops with `PanelsUnsupported`, saying
+so. `byard build` only bakes assets and does not compile the app, so it prints this line
+when the program has a `Panel`. The `byard` command itself, from `cargo install byard`,
+runs panels as it is.
+
+It works on compositors that offer `zwlr_layer_shell_v1`: Hyprland, Sway, river, niri,
+labwc, Wayfire, KDE Plasma and the other wlroots-style ones. It does not work on GNOME,
+whose compositor has no layer shell, nor on X11, Windows or macOS. A panel never falls back
+to an ordinary window, since a bar that opens as a window is broken in a confusing way, so
+there the program stops at startup with `PanelsUnsupported` and says what is missing: the
+Wayland session, or the `zwlr_layer_shell_v1` the compositor does not offer.
+
+What it does for you:
+
+- Each panel draws only when its own frame callback fires and it has something new, so a bar
+  on a screen that is off, or behind a full-screen window, costs nothing, and a still bar
+  commits nothing: with `WAYLAND_DEBUG=1` the terminal stays quiet while nothing changes.
+- Each screen is read from `wl_output` (its connector name, and `xdg_output`'s position and
+  size) and a fractional scale is used where the compositor offers it, an integer one where
+  not. `screens` follows a screen being connected, unplugged or re-scaled while the program
+  runs, and a panel of a screen that goes is taken away by the compositor.
+- A panel's input region is sent only when it changed. The pointer, the scroll wheel and
+  touch reach the panel under them in its own coordinates.
+- A `Window` in a program with panels is an ordinary window on the same connection, so a
+  settings window opens next to the bar.
+- With the `a11y` feature, each panel and window is a window under the program's AT-SPI
+  root.
+
+One known limit: text edges. The text renderer (glyphon) blends glyphs with a fixed
+blend whose alpha dips at anti-aliased edges, so on a panel over an opaque background the
+edge pixels of letters can be up to 25% see-through (alpha 0.75 at half coverage). Boxes,
+shapes, images and everything else Byard draws keep full alpha there.
+
+What it does not do yet: **a text field in a panel takes the keys the keymap gives it, but not
+an input method** (no IME, no dead-key composition), so typing Japanese or an accent by
+compose key does not work there; a text field in a `Window` of the same program has the same
+limit on this backend. Popups from a panel are a later step: an anchored `Overlay` is drawn
+inside the panel for now. The app's appearance does not follow the desktop's light or dark
+setting on this backend (reading it needs a D-Bus client Byard does not carry): `scheme =
+"system"` uses the theme's own scheme, and the terminal says so once at startup.

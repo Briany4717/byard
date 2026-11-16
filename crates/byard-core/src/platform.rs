@@ -298,6 +298,11 @@ pub enum EventKind {
     /// to an element; the program of several windows draws the surface again
     /// at it and its `window.width` and `window.height` follow.
     SurfaceResized,
+    /// The platform's list of connected screens changed (RFC-0068 §4): the new
+    /// list, in the order `screens` reads it, is in `InputEvent.payload` as
+    /// `InputPayload::Screens`. Not routed to an element; the interpreter
+    /// writes the `screens` list.
+    Screens,
     /// The compositor dismissed a popup (`xdg_popup.popup_done`, RFC-0068 §7):
     /// the user clicked outside a popup that had the grab. Not routed to an
     /// element: the popup's overlay runs its `dismiss`, as a press outside runs
@@ -346,6 +351,7 @@ impl EventKind {
             | Self::WindowFocus
             | Self::CloseRequest
             | Self::SurfaceResized
+            | Self::Screens
             | Self::PopupDone => false,
         }
     }
@@ -368,6 +374,8 @@ pub enum InputPayload {
     Element(u32),
     /// A key name or printable text (keyboard events).
     Key(String),
+    /// The connected screens, as the host lists them (RFC-0068 §4).
+    Screens(Vec<crate::surface::ScreenInfo>),
     /// An IME preedit and its cursor, a byte range inside it (RFC-0040).
     Preedit {
         /// The text being composed.
@@ -746,6 +754,22 @@ pub trait PlatformHost {
 
     // ── Several surfaces (RFC-0068 §5) ──────────────────────────────────
 
+    /// The platform's list of screens changed, or was first read (RFC-0068
+    /// §4): a screen was connected, unplugged, moved or re-scaled. `screens`
+    /// is in the order a program reads it (see
+    /// [`ScreenInfo::sort`](crate::ScreenInfo::sort)). A host with no notion
+    /// of screens, which is every host of a program with no `Panel` today,
+    /// never calls it.
+    fn on_screens(&mut self, _screens: Vec<crate::surface::ScreenInfo>) {}
+
+    /// The surfaces whose frame the last [`on_redraw_round`](Self::on_redraw_round)
+    /// actually presented, when the host can say. `None` (the default) means
+    /// it cannot, and a backend that paces on frame callbacks takes every
+    /// surface of the round to have been presented.
+    fn take_presented(&mut self) -> Option<Vec<crate::SurfaceId>> {
+        None
+    }
+
     /// Takes the changes to the set of surfaces the logic thread queued, in
     /// order. A host of several windows asks when the frame waker woke it
     /// ([`Engine::drain_surface_changes`](crate::engine::Engine::drain_surface_changes)).
@@ -866,6 +890,21 @@ mod tests {
 
     /// A round of redraws is each surface's `on_redraw` unless the host draws
     /// them together, and every surface is attempted even if one fails.
+    #[test]
+    fn a_host_that_does_not_say_what_it_presented_leaves_the_backend_to_assume_all() {
+        let mut host = DefaultsOnlyHost;
+        assert_eq!(host.take_presented(), None);
+        // And a host that has no screens takes the list and does nothing.
+        host.on_screens(vec![crate::ScreenInfo::new("DP-1", 1920.0, 1080.0)]);
+    }
+
+    #[test]
+    fn the_list_of_screens_is_an_event_that_is_not_positional() {
+        assert!(!EventKind::Screens.is_positional());
+        let payload = InputPayload::Screens(vec![crate::ScreenInfo::new("DP-1", 1.0, 1.0)]);
+        assert_eq!(payload.clone(), payload);
+    }
+
     #[test]
     fn a_round_of_redraws_defaults_to_one_redraw_each_and_reports_the_first_error() {
         struct Failing(Vec<u32>);

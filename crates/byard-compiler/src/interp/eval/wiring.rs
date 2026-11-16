@@ -735,7 +735,10 @@ impl Interpreter {
                 }
                 // A surface's close request is the program's, not an
                 // element's (RFC-0068 §2).
-                CoreKind::CloseRequest | CoreKind::SurfaceResized | CoreKind::PopupDone => {
+                CoreKind::CloseRequest
+                | CoreKind::SurfaceResized
+                | CoreKind::Screens
+                | CoreKind::PopupDone => {
                     consumed[i] = true;
                 }
                 _ => {}
@@ -774,6 +777,7 @@ impl Interpreter {
                     | CoreKind::AccessScrollIntoView
                     | CoreKind::CloseRequest
                     | CoreKind::SurfaceResized
+                    | CoreKind::Screens
                     | CoreKind::PopupDone => {
                         unreachable!(
                             "composition, window focus, scheme and accessibility events are consumed before routing"
@@ -789,6 +793,8 @@ impl Interpreter {
                     InputPayload::Key(k) => Value::Str(k.clone()),
                     // Only a `Composition` carries one, and those are consumed.
                     InputPayload::Preedit { text, .. } => Value::Str(text.clone()),
+                    // Only `Screens` carries one, and it is consumed.
+                    InputPayload::Screens(_) => Value::Str(String::new()),
                 });
                 CompEvent {
                     kind,

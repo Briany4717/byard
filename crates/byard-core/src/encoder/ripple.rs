@@ -129,7 +129,7 @@ pub async fn build_pipeline(
 
 /// Draws every [`RippleInstance`], scissored to its content clip (RFC-0005).
 /// The instances upload as-is, depth is already stamped on the struct by
-/// `push_ripple`, so unlike `decorated_box::draw` no per-instance rewrite
+/// `push_ripple`, so unlike `DecoratedBoxPipeline::draw` no per-instance rewrite
 /// happens here.
 #[allow(clippy::too_many_arguments)]
 pub fn draw(

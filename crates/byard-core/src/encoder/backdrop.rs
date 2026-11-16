@@ -340,7 +340,7 @@ fn composite_pipeline(
             entry_point: Some("fs_main"),
             targets: &[Some(wgpu::ColorTargetState {
                 format: surface_format,
-                blend: Some(wgpu::BlendState::ALPHA_BLENDING),
+                blend: Some(super::STRAIGHT_ALPHA_OVER),
                 write_mask: wgpu::ColorWrites::ALL,
             })],
             compilation_options: wgpu::PipelineCompilationOptions::default(),

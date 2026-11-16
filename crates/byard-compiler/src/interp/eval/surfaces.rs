@@ -250,6 +250,9 @@ struct PanelAsk {
     name: String,
 }
 
+/// What the scope of a panel is called, apart from the identities of overlays.
+const PANEL_SCOPE_BASE: u32 = 0xF000_0000;
+
 /// The state of a panel that a window has no use for.
 pub(super) struct PanelLive {
     ask: PanelAsk,
@@ -652,6 +655,12 @@ impl Interpreter {
                 CoreKind::PopupDone => self.popup_done(ev.surface),
                 // The platform gave a window its size (or the user changed it).
                 CoreKind::SurfaceResized => self.set_surface_size(ev.surface, ev.pos),
+                // The host's list of screens (RFC-0068 §4).
+                CoreKind::Screens => {
+                    if let Some(InputPayload::Screens(list)) = &ev.payload {
+                        self.set_screens(list.clone());
+                    }
+                }
                 _ => match groups.iter_mut().find(|(id, _)| *id == ev.surface) {
                     Some((_, group)) => group.push(ev.clone()),
                     None => groups.push((ev.surface, vec![ev.clone()])),
@@ -823,6 +832,14 @@ impl Interpreter {
         self.popup.host = live.panel.is_some() || live.popup.is_some();
         self.popup.frame = popup;
         let id = live.id;
+        // A panel that takes every key while it is shown is a focus scope
+        // (RFC-0068 §3): focus goes into it when it appears, to its
+        // `autofocus` or the first element Tab reaches.
+        let panel_scope = live
+            .panel
+            .as_ref()
+            .filter(|p| p.ask.layer.keyboard == KeyboardMode::Exclusive)
+            .map(|_| PANEL_SCOPE_BASE | id.index());
         let mut frame = new_frame();
         let st = self.bind_surface(index);
         if force {
@@ -833,6 +850,7 @@ impl Interpreter {
         }
         self.ctx.watch_reads();
         self.ctx.push_scope_tracker();
+        self.panel_scope = panel_scope;
         self.render_frame(
             children,
             &mut frame,
@@ -843,6 +861,7 @@ impl Interpreter {
                 structure_changed: structure_moved,
             }),
         );
+        self.panel_scope = None;
         self.frame_scopes = self.ctx.pop_scope_tracker();
         let reads = self.ctx.take_reads();
         let wants = self.any_active

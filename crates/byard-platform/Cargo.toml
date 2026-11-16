@@ -38,11 +38,36 @@ winit = "0.30"
 accesskit = { version = "0.25", optional = true }
 accesskit_winit = { version = "0.34", optional = true }
 
+# RFC-0068 §8: the Wayland shell backend, which runs a program with a `Panel`.
+# Everything it needs is already linked by winit's own Wayland support
+# (smithay-client-toolkit with calloop, the wlr protocols, libxkbcommon loaded
+# at run time), so these are the same crates at the same versions, named here
+# because this crate now uses them directly. Linux only.
+[target.'cfg(target_os = "linux")'.dependencies]
+smithay-client-toolkit = { version = "0.19", default-features = false, features = ["calloop"], optional = true }
+wayland-backend = { version = "0.3", features = ["client_system"], optional = true }
+raw-window-handle = { version = "0.6", optional = true }
+xkbcommon-dl = { version = "0.4", optional = true }
+# The AT-SPI adapter of a surface on the shell backend (RFC-0068 §8). The same
+# crate `accesskit_winit` uses underneath.
+accesskit_unix = { version = "0.24", default-features = false, optional = true }
+
 [features]
+default = []
+# The Wayland shell backend: layer surfaces for `Panel`, and `Window` as an
+# `xdg_toplevel` on the same connection. Opt-in, so a program with no panel
+# does not carry it (RFC-0068 §10); `byard-cli` turns it on. Linux only, and
+# nothing on any other platform, where a program with a `Panel` stops at startup.
+wayland-shell = [
+    "dep:smithay-client-toolkit",
+    "dep:wayland-backend",
+    "dep:raw-window-handle",
+    "dep:xkbcommon-dl",
+]
 # Pulls in AccessKit and hands the tree to the platform's screen reader. Off
 # by default: it adds about a fifth to a stripped release binary, which an app
 # opts into (RFC-0042 Q4).
-a11y = ["dep:accesskit", "dep:accesskit_winit"]
+a11y = ["dep:accesskit", "dep:accesskit_winit", "dep:accesskit_unix"]
 
 [dev-dependencies]
 # The one device every GPU test in a process shares, one test at a time.

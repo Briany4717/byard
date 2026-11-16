@@ -64,17 +64,11 @@ pub fn run(opts: Options<'_>) -> Result<(), String> {
     // window. This covers the whole module graph (RFC-0008), not just the
     // entry file.
     let (program, provider) = resolve_project(&manifest).map_err(|e| e.to_string())?;
-    // Panels are layer surfaces, which the winit host cannot make: say so,
-    // rather than draw nothing (RFC-0068 step 3b).
     let shape = byard_compiler::surfaces::surface_shape(&program.views);
-    if shape.has_panel {
-        return Err(
-            "this program writes `Panel`, and the Wayland shell backend that creates \
-                    layer surfaces is not part of this build yet (RFC-0068 step 3b); \
-                    `byard shot` and `byard test` run it headlessly"
-                .to_string(),
-        );
-    }
+    // Panels are layer surfaces, which the winit host cannot make: a program
+    // with one runs on the Wayland shell backend (RFC-0068 §8), and says so
+    // when it cannot.
+    let panels = shape.has_panel;
     let multi = shape.is_multi();
 
     // The startup header is four facts, a rule, a result and a duration
@@ -138,7 +132,7 @@ pub fn run(opts: Options<'_>) -> Result<(), String> {
         let (w, h) = icon.dimensions();
         host = host.with_icon(icon.into_raw(), w, h);
     }
-    host.run(App {
+    let app = App {
         engine: None,
         project: manifest.name.clone(),
         http: manifest.http.clone(),
@@ -167,9 +161,16 @@ pub fn run(opts: Options<'_>) -> Result<(), String> {
         last_frame: std::time::Instant::now(),
         mods: byard_core::KeyModifiers::default(),
         multi,
+        panels,
         title: title.clone(),
-    })
-    .map_err(|e| format!("event loop error: {e}"))
+        namespace: manifest.name.clone(),
+    };
+    if panels {
+        return byard_platform::ShellHost::new(&title, "dev.byard.Byard")
+            .run(app)
+            .map_err(|e| e.to_string());
+    }
+    host.run(app).map_err(|e| format!("event loop error: {e}"))
 }
 
 /// Re-derives the whole program for the watcher thread (RFC-0008 Pillar E).
@@ -444,6 +445,8 @@ struct ByldRuntime {
     /// Whether the program writes `Window`, as it did at startup: a reload
     /// that changes it is not applied (it needs a restart).
     multi: bool,
+    /// Whether the program has a `Panel`, which decided the backend it runs on.
+    panels: bool,
     /// The window that has the keyboard, as the logic thread was told. The
     /// dev runner's own surfaces (the error overlay, the HUD, the reload
     /// flash) are drawn over it, since a window of several is where the
@@ -710,6 +713,15 @@ impl ByldRuntime {
         // ── Step 0: drain latest-wins reload channel (RFC-0006 §3.2 C3) ───────
         if let Some(parsed) = self.reload_channel.take() {
             if parsed.errors.is_empty()
+                && byard_compiler::surfaces::surface_shape(&parsed.views).has_panel != self.panels
+            {
+                // The backend that runs a program with panels is chosen when
+                // it starts.
+                crate::style::warn(
+                    "the edit adds or removes the program's `Panel`s, which needs a restart; \
+                     the running program is kept",
+                );
+            } else if parsed.errors.is_empty()
                 && byard_compiler::surfaces::surface_shape(&parsed.views).is_multi() != self.multi
             {
                 // The windows the program opens are decided when it starts.
@@ -1086,8 +1098,13 @@ struct App {
     /// Whether the program writes `Window` (RFC-0068): each window is a surface
     /// of the engine, drawn and fed input on its own.
     multi: bool,
+    /// Whether the program has a `Panel`: it runs on the Wayland shell backend,
+    /// chosen when it starts and not changed by an edit.
+    panels: bool,
     /// The title a window with no `title` has.
     title: String,
+    /// The namespace of a panel that names none: the project's name.
+    namespace: String,
 }
 
 impl App {
@@ -1199,7 +1216,8 @@ impl App {
         // the logic-thread factory below and cannot be built inside it.
         let dispatcher = engine.dispatcher(self.capabilities());
         let image_reloader = engine.image_reloader();
-        let (multi, title) = (self.multi, self.title.clone());
+        let (multi, panels, title) = (self.multi, self.panels, self.title.clone());
+        let namespace = self.namespace.clone();
 
         engine.start_logic_from_view(move |_arena| {
             let (mut interp, tree, current_views) = if initial_views.is_empty() {
@@ -1209,6 +1227,7 @@ impl App {
                 if multi {
                     interp.enable_surfaces();
                     interp.set_default_window_title(&title);
+                    interp.set_default_namespace(&namespace);
                 }
                 (interp, vec![], vec![])
             } else {
@@ -1223,6 +1242,7 @@ impl App {
                 if multi {
                     interp.enable_surfaces();
                     interp.set_default_window_title(&title);
+                    interp.set_default_namespace(&namespace);
                 }
                 let known: Vec<&str> = initial_views.iter().map(|v| v.name.as_str()).collect();
                 let tree = interp.lower_view(root_of(&initial_views), &known);
@@ -1272,6 +1292,7 @@ impl App {
                 overlay_was_up: initial_errors_present,
                 pending_deep_link: deep_link,
                 multi,
+                panels,
                 focused: None,
                 overlay_target: None,
             })
@@ -1728,6 +1749,24 @@ impl PlatformHost for App {
         if let Some(e) = self.engine.as_mut() {
             e.drop_surface(surface);
         }
+    }
+
+    fn on_screens(&mut self, screens: Vec<byard_core::ScreenInfo>) {
+        if let Some(engine) = &self.engine {
+            engine.push_input(byard_core::platform::InputEvent {
+                surface: byard_core::SurfaceId::MAIN,
+                kind: byard_core::platform::EventKind::Screens,
+                pos: (0.0, 0.0),
+                delta: (0.0, 0.0),
+                payload: Some(byard_core::InputPayload::Screens(screens)),
+                time_ms: now_ms(),
+                mods: self.mods,
+            });
+        }
+    }
+
+    fn take_presented(&mut self) -> Option<Vec<byard_core::SurfaceId>> {
+        self.engine.as_mut().map(Engine::take_presented)
     }
 
     fn frame_version(&self, surface: byard_core::SurfaceId) -> Option<u64> {

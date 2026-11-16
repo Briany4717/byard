@@ -29,6 +29,7 @@ struct Shell {
     regions: Vec<(SurfaceId, InputRegion)>,
     screen: (i32, i32),
     t: u64,
+    views: Vec<byard_compiler::parser::ast::ViewDecl>,
 }
 
 impl Shell {
@@ -57,9 +58,26 @@ impl Shell {
             regions: Vec::new(),
             screen: (1280, 800),
             t: 0,
+            views: parsed.views,
         };
         s.settle();
         s
+    }
+
+    /// Hot-reloads the program to `src`, as `byard dev` does.
+    fn reload(&mut self, src: &str) {
+        let parsed = parse(src);
+        assert!(parsed.errors.is_empty(), "{:?}", parsed.errors);
+        if let Some(tree) = byard_compiler::interp::reload::apply_program(
+            &mut self.interp,
+            &self.views,
+            &parsed.views,
+        ) {
+            self.tree = tree;
+        }
+        self.views = parsed.views;
+        self.changes.clear();
+        self.settle();
     }
 
     fn step(&mut self, events: &[InputEvent]) {
@@ -785,4 +803,97 @@ fn a_program_with_no_screens_set_sees_an_empty_list() {
         Vec::new(),
     );
     assert_eq!(s.interp.surface_ids().len(), 0);
+}
+
+#[test]
+fn a_size_on_a_stretched_axis_is_a_warning() {
+    let errors =
+        errors_of(r#"View Main() { Panel #[edge: top, width: 300, height: 40] { Text("x") } }"#);
+    assert_eq!(kinds(&errors), ["SizeOnStretchedAxis"], "{errors:?}");
+    assert!(errors[0].is_warning());
+    assert!(errors[0].headline().contains("anchored to left and right"));
+    let both = errors_of(
+        r#"View Main() { Panel #[anchor: (top, bottom, left), height: 5, width: 5] { Text("x") } }"#,
+    );
+    assert_eq!(kinds(&both), ["SizeOnStretchedAxis"], "{both:?}");
+    let side =
+        errors_of(r#"View Main() { Panel #[edge: left, width: 64, height: 5] { Text("x") } }"#);
+    assert_eq!(kinds(&side), ["SizeOnStretchedAxis"], "{side:?}");
+    for ok in [
+        r#"Panel #[edge: top, height: 40] { Text("x") }"#,
+        r#"Panel #[anchor: (top, right), width: 300, height: 40] { Text("x") }"#,
+        r#"Panel #[width: 300, height: 40] { Text("x") }"#,
+    ] {
+        let errors = errors_of(&format!("View Main() {{ {ok} }}"));
+        assert!(errors.is_empty(), "{ok}: {errors:?}");
+    }
+}
+
+// ── hot reload ──────────────────────────────────────────────────────────
+
+fn reload_src(height: u32, namespace: &str, label: &str) -> String {
+    format!(
+        r#"
+View Main() {{
+    Panel #[anchor: (top, left), width: 200, height: {height}, namespace: "{namespace}"] {{
+        Text("{label}")
+    }}
+}}
+"#
+    )
+}
+
+#[test]
+fn a_reload_that_edits_a_panels_content_keeps_its_surface() {
+    let mut s = Shell::new(&reload_src(30, "bar", "before"));
+    let id = s.panel("bar");
+    s.reload(&reload_src(30, "bar", "after"));
+    assert_eq!(s.panel("bar"), id);
+    assert_eq!(s.texts("bar"), ["after"]);
+    assert!(
+        !s.changes.iter().any(|c| matches!(
+            c,
+            SurfaceChange::Create { .. } | SurfaceChange::Destroy { .. }
+        )),
+        "{:?}",
+        s.changes
+    );
+}
+
+#[test]
+fn a_reload_that_changes_a_panels_height_is_a_configure() {
+    let mut s = Shell::new(&reload_src(30, "bar", "x"));
+    let id = s.panel("bar");
+    s.reload(&reload_src(50, "bar", "x"));
+    assert_eq!(s.panel("bar"), id);
+    assert_eq!(s.size("bar"), (200.0, 50.0));
+    let configures: Vec<_> = s
+        .changes
+        .iter()
+        .filter_map(|c| match c {
+            SurfaceChange::Configure { id: i, spec } if *i == id => Some(spec.size),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(configures, [(200.0, 50.0)], "{:?}", s.changes);
+}
+
+#[test]
+fn a_reload_that_changes_a_panels_namespace_makes_it_again() {
+    let mut s = Shell::new(&reload_src(30, "bar", "x"));
+    let id = s.panel("bar");
+    s.reload(&reload_src(30, "dock", "x"));
+    let new = s.panel("dock");
+    assert_ne!(new, id);
+    assert!(
+        s.changes
+            .iter()
+            .any(|c| matches!(c, SurfaceChange::Destroy { id: i } if *i == id))
+    );
+    assert!(
+        s.changes
+            .iter()
+            .any(|c| matches!(c, SurfaceChange::Create { id: i, .. } if *i == new))
+    );
+    assert_eq!(s.interp.surface_ids(), vec![new]);
 }

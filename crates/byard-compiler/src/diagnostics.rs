@@ -1376,6 +1376,15 @@ pub enum CompileError {
         /// Source range of the attribute value.
         span: Span,
     },
+    /// A panel's `width` or `height` on an axis its anchors stretch
+    /// (RFC-0068 §3): the compositor sizes it, so the value does nothing. A
+    /// warning.
+    SizeOnStretchedAxis {
+        /// Source range of the attribute value.
+        span: Span,
+        /// `width` or `height`.
+        attr: String,
+    },
     /// A `TextField` or a `key_down` handler inside a panel that never has the
     /// keyboard (RFC-0068 §3). A warning.
     PanelTakesNoKeys {
@@ -1584,6 +1593,7 @@ impl CompileError {
             | Self::OpeningSizeIsStatic { span, .. }
             | Self::SurfaceForNeedsKey { span, .. }
             | Self::ExclusiveNeedsEdge { span, .. }
+            | Self::SizeOnStretchedAxis { span, .. }
             | Self::PanelTakesNoKeys { span, .. }
             | Self::RecreatesSurface { span, .. }
             | Self::DuplicateForKey { span, .. }
@@ -1736,6 +1746,7 @@ impl CompileError {
             | Self::OpeningSizeIsStatic { span, .. }
             | Self::SurfaceForNeedsKey { span, .. }
             | Self::ExclusiveNeedsEdge { span, .. }
+            | Self::SizeOnStretchedAxis { span, .. }
             | Self::PanelTakesNoKeys { span, .. }
             | Self::RecreatesSurface { span, .. }
             | Self::DuplicateForKey { span, .. }
@@ -1891,6 +1902,7 @@ impl CompileError {
             Self::OpeningSizeIsStatic { .. } => "OpeningSizeIsStatic",
             Self::SurfaceForNeedsKey { .. } => "SurfaceForNeedsKey",
             Self::ExclusiveNeedsEdge { .. } => "ExclusiveNeedsEdge",
+            Self::SizeOnStretchedAxis { .. } => "SizeOnStretchedAxis",
             Self::PanelTakesNoKeys { .. } => "PanelTakesNoKeys",
             Self::RecreatesSurface { .. } => "RecreatesSurface",
             Self::EventHasNoValue { .. } => "EventHasNoValue",
@@ -2024,6 +2036,7 @@ impl CompileError {
                 | Self::OpeningSizeIsStatic { .. }
                 | Self::SurfaceForNeedsKey { .. }
                 | Self::PanelTakesNoKeys { .. }
+                | Self::SizeOnStretchedAxis { .. }
                 | Self::RecreatesSurface { .. }
         )
     }
@@ -2164,6 +2177,18 @@ impl CompileError {
                  it. Write `edge: top` (or `bottom`, `left`, `right`), or give a number of \
                  pixels with `anchor`"
                     .to_string()
+            }
+            Self::SizeOnStretchedAxis { attr, .. } => {
+                let (ends, edges) = if attr == "width" {
+                    ("left and right", "`left` or `right`")
+                } else {
+                    ("top and bottom", "`top` or `bottom`")
+                };
+                format!(
+                    "this panel is anchored to {ends}, so it spans that axis and the compositor \
+                     sets its {attr}: the value does nothing. Drop it, or anchor fewer edges \
+                     (without {edges})"
+                )
             }
             Self::PanelTakesNoKeys { what, .. } => format!(
                 "a `{what}` in a panel that has `keyboard: none` (the default) can never receive \

@@ -315,6 +315,35 @@ impl<'a> Walk<'a, '_> {
                 }
             }
         }
+        // The axes the anchors stretch, when they are written as keywords.
+        let anchors = match (word("edge").as_deref(), prop("anchor")) {
+            (Some("top" | "bottom"), _) => Some((true, false)),
+            (Some("left" | "right"), _) => Some((false, true)),
+            (None, Some(Expr::Tuple(args, _))) => {
+                let words: Vec<&str> = args
+                    .iter()
+                    .filter_map(|a| match &a.value {
+                        Expr::Ident(w, _) => Some(w.as_str()),
+                        _ => None,
+                    })
+                    .collect();
+                Some((
+                    words.contains(&"left") && words.contains(&"right"),
+                    words.contains(&"top") && words.contains(&"bottom"),
+                ))
+            }
+            _ => None,
+        };
+        if let Some((across, down)) = anchors {
+            for (attr, stretched) in [("width", across), ("height", down)] {
+                if let (true, Some(value)) = (stretched, prop(attr)) {
+                    self.errors.push(CompileError::SizeOnStretchedAxis {
+                        span: value.span(),
+                        attr: attr.to_string(),
+                    });
+                }
+            }
+        }
         if matches!(word("keyboard").as_deref(), None | Some("none")) {
             let mut seen = Vec::new();
             self.takes_keys(&el.children, &mut seen, &mut Vec::new());

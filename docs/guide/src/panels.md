@@ -58,6 +58,9 @@ and otherwise the size of its content laid out with that axis unbounded. When th
 changes size (a clock gains a digit), the panel asks for the new size and is drawn at
 it, so an island is always as large as what is in it.
 
+A `width` on a panel anchored to left and right, or a `height` on one anchored to top and
+bottom, does nothing, and the checker says so (`SizeOnStretchedAxis`).
+
 **`exclusive`.** `true` reserves the panel's thickness along its edge, so maximised
 windows start below the bar; a number reserves that many pixels; `false` lets windows go
 under it; `ignore` covers what other panels reserved too, as a wallpaper does. A bar on

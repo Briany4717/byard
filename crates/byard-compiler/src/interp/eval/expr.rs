@@ -771,17 +771,7 @@ impl Interpreter {
                     });
                     Box::new(move |ctx| {
                         let val = rhs(ctx);
-                        let new = match op {
-                            AssignOp::Assign => val,
-                            AssignOp::Add => {
-                                let cur = ctx.peek_signal(sig).as_int().unwrap_or(0);
-                                Value::Int(cur + val.as_int().unwrap_or(0))
-                            }
-                            AssignOp::Sub => {
-                                let cur = ctx.peek_signal(sig).as_int().unwrap_or(0);
-                                Value::Int(cur - val.as_int().unwrap_or(0))
-                            }
-                        };
+                        let new = assigned(op, &ctx.peek_signal(sig), val);
                         if let Some((ty, records, diagnostics, told, var, span)) = &shape {
                             let at = (span.start, span.end);
                             if !told.borrow().contains(&at) {
@@ -2110,17 +2100,7 @@ impl Interpreter {
             } => {
                 let sig = self.resolve_var(target, *span)?;
                 let rhs = self.eval_pure(value);
-                let new = match op {
-                    AssignOp::Assign => rhs,
-                    AssignOp::Add => {
-                        let cur = self.ctx.peek_signal(sig).as_int().unwrap_or(0);
-                        Value::Int(cur + rhs.as_int().unwrap_or(0))
-                    }
-                    AssignOp::Sub => {
-                        let cur = self.ctx.peek_signal(sig).as_int().unwrap_or(0);
-                        Value::Int(cur - rhs.as_int().unwrap_or(0))
-                    }
-                };
+                let new = assigned(*op, &self.ctx.peek_signal(sig), rhs);
                 self.ctx.write_signal(sig, new);
                 Ok(Value::Unit)
             }
@@ -2272,5 +2252,38 @@ fn clock_calls(expr: &Expr, params: &[Symbol], out: &mut Vec<(Span, String)>) {
     }
     for child in super::measure::children(expr) {
         clock_calls(child, params, out);
+    }
+}
+
+/// What a `var` holding `cur` holds after `var op= value`. A `Float` keeps
+/// being one: an `Int` written to it is converted, and `+=` and `-=` add as
+/// `Float`s when either side is.
+fn assigned(op: AssignOp, cur: &Value, value: Value) -> Value {
+    #[allow(clippy::cast_precision_loss)]
+    let float = |v: &Value| match v {
+        Value::Float(f) => Some(*f),
+        Value::Int(i) => Some(*i as f64),
+        _ => None,
+    };
+    match op {
+        AssignOp::Assign => match (cur, value) {
+            #[allow(clippy::cast_precision_loss)]
+            (Value::Float(_), Value::Int(i)) => Value::Float(i as f64),
+            (_, value) => value,
+        },
+        AssignOp::Add | AssignOp::Sub => {
+            let sign = if op == AssignOp::Add { 1.0 } else { -1.0 };
+            if matches!(cur, Value::Float(_)) || matches!(value, Value::Float(_)) {
+                return Value::Float(
+                    float(cur).unwrap_or(0.0) + sign * float(&value).unwrap_or(0.0),
+                );
+            }
+            let (cur, value) = (cur.as_int().unwrap_or(0), value.as_int().unwrap_or(0));
+            Value::Int(if op == AssignOp::Add {
+                cur + value
+            } else {
+                cur - value
+            })
+        }
     }
 }

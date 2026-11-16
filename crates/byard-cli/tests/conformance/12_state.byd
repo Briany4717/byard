@@ -19,21 +19,18 @@ var names: List<Str> = []
 Text("{price} {names.len}")
 
 //# case: var-int-literal-annotated-float-divides-as-a-float
-//# gap: `var w: Float = 3` holds an `Int`, so `w / 2` truncates
 //# fragment
 //# text: 1.5
 var w: Float = 3
 Text("{w / 2}")
 
 //# case: var-annotation-of-the-wrong-type
-//# gap: an initializer is not checked against the annotation
 //# fragment
 //# error: TypeMismatch
 var n: Int = "a"
 Text("{n}")
 
 //# case: var-list-annotation-of-the-wrong-type
-//# gap: an initializer is not checked against the annotation
 //# fragment
 //# error: TypeMismatch
 var xs: List<Int> = ["a"]
@@ -54,7 +51,6 @@ var m: Map<Str, Int> = {}
 Text("x")
 
 //# case: var-assigned-another-type
-//# gap: an assignment is not checked against the variable's type
 //# fragment
 //# error: TypeMismatch
 var n = 0
@@ -62,7 +58,6 @@ on mount => { n = "text" }
 Text("{n}")
 
 //# case: var-plus-equals-another-type
-//# gap: `n += "a"` on an `Int` is accepted
 //# fragment
 //# error: TypeMismatch
 var n = 0
@@ -70,7 +65,6 @@ on mount => { n += "a" }
 Text("{n}")
 
 //# case: var-increment-on-text
-//# gap: `s++` on a `Str` is accepted
 //# fragment
 //# error: TypeMismatch
 var s = "a"
@@ -169,7 +163,6 @@ let n: Int = 3
 Text("{n}")
 
 //# case: let-annotation-of-the-wrong-type
-//# gap: a `let` in a view is not checked against its annotation, though a constant is
 //# fragment
 //# error: TypeMismatch
 let z: Str = 5
@@ -343,3 +336,79 @@ var live = true
 after 150ms => { live = false }
 when live { every 100ms => { n++ } }
 Text("{n}")
+
+//# case: float-var-assigned-an-int-stays-a-float
+//# fragment
+//# text: 1.5
+var w = 0.5
+on mount => { w = 3 }
+Text("{w / 2}")
+
+//# case: list-of-floats-written-with-ints-holds-floats
+//# fragment
+//# text: 0.5
+var xs: List<Float> = [1, 2]
+Text("{xs[0] / 2}")
+
+//# case: float-var-plus-equals-an-int-adds-as-a-float
+//# fragment
+//# text: 1.5
+var x: Float = 0.5
+on mount => { x += 1 }
+Text("{x}")
+
+//# case: int-var-plus-equals-a-float-is-an-error
+//# fragment
+//# error: TypeMismatch
+//# diagnostics: 1
+var n = 0
+on mount => { n += 0.5 }
+Text("{n}")
+
+//# case: text-var-plus-equals-is-an-error
+//# fragment
+//# error: TypeMismatch
+//# diagnostics: 1
+var s = "a"
+on mount => { s += "b" }
+Text(s)
+
+//# case: one-list-item-of-the-wrong-type-is-one-error
+//# fragment
+//# error: TypeMismatch
+//# diagnostics: 1
+var xs: List<Int> = [1, "a", 3]
+Text("{xs.len}")
+
+//# case: let-in-an-action-of-the-wrong-type
+//# fragment
+//# error: TypeMismatch
+//# diagnostics: 1
+var n = 0
+on mount => {
+    let z: Int = "a"
+    n = 1
+}
+Text("{n}")
+
+//# case: binding-assigned-another-type
+//# error: TypeMismatch
+//# diagnostics: 1
+View Inner(bind n: Int) { Button("x") => n = "a" }
+View Main() {
+    var n = 0
+    Inner(bind: n)
+    Text("{n}")
+}
+
+//# case: int-var-assigned-an-int-and-a-float-var-an-int-are-fine
+//# fragment
+//# text: 3 | 2
+var n = 1
+var f = 0.5
+on mount => {
+    n = 3
+    f = 2
+}
+Text("{n}")
+Text("{f}")

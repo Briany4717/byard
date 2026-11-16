@@ -19,8 +19,8 @@ use std::collections::{HashMap, HashSet};
 use crate::diagnostics::{BindTarget, BindingProblem, CompileError, Span};
 use crate::interp::style::check_static;
 use crate::parser::ast::{
-    AttrKind, BinOp, ConstDecl, EnumDecl, Expr, FnDecl, Member, Param, StrPart, Type, UnOp,
-    ViewDecl,
+    AssignOp, AttrKind, BinOp, ConstDecl, EnumDecl, Expr, FnDecl, Member, Param, PostfixOp,
+    StrPart, Type, UnOp, ViewDecl,
 };
 use crate::symbol::Symbol;
 
@@ -1728,12 +1728,74 @@ impl Checker<'_> {
             // Still walk the initializer for operator/collection diagnostics,
             // but the annotation, not inference, decides the binding type, so
             // an empty/heterogeneous array never trips `CannotInfer` here.
-            self.value(init);
-            return self.resolve_type(ty);
+            let expected = self.resolve_type(ty);
+            match (init, &expected) {
+                // A list is judged item by item, so the one that does not fit
+                // is the one the error points at.
+                (Expr::Array(elems, _), Ty::List(item)) if judged(&expected) => {
+                    for elem in elems {
+                        let found = self.value(elem);
+                        self.must_fit(item, &found, elem.span());
+                    }
+                }
+                _ => {
+                    let found = self.value(init);
+                    self.must_fit(&expected, &found, init.span());
+                }
+            }
+            return expected;
         }
         match init {
             Expr::Array(elems, _) => self.infer_array(elems, span),
             other => self.value(other),
+        }
+    }
+
+    /// Reports a value `found` where the type `expected` was written for it:
+    /// the first value of a `var` or `let`, one assigned to a `var`.
+    fn must_fit(&mut self, expected: &Ty, found: &Ty, span: Span) {
+        if !fits(expected, found) {
+            self.errors.push(CompileError::TypeMismatch {
+                span,
+                op: "=".to_string(),
+                lhs_ty: ty_name(expected),
+                rhs_ty: ty_name(found),
+            });
+        }
+    }
+
+    /// The type of the `var` (or binding) an assignment writes, when the
+    /// target is a name the checker knows the type of.
+    fn written_ty(&self, target: &Expr) -> Option<Ty> {
+        let Expr::Ident(name, _) = target else {
+            return None;
+        };
+        matches!(self.origins.get(name), Some(Origin::Var | Origin::Param))
+            .then(|| self.env.get(name).cloned())
+            .flatten()
+            .filter(judged)
+    }
+
+    /// `x = e`, `x += e`, `x -= e` against the type of `x`: what is written
+    /// has to be a value `x` can hold. `+=` and `-=` are for numbers, and a
+    /// `Float` is not kept in an `Int`.
+    fn check_assignment(&mut self, var: &Ty, op: AssignOp, found: &Ty, span: Span) {
+        if !is_concrete(found) {
+            return;
+        }
+        match op {
+            AssignOp::Assign => self.must_fit(var, found, span),
+            AssignOp::Add | AssignOp::Sub => {
+                let number = |t: &Ty| matches!(t, Ty::Int | Ty::Float);
+                if !(number(var) && number(found)) || (*var == Ty::Int && *found == Ty::Float) {
+                    self.errors.push(CompileError::TypeMismatch {
+                        span,
+                        op: if op == AssignOp::Add { "+=" } else { "-=" }.to_string(),
+                        lhs_ty: ty_name(var),
+                        rhs_ty: ty_name(found),
+                    });
+                }
+            }
         }
     }
 
@@ -2002,13 +2064,28 @@ impl Checker<'_> {
                 self.bind_from(name.clone(), bound, Origin::Let);
                 Ty::Unknown
             }
-            Expr::Assign { target, value, .. } => {
+            Expr::Assign {
+                target, op, value, ..
+            } => {
                 self.value(target);
-                self.value(value);
+                let found = self.value(value);
+                if let Some(var) = self.written_ty(target) {
+                    self.check_assignment(&var, *op, &found, value.span());
+                }
                 Ty::Unknown
             }
-            Expr::Postfix { target, .. } => {
+            Expr::Postfix { target, op, span } => {
                 self.value(target);
+                if let Some(var) = self.written_ty(target) {
+                    if !matches!(var, Ty::Int | Ty::Float) {
+                        self.errors.push(CompileError::TypeMismatch {
+                            span: *span,
+                            op: if *op == PostfixOp::Inc { "++" } else { "--" }.to_string(),
+                            lhs_ty: ty_name(&var),
+                            rhs_ty: ty_name(&var),
+                        });
+                    }
+                }
                 Ty::Unknown
             }
             Expr::ControllerCall { call, ok, err, .. } => {
@@ -2542,6 +2619,23 @@ fn same_ty(a: &Ty, b: &Ty) -> bool {
         (Ty::List(x), Ty::List(y)) => same_ty(x, y),
         _ => a == b,
     }
+}
+
+/// Whether `t` is a type the checker can judge a value against: the scalars,
+/// and lists of them. A record, an enum, a context or an optional waits for
+/// the step of the roadmap that checks it, and is let through until then.
+fn judged(t: &Ty) -> bool {
+    match t {
+        Ty::Int | Ty::Float | Ty::Str | Ty::Bool => true,
+        Ty::List(item) => judged(item) || **item == Ty::Unknown,
+        _ => false,
+    }
+}
+
+/// Whether a value of type `found` may be where `expected` was written, as far
+/// as the checker can tell.
+fn fits(expected: &Ty, found: &Ty) -> bool {
+    !judged(expected) || !is_concrete(found) || assignable(expected, found)
 }
 
 fn assignable(expected: &Ty, found: &Ty) -> bool {

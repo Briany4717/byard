@@ -15,7 +15,7 @@ So every step below ends the same way: **its cases lose their `gap:` line, the r
 loses its note, and this file loses the step.** When this file is empty and the suite has no
 gap, the language is where this document wanted it.
 
-As written, the suite has 534 cases: 431 hold and 103 are gaps.
+As written, the suite has 543 cases: 447 hold and 96 are gaps.
 
 ```sh
 cargo test -p byard-cli --test it conformance -- --nocapture
@@ -36,7 +36,7 @@ prints every open gap with its reason.
   (`cargo test -p byard-cli`). A step that makes the checker stricter will find real
   mistakes in them; fix those in the same pull request.
 - Ship anything that rejects programs that used to pass as a **warning for one release**,
-  then as an error. From step 3 on, behind an edition (step 2).
+  then as an error. From step 3 on, behind an edition (step 2), except where a step says otherwise: step 3 is an error in every edition, because what it refuses never meant anything.
 
 **Avoid**
 
@@ -86,19 +86,6 @@ manifest. The two editions differ by nothing yet. What is left is the first rewr
 `Edition::migrations` in `byard-compiler/src/edition.rs`, and the case that proves `byard fix`
 keeps a program's meaning. Until then `byard new` writes no edition, and a project without one
 stays on `2026`.
-
-### 3. Assignments and first values
-
-*Cases:* `var-annotation-of-the-wrong-type`, `var-list-annotation-of-the-wrong-type`,
-`let-annotation-of-the-wrong-type`, `var-assigned-another-type`,
-`var-plus-equals-another-type`, `var-increment-on-text`,
-`var-int-literal-annotated-float-divides-as-a-float`.
-
-- The first value of a `var`, `let` or constant is checked against its written type. This
-  already exists for constants (`ConstantTypeMismatch`); use the one path for all three.
-- `x = e`, `x += e`, `x -= e`, `x++` and `x--` are checked against the type of `x`.
-- An `Int` where a `Float` is wanted is *converted*, not merely allowed: `var w: Float = 3`
-  holds `3.0`, so `w / 2` is `1.5`. The same conversion is step 5's for arguments.
 
 ### 4. Type names
 

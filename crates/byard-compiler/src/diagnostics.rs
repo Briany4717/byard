@@ -2818,7 +2818,16 @@ impl CompileError {
             ),
             Self::TypeMismatch {
                 op, lhs_ty, rhs_ty, ..
-            } => format!("operator `{op}` cannot compare `{lhs_ty}` with `{rhs_ty}`"),
+            } => match op.as_str() {
+                "=" => format!(
+                    "a `{rhs_ty}` is not a `{lhs_ty}`: write a `{lhs_ty}` here, or change the type that was written"
+                ),
+                "+=" | "-=" => format!(
+                    "`{op}` takes a number and keeps it in a number, and a `{rhs_ty}` does not fit a `{lhs_ty}`"
+                ),
+                "++" | "--" => format!("`{op}` needs a number, and this is a `{lhs_ty}`"),
+                _ => format!("operator `{op}` cannot compare `{lhs_ty}` with `{rhs_ty}`"),
+            },
             Self::PredicateNotBool { .. } => "this predicate must evaluate to `Bool`".to_string(),
             Self::EffectInPureLambda { .. } => {
                 "a `map`/`filter` lambda must be a pure expression, no assignment or action \

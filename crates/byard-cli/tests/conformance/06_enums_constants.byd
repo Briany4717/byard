@@ -1,0 +1,206 @@
+// Enums, top-level constants, top-level functions, `private`.
+
+//# case: enum-case-and-text
+//# text: medium true false
+enum Size { small, medium, large }
+View Main() {
+    var size = Size.medium
+    Text("{size} {size == Size.medium} {size == Size.large}")
+}
+
+//# case: enum-cases-on-lines
+//# text: b
+enum E {
+    a
+    b
+}
+View Main() { Text("{E.b}") }
+
+//# case: enum-unknown-case
+//# error: UnknownEnumCase
+enum V { filled, tonal }
+View Main() { Text("{V.tonl}") }
+
+//# case: enum-compared-with-text
+//# error: TypeMismatch
+enum V { filled, tonal }
+View Main() { Text("{V.tonal == "tonal"}") }
+
+//# case: enum-compared-with-another-enum
+//# error: TypeMismatch
+enum A { x }
+enum B { x }
+View Main() { Text("{A.x == B.x}") }
+
+//# case: enum-duplicate-case
+//# error: DuplicateEnumCase
+enum A { x, x }
+View Main() { Text("a") }
+
+//# case: enum-duplicate
+//# error: DuplicateEnum
+enum A { x }
+enum A { y }
+View Main() { Text("a") }
+
+//# case: enum-empty
+//# gap: an enum with no cases is accepted
+//# error: UnexpectedToken
+enum A { }
+View Main() { Text("a") }
+
+//# case: enum-parameter-and-shorthand
+//# text: tonal | filled | outlined
+enum Variant { filled, tonal, outlined }
+View Chip(variant: Variant = .filled) { Text("{variant}") }
+View Main() {
+    Chip(variant: .tonal)
+    Chip()
+    Chip(Variant.outlined)
+}
+
+//# case: enum-shorthand-outside-a-parameter
+//# error: EnumShorthand
+enum Variant { filled, tonal }
+View Main() {
+    var v = Variant.filled
+    Text("{v == .tonal}")
+}
+
+//# case: enum-ordering-is-not-defined
+//# error: TypeMismatch
+enum S { a, b }
+View Main() { Text("{S.a < S.b}") }
+
+//# case: enum-as-for-key
+//# text: a | b
+enum S { a, b }
+View Main() {
+    for s in [S.a, S.b] key s { Text("{s}") }
+}
+
+//# case: text-where-an-enum-is-wanted
+//# error: ArgumentTypeMismatch
+enum Variant { filled, tonal }
+View Chip(variant: Variant) { Text("{variant}") }
+View Main() { Chip(variant: "tonal") }
+
+//# case: constant
+//# text: 8 16 Settings
+let gap = 8
+let pad = gap * 2
+let title: Str = "Settings"
+View Main() { Text("{gap} {pad} {title}") }
+
+//# case: constant-order-does-not-matter
+//# text: 16
+let pad = gap * 2
+let gap = 8
+View Main() { Text("{pad}") }
+
+//# case: constant-cycle
+//# error: ConstantCycle
+//# error: UnknownName
+let a = b
+let b = a
+View Main() { Text("x") }
+
+//# case: constant-self-cycle-is-one-error
+//# gap: a cycle is reported twice, as `ConstantCycle` and as `UnknownName`
+//# error: ConstantCycle
+let a = a + 1
+View Main() { Text("x") }
+
+//# case: constant-type-mismatch
+//# error: ConstantTypeMismatch
+let title: Str = 5
+View Main() { Text(title) }
+
+//# case: constant-duplicate
+//# error: DuplicateConstant
+let a = 1
+let a = 2
+View Main() { Text("{a}") }
+
+//# case: constant-shadowed-by-a-var
+//# text: 2
+let a = 1
+View Main() {
+    var a = 2
+    Text("{a}")
+}
+
+//# case: constant-calls-a-function
+//# text: 6
+fn twice(x: Int) -> Int => x * 2
+let six = twice(3)
+View Main() { Text("{six}") }
+
+//# case: constant-cannot-read-the-clock
+//# error: ImpureConstant
+let started = now()
+View Main() { Text(started) }
+
+//# case: top-level-var-is-not-allowed
+//# error: UnexpectedToken
+var count = 0
+View Main() { Text("{count}") }
+
+//# case: top-level-function
+//# text: 0 5 10
+fn clamp(n: Int, lo: Int, hi: Int) -> Int => n < lo ? lo : n > hi ? hi : n
+View Main() { Text("{clamp(-3, 0, 10)} {clamp(5, 0, 10)} {clamp(99, 0, 10)}") }
+
+//# case: top-level-function-is-pure
+//# error: ImpureFunction
+//# error: UnknownName
+fn double() -> Int => count * 2
+View Main() {
+    var count = 5
+    Text("{double()}")
+}
+
+//# case: top-level-function-reads-a-constant
+//# text: 9
+let gap = 8
+fn bump(x: Int) -> Int => x + gap
+View Main() { Text("{bump(1)}") }
+
+//# case: function-recursion
+//# error: RecursiveFunction
+fn fact(n: Int) -> Int => n <= 1 ? 1 : n * fact(n - 1)
+View Main() { Text("{fact(5)}") }
+
+//# case: function-mutual-recursion
+//# error: RecursiveFunction
+fn a(n: Int) -> Int => b(n)
+fn b(n: Int) -> Int => a(n)
+View Main() { Text("{a(1)}") }
+
+//# case: function-duplicate
+//# error: DuplicateFunction
+fn f(x: Int) -> Int => x
+fn f(x: Int) -> Int => x + 1
+View Main() { Text("{f(1)}") }
+
+//# case: function-missing-annotations
+//# error: MissingAnnotation
+fn f(x) => x
+View Main() { Text("{f(1)}") }
+
+//# case: function-missing-return-type
+//# error: MissingAnnotation
+fn f(x: Int) => x
+View Main() { Text("{f(1)}") }
+
+//# case: private-in-an-app-changes-nothing
+//# text: 3 x
+private let k = 3
+private fn id(s: Str) -> Str => s
+private View Hint() { Text("{k} {id("x")}") }
+View Main() { Hint() }
+
+//# case: text-used-as-a-type
+//# error: TextUsedAsType
+View Card(label: Text) { Text("x") }
+View Main() { Card("a") }

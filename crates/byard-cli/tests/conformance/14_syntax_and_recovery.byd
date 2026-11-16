@@ -1,0 +1,234 @@
+// Malformed programs: each is one mistake and should be one error, and none
+// may panic the parser or the checker.
+
+//# case: view-without-a-body
+//# error: UnexpectedToken
+View Main()
+
+//# case: view-without-parentheses
+//# error: UnexpectedToken
+View Main { Text("a") }
+
+//# case: unclosed-view-brace
+//# error: UnexpectedToken
+View Main() { Text("a")
+
+//# case: extra-closing-brace
+//# error: UnexpectedToken
+View Main() { Text("a") } }
+
+//# case: stray-token-at-the-top
+//# error: UnexpectedToken
+hello
+View Main() { Text("a") }
+
+//# case: use-after-a-view
+//# error: ImportAfterView
+//# error: UnknownPackage
+View Main() { Text("a") }
+use kit
+
+//# case: use-of-an-unknown-package
+//# error: UnknownPackage
+use kit
+View Main() { Text("a") }
+
+//# case: var-without-a-value
+//# fragment
+//# error: UnexpectedToken
+var n
+Text("a")
+
+//# case: var-without-a-name
+//# fragment
+//# error: UnexpectedToken
+var = 5
+Text("a")
+
+//# case: let-without-a-value
+//# fragment
+//# error: UnexpectedToken
+let n: Int
+Text("a")
+
+//# case: fn-without-a-body
+//# error: UnexpectedToken
+fn f(x: Int) -> Int
+View Main() { Text("a") }
+
+//# case: fn-with-a-brace-body-and-no-arrow
+//# error: UnexpectedToken
+fn f(x: Int) -> Int { x }
+View Main() { Text("a") }
+
+//# case: type-without-braces
+//# gap: one mistake is eight errors, one of them `KeywordAsName` for the next `View`
+//# error: UnexpectedToken
+type P = Int
+View Main() { Text("a") }
+
+//# case: enum-with-a-value
+//# error: UnexpectedToken
+enum E { a = 1 }
+View Main() { Text("a") }
+
+//# case: binary-operator-without-a-right-side
+//# fragment
+//# error: UnexpectedToken
+Text("{1 + }")
+
+//# case: ternary-without-an-else
+//# fragment
+//# error: UnexpectedToken
+Text("{true ? 1}")
+
+//# case: call-unclosed
+//# fragment
+//# error: UnexpectedToken
+Text("{[1].map(x => x}")
+
+//# case: list-unclosed
+//# fragment
+//# error: UnexpectedToken
+let xs = [1, 2
+Text("a")
+
+//# case: record-unclosed
+//# fragment
+//# error: UnexpectedToken
+let r = { a: 1
+Text("a")
+
+//# case: record-field-without-a-value
+//# fragment
+//# error: UnexpectedToken
+let r = { a: }
+Text("a")
+
+//# case: for-without-in
+//# fragment
+//# error: UnexpectedToken
+for x [1] { Text("a") }
+
+//# case: for-without-a-body
+//# fragment
+//# error: UnexpectedToken
+for x in [1]
+Text("a")
+
+//# case: when-without-a-condition
+//# fragment
+//# error: UnexpectedToken
+when { Text("a") }
+
+//# case: when-without-a-body
+//# fragment
+//# error: UnexpectedToken
+when true
+Text("a")
+
+//# case: lambda-without-a-body
+//# gap: the next line is taken as the body, so the error is `UnknownName` for `Text`
+//# fragment
+//# error: UnexpectedToken
+let f = (x: Int) =>
+Text("a")
+
+//# case: double-operator
+//# fragment
+//# error: UnexpectedToken
+Text("{1 * / 2}")
+
+//# case: one-mistake-is-one-error-in-a-call
+//# gap: one unknown word in an expression is reported several times
+//# fragment
+//# error: UnexpectedToken
+//# diagnostics: 1
+Text(match 1 { })
+
+//# case: parameter-without-a-name
+//# error: UnexpectedToken
+View Card(: Str) { Text("a") }
+View Main() { Card("a") }
+
+//# case: parameter-list-unclosed
+//# error: UnexpectedToken
+View Card(a: Str { Text("a") }
+View Main() { Card("a") }
+
+//# case: generic-type-unclosed
+//# fragment
+//# error: UnexpectedToken
+var xs: List<Int = []
+Text("a")
+
+//# case: only-a-comment
+//# gap: a file with no view checks clean and draws nothing; it should say there is nothing to run
+//# error: NoType
+// nothing here
+
+//# case: only-whitespace-in-a-view
+//# text: end
+View Blank() {
+
+}
+View Main() {
+    Blank()
+    Text("end")
+}
+
+//# case: crlf-line-endings
+//# fragment
+//# text: a | b
+Text("a")
+Text("b")
+
+//# case: tabs-as-indentation
+//# fragment
+//# text: a
+	Column {
+		Text("a")
+	}
+
+//# case: statements-on-one-line
+//# fragment
+//# text: 3 | a
+var n = 1 let m = n + 2 Text("{m}") Text("a")
+
+//# case: deeply-nested-elements-do-not-panic
+//# fragment
+//# text: deep
+Box { Box { Box { Box { Box { Box { Box { Box { Box { Box { Box { Box { Box { Box { Box { Box { Box { Box { Box { Box { Box { Box { Box { Box { Text("deep") } } } } } } } } } } } } } } } } } } } } } } } }
+
+//# case: many-unclosed-braces-do-not-panic
+//# fragment
+//# error: UnexpectedToken
+Box { Box { Box { Box { Box { Box { Box { Box { Box { Box { Box { Box { Box { Box { Box { Box {
+
+//# case: many-closing-brackets-do-not-panic
+//# fragment
+//# error: UnexpectedToken
+Text("a") ]]]]]]]]]])))))))))))}}}}}}}}}}
+
+//# case: interpolation-four-strings-deep-is-refused
+//# fragment
+//# error: StringNestingTooDeep
+//# error: UnterminatedString
+Text("{"a{"b{"c"}"}"}")
+
+//# case: deeply-nested-interpolation-is-refused
+//# gap: thirty-two levels are thirty errors of one kind and three of two others
+//# diagnostics: 1
+//# fragment
+//# error: StringNestingTooDeep
+Text("{"{"{"{"{"{"{"{"{"{"{"{"{"{"{"{"{"{"{"{"{"{"{"{"{"{"{"{"{"{"{"{"x"}"}"}"}"}"}"}"}"}"}"}"}"}"}"}"}"}"}"}"}"}"}"}"}"}"}"}"}"}"}"}"}")
+
+//# case: control-character
+//# fragment
+//# error: UnexpectedChar
+Text("a") 
+
+//# case: byte-order-mark-at-the-start
+//# gap: a file that starts with a byte order mark is refused
+//# text: a
+﻿View Main() { Text("a") }

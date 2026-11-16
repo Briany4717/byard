@@ -1,0 +1,140 @@
+// What 1.0 needs and the language does not have yet. Every case here is a
+// gap: it is written the way docs/language/proposals.md proposes, and it
+// starts to pass the day the feature lands.
+
+//# case: enum-with-data
+//# gap: an enum case cannot carry values
+//# text: failed: offline
+enum Load { idle, loading, failed(message: Str), ready(count: Int) }
+View Main() {
+    var state = Load.failed(message: "offline")
+    Text(match state {
+        .idle => "idle"
+        .loading => "loading"
+        .failed(message) => "failed: {message}"
+        .ready(count) => "{count} items"
+    })
+}
+
+//# case: match-as-a-view-member
+//# gap: there is no `match`
+//# text: b
+enum S { a, b }
+View Main() {
+    var s = S.b
+    match s {
+        .a => Text("a")
+        .b => Text("b")
+    }
+}
+
+//# case: match-must-cover-every-case
+//# gap: there is no `match`
+//# error: NonExhaustive
+enum S { a, b }
+View Main() {
+    var s = S.b
+    Text(match s { .a => "a" })
+}
+
+//# case: map-type
+//# gap: there is no `Map`
+//# fragment
+//# text: 2 1 0
+var ages: Map<Str, Int> = ["ada": 36, "bo": 1]
+Text("{ages.len} {ages["bo"] ?? 0} {ages["zed"] ?? 0}")
+
+//# case: list-get-is-optional
+//# gap: no `get`; an index that may be missing has no checked form
+//# fragment
+//# text: 1 9
+let xs = [1]
+Text("{xs.get(0) ?? 9} {xs.get(5) ?? 9}")
+
+//# case: list-helpers
+//# gap: no `first`, `last`, `any`, `all`, `count`, `sum`
+//# fragment
+//# text: 1 3 true false 2 6
+let xs = [1, 2, 3]
+Text("{xs.first() ?? 0} {xs.last() ?? 0} {xs.any(x => x > 2)} {xs.all(x => x > 2)} {xs.count(x => x > 1)} {xs.sum()}")
+
+//# case: list-insert-and-update
+//# gap: no `insertAt`, `updateAt`
+//# fragment
+//# text: 0,1,2 1,9
+Text("{[1, 2].insertAt(0, 0).join(",")} {[1, 2].updateAt(1, 9).join(",")}")
+
+//# case: typed-json
+//# gap: a reply has no checked type until it is written to a typed `let`
+//# error: UnknownField
+type Reply = { results: List<Str> }
+View Main() {
+    inject Json as json
+    var n = 0
+    on mount => {
+        json.parse("{}")
+            ok v => { n = (v as Reply).resluts.len }
+    }
+    Text("{n}")
+}
+
+//# case: colour-type-shows-as-a-colour
+//# gap: a colour is an `Int` and shows as one
+//# fragment
+//# text: #FF0000
+let c: Color = 0xFF0000
+Text("{c}")
+
+//# case: duration-type-keeps-its-unit
+//# gap: a duration is a count of milliseconds with no type
+//# fragment
+//# error: TypeMismatch
+let d = 200ms
+Text("{d + 0xFF0000}")
+
+//# case: multi-line-string
+//# gap: no multi-line string that drops its indentation
+//# fragment
+//# text: 3
+let s = """
+    a
+    b
+    """
+Text("{s.len}")
+
+//# case: doc-comment-is-a-comment
+//# text: a
+/// A card.
+View Card() { Text("a") }
+View Main() { Card() }
+
+//# case: string-format-width
+//# gap: no padding in an interpolation
+//# fragment
+//# text: [  7] [007]
+Text("[{7:3}] [{7:03}]")
+
+//# case: if-let-on-an-optional
+//# gap: an optional is unwrapped only by `??`, or by `when x != none` on a parameter
+//# text: 3
+View Pill(n: Int? = none) {
+    var shown = 0
+    on mount => { if let v = n { shown = v } }
+    Text("{shown}")
+}
+View Main() { Pill(n: 3) }
+
+//# case: global-store
+//# gap: there is no state above the views
+//# text: 1
+store Session { count: Int = 0 }
+View Bump() {
+    inject Session as s
+    on mount => { s.count = s.count + 1 }
+    Box {}
+}
+View Main() {
+    inject Session as s
+    Bump()
+    Text("{s.count}")
+}

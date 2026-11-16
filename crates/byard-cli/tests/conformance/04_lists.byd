@@ -1,0 +1,217 @@
+// List<T>: literals, indexing, every method, and empty and out-of-range edges.
+
+//# case: literal-and-len
+//# fragment
+//# text: 3 0
+let none: List<Int> = []
+Text("{[1, 2, 3].len} {none.len}")
+
+//# case: index
+//# fragment
+//# text: 1 3
+let xs = [1, 2, 3]
+Text("{xs[0]} {xs[xs.len - 1]}")
+
+//# case: index-out-of-range-is-nothing-today
+//# fragment
+//# text: [] [] 9
+let xs = [1]
+Text("[{xs[5]}] [{xs[-1]}] {xs[5] ?? 9}")
+
+//# case: index-out-of-range-is-reported
+//# gap: an index past the end reads as nothing, silently, and arithmetic on it joins text
+//# fragment
+//# warning: IndexOutOfRange
+let xs = [1]
+Text("{xs[5] + 1}")
+
+//# case: index-with-float-is-an-error
+//# gap: a `Float` index is accepted
+//# fragment
+//# error: TypeMismatch
+let xs = [1, 2]
+Text("{xs[0.5]}")
+
+//# case: empty-literal-needs-a-type
+//# fragment
+//# error: CannotInfer
+var xs = []
+Text("x")
+
+//# case: mixed-literal-needs-a-type
+//# fragment
+//# error: CannotInfer
+var xs = [1, "a"]
+Text("x")
+
+//# case: push-returns-a-new-list
+//# fragment
+//# text: 2 3
+let xs = [1, 2]
+let ys = xs.push(3)
+Text("{xs.len} {ys.len}")
+
+//# case: remove-at
+//# fragment
+//# text: 2,3 1,2 1,2,3 1,2,3
+let xs = [1, 2, 3]
+Text("{xs.removeAt(0).join(",")} {xs.removeAt(2).join(",")} {xs.removeAt(9).join(",")} {xs.removeAt(-1).join(",")}")
+
+//# case: reverse-and-contains-and-index-of
+//# fragment
+//# text: 3,2,1 true false 1 -1
+let xs = [1, 2, 3]
+Text("{xs.reverse().join(",")} {xs.contains(2)} {xs.contains(9)} {xs.indexOf(2)} {xs.indexOf(9)}")
+
+//# case: slice
+//# fragment
+//# text: 2,3 1,2,3 [] 3
+let xs = [1, 2, 3]
+Text("{xs.slice(1, 3).join(",")} {xs.slice(0, 99).join(",")} [{xs.slice(2, 1).join(",")}] {xs.slice(2).join(",")}")
+
+//# case: map-filter-find
+//# fragment
+//# text: 2,4,6 2,3 2 0
+let xs = [1, 2, 3]
+Text("{xs.map(x => x * 2).join(",")} {xs.filter(x => x > 1).join(",")} {xs.find(x => x > 1) ?? 0} {xs.find(x => x > 9) ?? 0}")
+
+//# case: pipe-lambda
+//# fragment
+//# text: 2,3
+Text("{[1, 2, 3].filter(|x| x > 1).join(",")}")
+
+//# case: sort-and-sort-by
+//# fragment
+//# text: 1,2,3 3,2,1 a,b,c
+Text("{[3, 1, 2].sort().join(",")} {[3, 1, 2].sortBy(x => 0 - x).join(",")} {["c", "a", "b"].sort().join(",")}")
+
+//# case: sort-by-is-stable
+//# fragment
+//# text: b,d,a,c
+let xs = [{ n: "a", k: 2 }, { n: "b", k: 1 }, { n: "c", k: 2 }, { n: "d", k: 1 }]
+Text("{xs.sortBy(x => x.k).map(x => x.n).join(",")}")
+
+//# case: reduce
+//# fragment
+//# text: 6 10 abc
+Text("{[1, 2, 3].reduce(0, (a, x) => a + x)} {[1, 2, 3].reduce(4, (a, x) => a + x)} {["a", "b", "c"].reduce("", (a, x) => a + x)}")
+
+//# case: reduce-of-empty-is-the-start
+//# fragment
+//# text: 7
+let xs: List<Int> = []
+Text("{xs.reduce(7, (a, x) => a + x)}")
+
+//# case: min-max
+//# fragment
+//# text: 1 3 0 0
+let xs = [3, 1, 2]
+let none: List<Int> = []
+Text("{xs.min()} {xs.max()} {none.min() ?? 0} {none.max() ?? 0}")
+
+//# case: concatenation
+//# fragment
+//# text: 1,2,3 3
+let a = [1, 2]
+Text("{(a + [3]).join(",")} {(a + [3]).len}")
+
+//# case: equality-is-structural
+//# fragment
+//# text: true false true
+Text("{[1, 2] == [1, 2]} {[1, 2] == [2, 1]} {[{ a: 1 }] == [{ a: 1 }]}")
+
+//# case: nested-lists
+//# fragment
+//# text: 2 3 4
+let m = [[1, 2], [3, 4]]
+Text("{m.len} {m[1][0]} {m[1][1]}")
+
+//# case: nested-lambdas-see-the-outer-item
+//# fragment
+//# text: 1,1
+let ps = [{ c: "a" }, { c: "b" }]
+Text("{["a", "b"].map(c => ps.filter(p => p.c == c).len).join(",")}")
+
+//# case: lambda-calls-a-function-with-its-item
+//# fragment
+//# text: 1
+fn low(q: Int) -> Bool => q < 10
+Text("{[3, 40].filter(q => low(q)).len}")
+
+//# case: effect-in-a-pure-lambda
+//# fragment
+//# error: EffectInPureLambda
+var xs = [1, 2]
+let bad = xs.map(x => { xs = [] })
+Text("x")
+
+//# case: filter-predicate-must-be-bool
+//# gap: a predicate that is a number is accepted inside a text
+//# fragment
+//# error: PredicateNotBool
+let xs = [1, 2]
+Text("{xs.filter(x => x + 1).len}")
+
+//# case: unknown-list-method
+//# fragment
+//# error: UnknownMethod
+Text("{[1].pusj(2).len}")
+
+//# case: map-wrong-arity-lambda
+//# gap: a lambda with too many parameters for `map` is accepted
+//# fragment
+//# error: ArityMismatch
+Text("{[1].map((a, b, c) => a).len}")
+
+//# case: push-wrong-type
+//# gap: pushing a `Str` onto a `List<Int>` is accepted
+//# fragment
+//# error: TypeMismatch
+var xs = [1, 2]
+Text("{xs.push("a").len}")
+
+//# case: write-back-is-what-changes-a-list
+//# fragment
+//# text: 3
+var xs = [1, 2]
+on mount => { xs = xs.push(3) }
+Text("{xs.len}")
+
+//# case: push-alone-changes-nothing
+//# fragment
+//# text: 2
+var xs = [1, 2]
+on mount => { xs.push(3) }
+Text("{xs.len}")
+
+//# case: large-list-does-not-panic
+//# fragment
+//# text: 4096
+let a = [1, 2, 3, 4, 5, 6, 7, 8]
+let b = a + a + a + a + a + a + a + a
+let c = b + b + b + b + b + b + b + b
+let d = c + c + c + c + c + c + c + c
+Text("{d.len}")
+
+//# case: for-over-a-list
+//# fragment
+//# text: a | b
+for s in ["a", "b"] { Text(s) }
+
+//# case: for-with-index
+//# fragment
+//# text: 0a | 1b
+for i, s in ["a", "b"] { Text("{i}{s}") }
+
+//# case: for-over-empty
+//# fragment
+//# text: end
+let xs: List<Str> = []
+for s in xs { Text(s) }
+Text("end")
+
+//# case: for-over-a-non-list
+//# gap: `for` over a number draws nothing and says nothing
+//# fragment
+//# error: TypeMismatch
+for s in 5 { Text("{s}") }

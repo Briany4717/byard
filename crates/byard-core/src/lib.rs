@@ -49,7 +49,7 @@ pub use platform::{
     EventKind, ImeEvent, InputEvent, InputPayload, KeyModifiers, PlatformHost, PointerButton,
     PointerState, WindowSize,
 };
-pub use surface::{PerSurface, SurfaceChange, SurfaceId, SurfaceKind, SurfaceSpec};
+pub use surface::{PerSurface, ScreenInfo, SurfaceChange, SurfaceId, SurfaceKind, SurfaceSpec};
 
 /// Trait representing a logic tick execution runner.
 pub trait LogicRuntime {

@@ -1,0 +1,29 @@
+// RFC-0068 §3: panels, the layer surfaces a bar is made of.
+//
+//   byard shot examples/simple_bar --surface bar -o bar.png
+//   byard shot examples/simple_bar --surface clock -o clock.png
+//
+// `bar` is the smallest bar: against the top edge, as tall as its text, and it
+// reserves that height. `clock` is an island in a corner, as large as its
+// content: when the text grows the panel is sent the new size.
+
+View Main() {
+    var seconds = 0
+    every 1s => seconds += 1
+
+    Panel #[edge: top, namespace: "bar"] as bar {
+        Row #[p: 8, align: center] {
+            Text("Hello from the bar")
+            Spacer
+            Text("up {seconds} s")
+        }
+    }
+
+    Panel #[anchor: (bottom, right), m: 16, namespace: "clock"] as clock {
+        Box #[p: 12, radius: 12, bg: 0xE01C1B22] {
+            Text("{seconds < 10 ? "just started" : "running for {seconds} seconds"}") #[
+                color: 0xFFFFFFFF,
+            ]
+        }
+    }
+}

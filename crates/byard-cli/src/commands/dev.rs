@@ -66,7 +66,16 @@ pub fn run(opts: Options<'_>) -> Result<(), String> {
     let (program, provider) = resolve_project(&manifest).map_err(|e| e.to_string())?;
     // The logic half of several windows is built, the host that opens them is
     // not (RFC-0068 step 2b): say so, rather than draw nothing.
-    if byard_compiler::surfaces::surface_shape(&program.views).is_multi() {
+    let shape = byard_compiler::surfaces::surface_shape(&program.views);
+    if shape.has_panel {
+        return Err(
+            "this program writes `Panel`, and the Wayland shell backend that creates \
+                    layer surfaces is not part of this build yet (RFC-0068 step 3b); \
+                    `byard shot` and `byard test` run it headlessly"
+                .to_string(),
+        );
+    }
+    if shape.is_multi() {
         return Err(
             "this program writes `Window`, and the host that opens more than one \
                     window is not part of this build yet (RFC-0068 step 2b); `byard shot` \

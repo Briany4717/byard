@@ -1370,6 +1370,29 @@ pub enum CompileError {
         /// Source range of the `for`.
         span: Span,
     },
+    /// `exclusive: true` on a panel with no `edge` and fewer than three anchors
+    /// (RFC-0068 §3): the protocol ignores a zone there.
+    ExclusiveNeedsEdge {
+        /// Source range of the attribute value.
+        span: Span,
+    },
+    /// A `TextField` or a `key_down` handler inside a panel that never has the
+    /// keyboard (RFC-0068 §3). A warning.
+    PanelTakesNoKeys {
+        /// Source range of the element.
+        span: Span,
+        /// What cannot receive keys: `TextField` or `key_down`.
+        what: String,
+    },
+    /// A panel's `namespace` or `screen` reads a value that changes
+    /// (RFC-0068 §3): the protocol cannot change them, so a change destroys and
+    /// makes the surface again. A warning.
+    RecreatesSurface {
+        /// Source range of the attribute value.
+        span: Span,
+        /// `namespace` or `screen`.
+        attr: String,
+    },
     /// Two `on enter` (or two `on leave`) blocks on one element (RFC-0066 §3):
     /// an element has one way of arriving and one of going.
     DuplicateStateBlock {
@@ -1560,6 +1583,9 @@ impl CompileError {
             | Self::ContentOutsideSurface { span, .. }
             | Self::OpeningSizeIsStatic { span, .. }
             | Self::SurfaceForNeedsKey { span, .. }
+            | Self::ExclusiveNeedsEdge { span, .. }
+            | Self::PanelTakesNoKeys { span, .. }
+            | Self::RecreatesSurface { span, .. }
             | Self::DuplicateForKey { span, .. }
             | Self::EventHasNoValue { span, .. }
             | Self::WrongAttributeSeparator { span, .. }
@@ -1709,6 +1735,9 @@ impl CompileError {
             | Self::ContentOutsideSurface { span, .. }
             | Self::OpeningSizeIsStatic { span, .. }
             | Self::SurfaceForNeedsKey { span, .. }
+            | Self::ExclusiveNeedsEdge { span, .. }
+            | Self::PanelTakesNoKeys { span, .. }
+            | Self::RecreatesSurface { span, .. }
             | Self::DuplicateForKey { span, .. }
             | Self::EventHasNoValue { span, .. }
             | Self::WrongAttributeSeparator { span, .. }
@@ -1861,6 +1890,9 @@ impl CompileError {
             Self::ContentOutsideSurface { .. } => "ContentOutsideSurface",
             Self::OpeningSizeIsStatic { .. } => "OpeningSizeIsStatic",
             Self::SurfaceForNeedsKey { .. } => "SurfaceForNeedsKey",
+            Self::ExclusiveNeedsEdge { .. } => "ExclusiveNeedsEdge",
+            Self::PanelTakesNoKeys { .. } => "PanelTakesNoKeys",
+            Self::RecreatesSurface { .. } => "RecreatesSurface",
             Self::EventHasNoValue { .. } => "EventHasNoValue",
             Self::WrongAttributeSeparator { .. } => "WrongAttributeSeparator",
             Self::ArityMismatch { .. } => "ArityMismatch",
@@ -1991,6 +2023,8 @@ impl CompileError {
                 | Self::AnchorToText { .. }
                 | Self::OpeningSizeIsStatic { .. }
                 | Self::SurfaceForNeedsKey { .. }
+                | Self::PanelTakesNoKeys { .. }
+                | Self::RecreatesSurface { .. }
         )
     }
 
@@ -2123,6 +2157,21 @@ impl CompileError {
             Self::OpeningSizeIsStatic { attr, .. } => format!(
                 "`{attr}` is only the size the window opens at, because after that the size is \
                  the user's: writing it later does not resize the window"
+            ),
+            Self::ExclusiveNeedsEdge { .. } => {
+                "`exclusive: true` reserves the panel's thickness along an \
+                 edge, and this panel has no `edge` (or three anchors): the compositor ignores \
+                 it. Write `edge: top` (or `bottom`, `left`, `right`), or give a number of \
+                 pixels with `anchor`"
+                    .to_string()
+            }
+            Self::PanelTakesNoKeys { what, .. } => format!(
+                "a `{what}` in a panel that has `keyboard: none` (the default) can never receive \
+                 a key: write `keyboard: on_demand` on the panel"
+            ),
+            Self::RecreatesSurface { attr, .. } => format!(
+                "`{attr}` is fixed when a panel is made, so when this value changes the panel is \
+                 destroyed and made again, with its state: that is rarely meant"
             ),
             Self::SurfaceForNeedsKey { .. } => {
                 "this `for` makes a window per item and has no `key`, so every change to its \

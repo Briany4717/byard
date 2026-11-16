@@ -21,9 +21,9 @@ View Main() {
             StatCard("Errors", "{errors}", 0x964747)
         }
 
-        // The trailing block is passed to `Panel`'s `content` slot and rendered
+        // The trailing block is passed to `Pane`'s `content` slot and rendered
         // inside the panel, while capturing this caller's scope.
-        Panel("Slotted content") {
+        Pane("Slotted content") {
             Row #[gap: 8] {
                 Badge("reactive")
                 Badge(label: "typed", tone: 0x6495ED)
@@ -56,7 +56,7 @@ View StatCard(title, value, accent) {
 
 // A slot view (RFC-0007 D-A): the reserved `content` parameter receives the
 // caller's trailing `{ … }` block, spliced where `content` appears in the body.
-View Panel(heading, content) {
+View Pane(heading, content) {
     Column #[bg: 0x1E1E2A, radius: 16, p: 18, gap: 10, border: 0x3C3C52] {
         Text(heading) #[color: 0xE6E1E5, size: 16, weight: bold]
         content

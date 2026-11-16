@@ -17,6 +17,8 @@
 //! None of it costs a single-surface program anything: `MAIN` is a constant, and
 //! the relay keeps its slot inline.
 
+use super::panel::{InputRegion, LayerSpec};
+
 /// Which surface something belongs to.
 ///
 /// A small integer, `Copy` and cheap to compare. `0` is [`SurfaceId::MAIN`]; a
@@ -50,13 +52,16 @@ impl SurfaceId {
 
 /// What kind of surface a [`SurfaceSpec`] describes.
 ///
-/// Only windows exist so far; `Panel` (RFC-0068 §3) adds its own.
+/// A window or a panel; popups (RFC-0068 §7) will add their own.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 #[non_exhaustive]
 pub enum SurfaceKind {
     /// A top-level window (RFC-0068 §2).
     #[default]
     Window,
+    /// A layer surface: a bar, a dock, a launcher (RFC-0068 §3). Its
+    /// [`SurfaceSpec::layer`] says how it is placed.
+    Panel,
 }
 
 /// What a surface is made of: its kind, its size, its title, everything the
@@ -94,6 +99,11 @@ pub struct SurfaceSpec {
     pub decorations: bool,
     /// Whether undrawn pixels show what is behind the window.
     pub transparent: bool,
+    /// The layer-shell values of a [`SurfaceKind::Panel`]; `None` for a window.
+    /// For a panel, `size` is the size it asks for (0 on an axis the compositor
+    /// stretches), `name` its `as` name or its namespace, `title` its namespace,
+    /// and it is transparent, undecorated and not resizable.
+    pub layer: Option<LayerSpec>,
     /// Whether the element has a `close =>`. Without one the platform's close
     /// request ends the program, and a host may say so before it asks.
     pub handles_close: bool,
@@ -118,7 +128,26 @@ impl SurfaceSpec {
             resizable: true,
             decorations: true,
             transparent: false,
+            layer: None,
             handles_close: false,
+        }
+    }
+
+    /// A panel of this namespace: transparent, undecorated, anchored nowhere,
+    /// of no size yet (the caller sets `size` and `layer`).
+    #[must_use]
+    pub fn panel(namespace: impl Into<String>) -> Self {
+        let namespace = namespace.into();
+        Self {
+            kind: SurfaceKind::Panel,
+            name: namespace.clone(),
+            title: namespace.clone(),
+            size: (0.0, 0.0),
+            resizable: false,
+            decorations: false,
+            transparent: true,
+            layer: Some(LayerSpec::new(namespace)),
+            ..Self::window(String::new())
         }
     }
 
@@ -163,6 +192,16 @@ pub enum SurfaceChange {
         /// The surface.
         id: SurfaceId,
     },
+    /// The part of a panel that takes the pointer changed (RFC-0068 §6): the
+    /// host sets the surface's input region to it, with `wl_surface.set_input_region`.
+    /// Sent only when it differs from the last one sent, after the frame that
+    /// moved it; never for a window.
+    InputRegion {
+        /// The surface.
+        id: SurfaceId,
+        /// The part of it that takes the pointer.
+        region: InputRegion,
+    },
 }
 
 impl SurfaceChange {
@@ -170,7 +209,10 @@ impl SurfaceChange {
     #[must_use]
     pub const fn id(&self) -> SurfaceId {
         match self {
-            Self::Create { id, .. } | Self::Configure { id, .. } | Self::Destroy { id } => *id,
+            Self::Create { id, .. }
+            | Self::Configure { id, .. }
+            | Self::Destroy { id }
+            | Self::InputRegion { id, .. } => *id,
         }
     }
 }

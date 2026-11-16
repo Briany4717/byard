@@ -29,13 +29,15 @@ use crate::symbol::Symbol;
 /// The element that is a window of its own.
 pub const WINDOW: &str = "Window";
 
+/// The element that is a layer surface (RFC-0068 §3).
+pub const PANEL: &str = "Panel";
+
 /// Whether `name` is an element that is a surface of its own.
 ///
-/// Only `Window` so far: `Panel` (RFC-0068 §3) joins it with the shell
-/// backend.
+/// `Window` and `Panel` (RFC-0068 §3).
 #[must_use]
 pub fn is_surface_element(name: &str) -> bool {
-    name == WINDOW
+    name == WINDOW || name == PANEL
 }
 
 /// What surfaces a program writes, found by reading it, not by running it.
@@ -43,8 +45,8 @@ pub fn is_surface_element(name: &str) -> bool {
 pub struct SurfaceShape {
     /// A `Window` is written at the surface level.
     pub has_window: bool,
-    /// A `Panel` is written at the surface level. Always `false` until
-    /// `Panel` exists (RFC-0068 step 3); the shell backend is chosen by it.
+    /// A `Panel` is written at the surface level: the shell backend is chosen
+    /// by it (RFC-0068 §8).
     pub has_panel: bool,
 }
 
@@ -96,7 +98,6 @@ fn check_surfaces_from(
     };
     let multi = walk.members_lead(&entry.body, &mut Vec::new());
     if multi {
-        walk.shape.has_window = true;
         walk.surface_level(entry, &mut Vec::new());
     }
     // A `Window` at the surface level of a view called there is fine; one
@@ -188,7 +189,13 @@ impl<'a> Walk<'a, '_> {
             match member {
                 Member::Element(el) if is_surface_element(el.name.as_str()) => {
                     self.level.insert(el.span);
-                    self.window_attrs(el, view);
+                    if el.name.as_str() == PANEL {
+                        self.shape.has_panel = true;
+                        self.panel_attrs(el, view);
+                    } else {
+                        self.shape.has_window = true;
+                        self.window_attrs(el, view);
+                    }
                 }
                 Member::Element(el) => match self.call(el) {
                     Some(callee) if self.view_leads(callee, &mut Vec::new()) => {
@@ -250,6 +257,112 @@ impl<'a> Walk<'a, '_> {
                     span: value.span(),
                     attr: attr.name.as_str().to_string(),
                 });
+            }
+        }
+    }
+
+    /// The rules of a panel's attributes (RFC-0068 §3): `ExclusiveNeedsEdge`,
+    /// `RecreatesSurface` and `PanelTakesNoKeys`. `edge` with `anchor` is
+    /// `InvalidAttributeCombination`, found with the element's other
+    /// combinations.
+    fn panel_attrs(&mut self, el: &'a ElementNode, view: &ViewDecl) {
+        // State that changes: a `var` or a `let` of the view. A parameter or a
+        // loop variable is how a panel is given its screen, and is not it.
+        let reactive: HashSet<&Symbol> = view
+            .body
+            .iter()
+            .filter_map(|m| match m {
+                Member::Var { name, .. } | Member::Let { name, .. } => Some(name),
+                _ => None,
+            })
+            .collect();
+        let prop = |name: &str| {
+            el.attrs.iter().find_map(|a| match &a.kind {
+                AttrKind::Prop { value } if a.name.as_str() == name => Some(value),
+                _ => None,
+            })
+        };
+        let word = |name: &str| match prop(name) {
+            Some(Expr::Ident(w, _)) => Some(w.as_str().to_string()),
+            _ => None,
+        };
+        for attr in ["namespace", "screen"] {
+            let Some(value) = prop(attr) else { continue };
+            let mut reads = false;
+            let mut probe = Member::Expr(value.clone());
+            crate::resolve::walk::member_exprs(&mut probe, &mut |e| {
+                if let Expr::Ident(name, _) = e {
+                    reads |= reactive.contains(name);
+                }
+            });
+            if reads {
+                self.errors.push(CompileError::RecreatesSurface {
+                    span: value.span(),
+                    attr: attr.to_string(),
+                });
+            }
+        }
+        if word("exclusive").as_deref() == Some("true") && prop("edge").is_none() {
+            let anchors = match prop("anchor") {
+                Some(Expr::Tuple(args, _)) => args.len(),
+                Some(_) => 1,
+                None => 0,
+            };
+            if anchors < 3 {
+                if let Some(value) = prop("exclusive") {
+                    self.errors
+                        .push(CompileError::ExclusiveNeedsEdge { span: value.span() });
+                }
+            }
+        }
+        if matches!(word("keyboard").as_deref(), None | Some("none")) {
+            let mut seen = Vec::new();
+            self.takes_keys(&el.children, &mut seen, &mut Vec::new());
+        }
+    }
+
+    /// `PanelTakesNoKeys`: a `TextField` or a `key_down` handler in `members`,
+    /// looking through `when`, `for` and the views called.
+    fn takes_keys(&mut self, members: &'a [Member], seen: &mut Vec<Span>, stack: &mut Vec<Symbol>) {
+        for member in members {
+            match member {
+                Member::Element(el) => {
+                    let what = if el.name.as_str() == "TextField" {
+                        Some("TextField")
+                    } else if el.attrs.iter().any(|a| a.name.as_str() == "key_down") {
+                        Some("key_down")
+                    } else {
+                        None
+                    };
+                    if let Some(what) = what {
+                        if !seen.contains(&el.span) {
+                            seen.push(el.span);
+                            self.errors.push(CompileError::PanelTakesNoKeys {
+                                span: el.span,
+                                what: what.to_string(),
+                            });
+                        }
+                    }
+                    self.takes_keys(&el.children, seen, stack);
+                    for slot in el.slot_members() {
+                        self.takes_keys(slot, seen, stack);
+                    }
+                    if let Some(view) = self.call(el) {
+                        if !stack.contains(&view.name) {
+                            stack.push(view.name.clone());
+                            self.takes_keys(&view.body, seen, stack);
+                            stack.pop();
+                        }
+                    }
+                }
+                Member::When { then, els, .. } => {
+                    self.takes_keys(then, seen, stack);
+                    if let Some(els) = els {
+                        self.takes_keys(els, seen, stack);
+                    }
+                }
+                Member::For { body, .. } => self.takes_keys(body, seen, stack),
+                _ => {}
             }
         }
     }

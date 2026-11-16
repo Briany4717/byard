@@ -596,16 +596,22 @@ pub(crate) fn refuse_windows(
     views: &[ViewDecl],
     source_map: &byard_compiler::resolve::SourceMap,
 ) -> Result<(), ByardError> {
-    if !byard_compiler::surfaces::surface_shape(views).is_multi() {
+    let shape = byard_compiler::surfaces::surface_shape(views);
+    if !shape.is_multi() {
         return Ok(());
     }
+    let message = if shape.has_panel {
+        "this program writes `Panel`, and the Wayland shell backend that creates layer surfaces \
+         is not part of this build yet (RFC-0068 step 3b); `byard shot` and `byard test` run it \
+         headlessly"
+    } else {
+        "this program writes `Window`, and the host that opens more than one window is not part \
+         of this build yet (RFC-0068 step 2b); `byard shot` and `byard test` run it headlessly"
+    };
     Err(announced(ByardError::compile(CompileReport::new(
         vec![byard_compiler::CompileError::Project {
             span: byard_compiler::Span::new(0, 0),
-            message: "this program writes `Window`, and the host that opens more than one window \
-                      is not part of this build yet (RFC-0068 step 2b); `byard shot` and \
-                      `byard test` run it headlessly"
-                .to_string(),
+            message: message.to_string(),
         }],
         source_map.clone(),
     ))))

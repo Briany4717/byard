@@ -1,0 +1,134 @@
+# Panels and screens
+
+A `Panel` is a surface that sits against the edges of a screen instead of being a window:
+a bar, a dock, a launcher, an on-screen display. It is a Wayland layer surface
+(`zwlr_layer_surface_v1`), and like a `Window` it is an element written at the top of the
+program, sharing the program's state with every other surface.
+
+The smallest bar is three lines:
+
+```byld
+View Main() {
+    Panel #[edge: top] {
+        Text("Hello from the bar") #[p: 8]
+    }
+}
+```
+
+That is a whole program. The panel sits against the top of the screen, across all of it,
+as tall as its text, and windows make room for it. Everything below is something to add
+when the default stops being enough.
+
+A panel's background is transparent: only what the program draws is drawn, and the
+pointer goes through to whatever is below wherever the program put nothing that takes it.
+A bar drawn as a floating island with rounded corners therefore behaves like one, with
+no mask to write.
+
+## Where a panel goes
+
+| Write | It is |
+|-------|-------|
+| `edge: top` (`bottom`, `left`, `right`) | Against that edge, across all of it |
+| `anchor: (top, right)` | In that corner, as large as its content or its `width` and `height` |
+| `anchor: bottom` | Centred along the bottom edge |
+| neither | Centred on the screen: a launcher, a dialog |
+
+`edge: top` is `anchor: (top, left, right)`, and writing both is
+`InvalidAttributeCombination`. `m`, `mt`, `mr`, `mb`, `ml`, `mx` and `my` move the panel
+off the edges it is anchored to. Screen edges are physical, so `left` and `right` are
+written and never `start` and `end`.
+
+## What a panel takes
+
+| Attribute | Type | Default | |
+|-----------|------|---------|-|
+| `screen` | `Screen` | the compositor's choice | The screen it is made on. Fixed when the panel is made. |
+| `edge`, `anchor` | `top`, `bottom`, `left`, `right` | none | See above. Reactive. |
+| `layer` | `background`, `bottom`, `top`, `overlay` | `top` | Reactive. |
+| `exclusive` | `Bool`, `Float` or `ignore` | `true` with `edge`, else `false` | Whether it reserves space. Reactive. |
+| `keyboard` | `none`, `on_demand`, `exclusive` | `none` | Who gets the keys. Reactive. |
+| `namespace` | `Str` | the program's app id | The name a compositor's rules match. Fixed when the panel is made. |
+| `width`, `height` | `Float` | the content's size | Reactive. |
+| `m`, `mt`, `mr`, `mb`, `ml`, `mx`, `my` | `Float` | 0 | Reactive. |
+| `input` | `auto`, `all`, `none` | `auto` | Which part of it takes the pointer. |
+
+**Size.** Along an axis the panel is anchored at both ends of, the compositor stretches
+it, and the size is the screen's. Along any other it is `width` or `height` when written,
+and otherwise the size of its content laid out with that axis unbounded. When the content
+changes size (a clock gains a digit), the panel asks for the new size and is drawn at
+it, so an island is always as large as what is in it.
+
+**`exclusive`.** `true` reserves the panel's thickness along its edge, so maximised
+windows start below the bar; a number reserves that many pixels; `false` lets windows go
+under it; `ignore` covers what other panels reserved too, as a wallpaper does. A bar on
+an `edge` reserves by default, because a bar windows slide under is the surprise nobody
+wants on the first run. `exclusive: true` without an `edge` and without three anchors does
+nothing, which is `ExclusiveNeedsEdge`.
+
+**`keyboard`.** With `none` the panel never has the keyboard, so a bar does not take the
+keys from the window being typed in. A `TextField` or a `key_down` handler in such a panel
+could never be used, and the checker warns (`PanelTakesNoKeys`): write
+`keyboard: on_demand` for a panel that takes the keys when clicked, or `exclusive` for a
+launcher, which has every key while it is shown.
+
+**`namespace` and `screen`** are fixed when the surface is made, so changing them destroys
+the panel and makes it again, with its state. The checker warns when they read a `var`
+(`RecreatesSurface`). Everything else is sent to the compositor as it changes.
+
+## The input region
+
+With `input: auto`, the part of a panel that takes the pointer is where the program put
+something that does: a `tap` or `long_press` handler, a pointer or drag handler, a `hover`
+block, a `ScrollView`, a `TextField`, a `Slider`, and a modal overlay's scrim, but not
+anything inside an `interactive: false` element. The rest of the panel lets the pointer
+through. It is worked out when the panel is drawn and sent to the compositor only when it
+changed. `input: all` takes every press on the panel, and `input: none` takes none, for an
+on-screen display.
+
+## A bar on every screen
+
+`screens` is the list of the connected screens, each a `Screen` with `name`,
+`description`, `x`, `y`, `width`, `height` and `scale`, ordered by `x` and then `y`. It
+is a value like `window`: nothing exists for a program that never reads it.
+
+```byld
+View Main() {
+    for s in screens key s.name {
+        Panel #[screen: s, edge: top, height: 40, namespace: "bar"] {
+            Row #[p: 8, gap: 8, align: center, bg: 0xE01C1B22, radius: 12, mx: 8, my: 4] {
+                Text(s.name)
+                Spacer
+                Text("{s.width}x{s.height}")
+            }
+        }
+    }
+}
+```
+
+When a screen is connected `screens` grows and the `for` gives it its panel; when one is
+unplugged its panel goes. `key s.name` is what keeps the other bars as they are: without
+it a `for` matches its rows by position, and a screen connected in the middle of the list
+would hand each bar the next screen's place, with its state. A `for` that makes panels
+without a `key` is `SurfaceForNeedsKey`. A screen that is re-scaled keeps its panels, and
+what reads `s.scale` follows.
+
+## Drawing and testing without a compositor
+
+`byard shot` has no compositor, so it places the panels itself, by layer shell's rules
+(`byard_core::surface::placement`), on one simulated screen of the shot's size. Name the
+panel to draw: its `as` name, else its `namespace`.
+
+```sh
+byard shot crates/byard-cli/examples/simple_bar --surface bar -o bar.png
+byard shot crates/byard-cli/examples/simple_bar --surface clock --at 12000 -o clock.png
+```
+
+The picture is the panel alone, at the size it was given, and its pixels are transparent
+where nothing was drawn. `byard test` sees a panel like a window: its dump has a
+`Panel "namespace" @ screen-1` line with the tree indented below, and a step that names
+an element finds it on whichever surface it is on.
+
+Running panels on the desktop needs the Wayland shell backend, which comes after the
+language and the interpreter (RFC-0068 step 3b). `byard dev` and a built app say so and
+stop for now. A program that has a view called `Panel` must call it something else, as
+`Panel` is the element.

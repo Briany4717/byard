@@ -93,6 +93,7 @@ mod typed_lambda_params;
 mod unknown_method;
 mod url_encoded;
 
+mod panels;
 mod unknown_name;
 mod user_views;
 mod variations;

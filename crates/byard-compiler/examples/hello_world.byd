@@ -27,7 +27,7 @@ View Main() {
     var listScroll: Float = 0.0
 
     // A parameterized `fn` + a derived `let` consuming it (declared before use).
-    fn describe(n: Int) => "the counter is {n}"
+    fn describe(n: Int) -> Str => "the counter is {n}"
     let summary = describe(count)
 
     // A first-class style value (RFC-0016): a named, reusable bundle of

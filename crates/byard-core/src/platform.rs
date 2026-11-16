@@ -293,6 +293,11 @@ pub enum EventKind {
     /// Alt+F4, Cmd+W; RFC-0068 §2). Not routed to an element: the surface's
     /// `Window` runs its `close =>`, and a window with none ends the program.
     CloseRequest,
+    /// The platform gave a surface a size, or its user changed it (RFC-0068
+    /// §2): the new size in logical pixels is in `InputEvent.pos`. Not routed
+    /// to an element; the program of several windows draws the surface again
+    /// at it and its `window.width` and `window.height` follow.
+    SurfaceResized,
 }
 
 impl EventKind {
@@ -334,7 +339,8 @@ impl EventKind {
             | Self::AccessFocus
             | Self::AccessScrollIntoView
             | Self::WindowFocus
-            | Self::CloseRequest => false,
+            | Self::CloseRequest
+            | Self::SurfaceResized => false,
         }
     }
 }
@@ -485,24 +491,56 @@ pub trait PlatformHost {
         waker: crate::relay::FrameWaker,
     ) -> Result<(), ByardError>;
 
-    /// Called whenever the window is resized or the OS DPI scale changes.
+    /// Whether the program draws several surfaces (RFC-0068): it writes a
+    /// `Window`. Asked before the host opens anything, because it decides what
+    /// the first window is: a program of one window opens it as it always did,
+    /// and a program of several opens none until the program says which
+    /// (a hidden anchor window stands in for the device's sake, see
+    /// `byard-platform`). Defaults to `false`.
+    fn is_multi_surface(&self) -> bool {
+        false
+    }
+
+    /// Called whenever a window is resized or the OS DPI scale changes. In a
+    /// program of one window `surface` is always
+    /// [`SurfaceId::MAIN`](crate::SurfaceId::MAIN).
     ///
     /// Implementations typically forward this directly to
-    /// [`Engine::on_resize`](crate::engine::Engine::on_resize).
-    fn on_resize(&mut self, size: WindowSize);
+    /// [`Engine::resize_surface`](crate::engine::Engine::resize_surface).
+    fn on_resize(&mut self, surface: crate::SurfaceId, size: WindowSize);
 
-    /// Called when the host requests a redraw (e.g. winit's
+    /// Called when the host requests a redraw of `surface` (e.g. winit's
     /// `WindowEvent::RedrawRequested`).
     ///
     /// Implementations typically call
-    /// [`Engine::render_latest`](crate::engine::Engine::render_latest) here.
+    /// [`Engine::render_surface`](crate::engine::Engine::render_surface) here.
     ///
     /// # Errors
     ///
     /// Returns whatever [`ByardError`] frame rendering produces. Transient
     /// surface loss is already handled internally and never reaches this
     /// method as an error, only unrecoverable surface errors do.
-    fn on_redraw(&mut self) -> Result<(), ByardError>;
+    fn on_redraw(&mut self, surface: crate::SurfaceId) -> Result<(), ByardError>;
+
+    /// Called once per event-loop round with every surface that asked for a
+    /// redraw in it, in a program of several windows (RFC-0068 §5): they are
+    /// drawn as one round, so the glyph atlas is trimmed once, after the last.
+    /// The default draws them one by one with [`on_redraw`](Self::on_redraw);
+    /// a host that owns an [`Engine`](crate::engine::Engine) answers with
+    /// [`Engine::render_surfaces`](crate::engine::Engine::render_surfaces).
+    ///
+    /// # Errors
+    ///
+    /// As [`on_redraw`](Self::on_redraw).
+    fn on_redraw_round(&mut self, surfaces: &[crate::SurfaceId]) -> Result<(), ByardError> {
+        let mut first = None;
+        for &surface in surfaces {
+            if let Err(e) = self.on_redraw(surface) {
+                first.get_or_insert(e);
+            }
+        }
+        first.map_or(Ok(()), Err)
+    }
 
     /// Whether the application still has frame-driven work, the render-thread
     /// side of the RFC-0010 active-animation set (extended by RFC-0025's
@@ -521,20 +559,37 @@ pub trait PlatformHost {
     }
 
     /// Called when the user requests the window close (close button,
-    /// Cmd+Q, etc.). Returning `true` tells the host it is safe to exit its
-    /// event loop; returning `false` keeps the window open (e.g. to show an
-    /// unsaved-changes prompt in a future application).
+    /// Cmd+Q, etc.) in a program of one window. Returning `true` tells the
+    /// host it is safe to exit its event loop; returning `false` keeps the
+    /// window open (e.g. to show an unsaved-changes prompt in a future
+    /// application).
     ///
     /// Defaults to always permitting the close, since most applications,
     /// including every example in this crate today, have nothing to guard.
-    fn on_close_requested(&mut self) -> bool {
+    fn on_close_requested(&mut self, _surface: crate::SurfaceId) -> bool {
         true
     }
 
-    /// Called when a pointer (mouse) button changes state over the window at coordinates (x, y).
+    /// Called when the user asks to close one window of a program of several
+    /// and that window has a `close =>` (RFC-0068 §2): the host passes it on
+    /// to the program as an [`EventKind::CloseRequest`] of that surface. A
+    /// window with no `close =>` ends the program and never gets here.
     ///
     /// Defaults to a no-op.
-    fn on_pointer_input(&mut self, _button: PointerButton, _state: PointerState, _x: f32, _y: f32) {
+    fn on_surface_close(&mut self, _surface: crate::SurfaceId) {}
+
+    /// Called when a pointer (mouse) button changes state over `surface` at
+    /// coordinates (x, y).
+    ///
+    /// Defaults to a no-op.
+    fn on_pointer_input(
+        &mut self,
+        _surface: crate::SurfaceId,
+        _button: PointerButton,
+        _state: PointerState,
+        _x: f32,
+        _y: f32,
+    ) {
     }
 
     /// Called with the system's appearance (`true` ⇒ dark) when the window
@@ -543,18 +598,18 @@ pub trait PlatformHost {
     /// Defaults to a no-op.
     fn on_system_scheme(&mut self, _dark: bool) {}
 
-    /// Called when the cursor moves to coordinates (x, y).
+    /// Called when the cursor moves to coordinates (x, y) of `surface`.
     ///
     /// Defaults to a no-op.
-    fn on_cursor_moved(&mut self, _x: f32, _y: f32) {}
+    fn on_cursor_moved(&mut self, _surface: crate::SurfaceId, _x: f32, _y: f32) {}
 
-    /// Called when a keyboard key is pressed or released.
+    /// Called when a keyboard key is pressed or released in `surface`.
     ///
     /// `key` is the logical key name (e.g. `"a"`, `"Enter"`, `"Backspace"`,
     /// `"Tab"`). `pressed` is `true` for key-down, `false` for key-up.
     ///
     /// Defaults to a no-op.
-    fn on_key(&mut self, _key: &str, _pressed: bool) {}
+    fn on_key(&mut self, _surface: crate::SurfaceId, _key: &str, _pressed: bool) {}
 
     /// Called before [`on_key`](Self::on_key) with the modifier state, so a
     /// host can claim a chord for itself.
@@ -566,7 +621,13 @@ pub trait PlatformHost {
     ///
     /// The default ignores every chord, so a host that does not opt in behaves
     /// exactly as before.
-    fn on_chord(&mut self, _key: &str, _pressed: bool, _mods: KeyModifiers) -> bool {
+    fn on_chord(
+        &mut self,
+        _surface: crate::SurfaceId,
+        _key: &str,
+        _pressed: bool,
+        _mods: KeyModifiers,
+    ) -> bool {
         false
     }
 
@@ -578,19 +639,20 @@ pub trait PlatformHost {
     /// no modifiers held, and a text field then edits as it always did.
     fn on_modifiers(&mut self, _mods: KeyModifiers) {}
 
-    /// Called when the window gains (`true`) or loses focus, so the engine can
+    /// Called when `surface` gains (`true`) or loses focus, so the engine can
     /// stop a text field's caret blinking in a window nobody is typing into
     /// (RFC-0041 §6). A host usually forwards it as an
     /// [`EventKind::WindowFocus`] input event.
     ///
     /// Defaults to a no-op.
-    fn on_window_focus(&mut self, _focused: bool) {}
+    fn on_window_focus(&mut self, _surface: crate::SurfaceId, _focused: bool) {}
 
-    /// Called when printable text is committed (character keys, IME commit).
+    /// Called when printable text is committed (character keys, IME commit)
+    /// in `surface`.
     ///
     /// `text` is the committed string (usually one character but may be more
     /// for IME). Defaults to a no-op.
-    fn on_text(&mut self, _text: &str) {}
+    fn on_text(&mut self, _surface: crate::SurfaceId, _text: &str) {}
 
     /// Called on an input-method event (RFC-0040): a preedit, a commit, or
     /// the IME turning on or off. A host usually forwards
@@ -598,16 +660,16 @@ pub trait PlatformHost {
     ///
     /// Defaults to a no-op, so a host that does not opt in behaves exactly as
     /// before.
-    fn on_ime(&mut self, _event: ImeEvent) {}
+    fn on_ime(&mut self, _surface: crate::SurfaceId, _event: ImeEvent) {}
 
-    /// The focused text field's caret this frame, in viewport space, or
-    /// `None` when no text field has focus (RFC-0040 §4). The platform thread
-    /// reads it after each redraw to turn the IME on or off and to place its
-    /// candidate window. A host usually answers from
+    /// The focused text field's caret this frame in `surface`, in viewport
+    /// space, or `None` when no text field has focus there (RFC-0040 §4). The
+    /// platform thread reads it after each redraw to turn the IME on or off
+    /// and to place its candidate window. A host usually answers from
     /// [`Engine::text_input`](crate::engine::Engine::text_input).
     ///
     /// Defaults to `None`: a host that does not opt in never enables the IME.
-    fn text_input(&self) -> Option<crate::frame::TextInputState> {
+    fn text_input(&self, _surface: crate::SurfaceId) -> Option<crate::frame::TextInputState> {
         None
     }
 
@@ -620,67 +682,87 @@ pub trait PlatformHost {
     /// Defaults to a no-op: a host that does not opt in never has a tree.
     fn on_access_active(&mut self, _active: bool) {}
 
-    /// The latest published frame, from which the platform reads the
-    /// accessibility tree to send to the assistive technology (RFC-0042 §5).
-    /// A host usually answers from
-    /// [`Engine::latest_frame`](crate::engine::Engine::latest_frame).
+    /// The latest frame published for `surface`, from which the platform
+    /// reads that surface's accessibility tree to send to the assistive
+    /// technology (RFC-0042 §5, RFC-0068 §5): each surface has its own tree
+    /// and the host keeps one adapter for each. A host usually answers from
+    /// [`Engine::latest_frame_for`](crate::engine::Engine::latest_frame_for).
     ///
     /// Defaults to `None`: a host that does not opt in has no tree to send.
-    fn access_frame(&self) -> Option<std::sync::Arc<crate::frame::RenderFrame>> {
+    fn access_frame(
+        &self,
+        _surface: crate::SurfaceId,
+    ) -> Option<std::sync::Arc<crate::frame::RenderFrame>> {
         None
     }
 
-    /// Called when an assistive technology asks a node to act (RFC-0042 §5).
-    /// A host usually passes it on to
-    /// [`Engine::push_access_request`](crate::engine::Engine::push_access_request).
+    /// Called when an assistive technology asks a node of `surface`'s tree to
+    /// act (RFC-0042 §5). A host usually passes it on to
+    /// [`Engine::push_access_request_for`](crate::engine::Engine::push_access_request_for).
     ///
     /// Defaults to a no-op.
-    fn on_access_request(&mut self, _request: crate::access::AccessRequest) {}
-
-    /// [`access_frame`](Self::access_frame) for the surface `surface`
-    /// (RFC-0068 §5): each surface has its own accessibility tree, and the
-    /// host keeps one adapter for each. The default answers for
-    /// [`SurfaceId::MAIN`](crate::SurfaceId::MAIN) with `access_frame` and for
-    /// every other surface with nothing, which is right for a program with one
-    /// surface.
-    fn access_frame_for(
-        &self,
-        surface: crate::SurfaceId,
-    ) -> Option<std::sync::Arc<crate::frame::RenderFrame>> {
-        if surface.is_main() {
-            self.access_frame()
-        } else {
-            None
-        }
-    }
-
-    /// [`on_access_request`](Self::on_access_request) for a request made of
-    /// the tree of `surface`. The default hands one for
-    /// [`SurfaceId::MAIN`](crate::SurfaceId::MAIN) to `on_access_request` and
-    /// drops the rest.
-    fn on_surface_access_request(
+    fn on_access_request(
         &mut self,
-        surface: crate::SurfaceId,
-        request: crate::access::AccessRequest,
+        _surface: crate::SurfaceId,
+        _request: crate::access::AccessRequest,
     ) {
-        if surface.is_main() {
-            self.on_access_request(request);
-        }
     }
 
-    /// Called on a trackpad-style scroll gesture at cursor position `(x, y)`,
-    /// with `(dx, dy)` the scroll delta in logical pixels (RFC-0012 §A loose
-    /// end: `scroll`'s hardware origin).
+    /// Called on a trackpad-style scroll gesture at cursor position `(x, y)`
+    /// of `surface`, with `(dx, dy)` the scroll delta in logical pixels
+    /// (RFC-0012 §A loose end: `scroll`'s hardware origin).
     ///
     /// Defaults to a no-op.
-    fn on_scroll(&mut self, _dx: f32, _dy: f32, _x: f32, _y: f32) {}
+    fn on_scroll(&mut self, _surface: crate::SurfaceId, _dx: f32, _dy: f32, _x: f32, _y: f32) {}
 
-    /// Called on a physical mouse-wheel tick at cursor position `(x, y)`,
-    /// with `(dx, dy)` the wheel delta (RFC-0012 §A loose end: `wheel`'s
-    /// hardware origin).
+    /// Called on a physical mouse-wheel tick at cursor position `(x, y)` of
+    /// `surface`, with `(dx, dy)` the wheel delta (RFC-0012 §A loose end:
+    /// `wheel`'s hardware origin).
     ///
     /// Defaults to a no-op.
-    fn on_wheel(&mut self, _dx: f32, _dy: f32, _x: f32, _y: f32) {}
+    fn on_wheel(&mut self, _surface: crate::SurfaceId, _dx: f32, _dy: f32, _x: f32, _y: f32) {}
+
+    // ── Several surfaces (RFC-0068 §5) ──────────────────────────────────
+
+    /// Takes the changes to the set of surfaces the logic thread queued, in
+    /// order. A host of several windows asks when the frame waker woke it
+    /// ([`Engine::drain_surface_changes`](crate::engine::Engine::drain_surface_changes)).
+    ///
+    /// Defaults to none, which is every program of one window.
+    fn take_surface_changes(&mut self) -> Vec<crate::SurfaceChange> {
+        Vec::new()
+    }
+
+    /// Called when the host made a window for `surface`, with the `wgpu`
+    /// surface of it (`size` is the window's own size, physical). A host
+    /// usually passes it to [`Engine::add_surface`](crate::engine::Engine::add_surface).
+    ///
+    /// # Errors
+    ///
+    /// Whatever the engine says when it cannot draw into the surface; the host
+    /// treats it as fatal.
+    fn on_surface_created(
+        &mut self,
+        _surface: crate::SurfaceId,
+        _wgpu_surface: wgpu::Surface<'static>,
+        _size: WindowSize,
+    ) -> Result<(), ByardError> {
+        Ok(())
+    }
+
+    /// Called when the window of `surface` is gone. A host usually passes it
+    /// to [`Engine::drop_surface`](crate::engine::Engine::drop_surface).
+    fn on_surface_destroyed(&mut self, _surface: crate::SurfaceId) {}
+
+    /// The version of the latest frame published for `surface`, `None` if
+    /// there is none. A host of several windows compares it with the version
+    /// it last drew to ask for a redraw of the surfaces that changed and no
+    /// others.
+    ///
+    /// Defaults to `None`.
+    fn frame_version(&self, _surface: crate::SurfaceId) -> Option<u64> {
+        None
+    }
 }
 
 #[cfg(test)]
@@ -715,9 +797,9 @@ mod tests {
             Ok(())
         }
 
-        fn on_resize(&mut self, _size: WindowSize) {}
+        fn on_resize(&mut self, _surface: crate::SurfaceId, _size: WindowSize) {}
 
-        fn on_redraw(&mut self) -> Result<(), ByardError> {
+        fn on_redraw(&mut self, _surface: crate::SurfaceId) -> Result<(), ByardError> {
             Ok(())
         }
     }
@@ -743,12 +825,23 @@ mod tests {
         assert_ne!(elsewhere, event);
     }
 
-    /// A host written for one window keeps working: its access frame and its
-    /// access requests are the main surface's, and no other surface has any.
+    /// A host that says nothing about several windows is a host of one: no
+    /// changes to apply, no frame to compare, nothing to create.
     #[test]
-    fn the_per_surface_access_hooks_default_to_the_one_window() {
-        struct Counting(u32);
-        impl PlatformHost for Counting {
+    fn a_host_that_says_nothing_about_surfaces_is_a_host_of_one_window() {
+        let mut host = DefaultsOnlyHost;
+        assert!(!host.is_multi_surface());
+        assert_eq!(host.take_surface_changes().len(), 0);
+        assert_eq!(host.frame_version(crate::SurfaceId::MAIN), None);
+        assert!(host.access_frame(crate::SurfaceId::new(1)).is_none());
+    }
+
+    /// A round of redraws is each surface's `on_redraw` unless the host draws
+    /// them together, and every surface is attempted even if one fails.
+    #[test]
+    fn a_round_of_redraws_defaults_to_one_redraw_each_and_reports_the_first_error() {
+        struct Failing(Vec<u32>);
+        impl PlatformHost for Failing {
             fn on_resume(
                 &mut self,
                 _: &wgpu::Instance,
@@ -758,50 +851,51 @@ mod tests {
             ) -> Result<(), ByardError> {
                 Ok(())
             }
-            fn on_resize(&mut self, _: WindowSize) {}
-            fn on_redraw(&mut self) -> Result<(), ByardError> {
-                Ok(())
-            }
-            fn access_frame(&self) -> Option<std::sync::Arc<crate::frame::RenderFrame>> {
-                Some(std::sync::Arc::new(crate::frame::RenderFrame::new()))
-            }
-            fn on_access_request(&mut self, _: crate::access::AccessRequest) {
-                self.0 += 1;
+            fn on_resize(&mut self, _: crate::SurfaceId, _: WindowSize) {}
+            fn on_redraw(&mut self, surface: crate::SurfaceId) -> Result<(), ByardError> {
+                self.0.push(surface.index());
+                if surface.index() == 1 {
+                    Err(ByardError::RenderSurface("one".to_string()))
+                } else {
+                    Ok(())
+                }
             }
         }
-        let mut host = Counting(0);
-        assert!(host.access_frame_for(crate::SurfaceId::MAIN).is_some());
-        assert!(host.access_frame_for(crate::SurfaceId::new(1)).is_none());
-        let request = crate::access::AccessRequest {
-            target: crate::access::AccessId(0),
-            action: crate::access::AccessAction::Press,
-        };
-        host.on_surface_access_request(crate::SurfaceId::MAIN, request.clone());
-        host.on_surface_access_request(crate::SurfaceId::new(1), request);
-        assert_eq!(host.0, 1, "only the main surface's request is delivered");
+        let mut host = Failing(Vec::new());
+        let ids = [1, 2].map(crate::SurfaceId::new);
+        let result = host.on_redraw_round(&ids);
+        assert_eq!(host.0, [1, 2], "the second is drawn after the first fails");
+        assert!(result.is_err());
     }
 
     #[test]
     fn on_close_requested_defaults_to_true() {
         let mut host = DefaultsOnlyHost;
-        assert!(host.on_close_requested());
+        assert!(host.on_close_requested(crate::SurfaceId::MAIN));
     }
 
     #[test]
     fn on_pointer_input_default_is_a_no_op() {
         let mut host = DefaultsOnlyHost;
         // Must not panic for any button/state combination.
-        host.on_pointer_input(PointerButton::Left, PointerState::Pressed, 0.0, 0.0);
-        host.on_pointer_input(PointerButton::Other(7), PointerState::Released, 10.0, 20.0);
-        host.on_cursor_moved(15.0, 25.0);
+        let main = crate::SurfaceId::MAIN;
+        host.on_pointer_input(main, PointerButton::Left, PointerState::Pressed, 0.0, 0.0);
+        host.on_pointer_input(
+            main,
+            PointerButton::Other(7),
+            PointerState::Released,
+            10.0,
+            20.0,
+        );
+        host.on_cursor_moved(main, 15.0, 25.0);
     }
 
     #[test]
     fn on_scroll_and_on_wheel_defaults_are_no_ops() {
         let mut host = DefaultsOnlyHost;
         // Must not panic for any delta/position combination.
-        host.on_scroll(1.0, -2.0, 10.0, 20.0);
-        host.on_wheel(0.0, 3.0, 30.0, 40.0);
+        host.on_scroll(crate::SurfaceId::MAIN, 1.0, -2.0, 10.0, 20.0);
+        host.on_wheel(crate::SurfaceId::MAIN, 0.0, 3.0, 30.0, 40.0);
     }
 
     #[test]

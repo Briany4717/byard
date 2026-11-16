@@ -18,6 +18,7 @@
 //! connected. See `access`.
 
 mod clipboard;
+mod windows;
 
 pub use clipboard::SystemClipboard;
 
@@ -206,19 +207,23 @@ impl WinitHost {
         });
 
         let mut app = WinitApp {
+            multi: host.is_multi_surface(),
             host,
-            window: None,
+            started: false,
+            instance: None,
+            anchor: None,
+            slots: byard_core::PerSurface::new(),
+            wins: windows::Windows::default(),
+            redraws: Vec::new(),
             title: self.title,
             width: self.width,
             height: self.height,
             icon: self.icon,
             app_id: self.app_id,
             fatal: None,
-            cursor_pos: (0.0, 0.0),
             poll: self.poll,
             waker,
             modifiers: KeyModifiers::default(),
-            ime_caret: None,
             access_proxy,
             access: access::Bridges::new(),
         };
@@ -234,14 +239,87 @@ impl WinitHost {
     }
 }
 
+/// One open window of the program: what the host keeps beside it.
+struct Slot {
+    window: Arc<Window>,
+    /// The cursor's last position in this window, logical.
+    cursor_pos: (f32, f32),
+    /// The caret last handed to this window's IME, `None` while it is off
+    /// (RFC-0040 §4). Kept so the window is only told when something changed.
+    ime_caret: Option<byard_core::frame::Rect>,
+}
+
+impl Slot {
+    fn new(window: Arc<Window>) -> Self {
+        Self {
+            window,
+            cursor_pos: (0.0, 0.0),
+            ime_caret: None,
+        }
+    }
+}
+
+/// The smallest or largest size a window may be resized to, from a bound per
+/// axis: an axis with no bound is left open (`open`). `None` when neither
+/// axis has one.
+fn bound_size(bound: (Option<f32>, Option<f32>), open: f64) -> Option<LogicalSize<f64>> {
+    if bound.0.is_none() && bound.1.is_none() {
+        return None;
+    }
+    Some(LogicalSize::new(
+        bound.0.map_or(open, f64::from),
+        bound.1.map_or(open, f64::from),
+    ))
+}
+
+/// What a window of the program is opened with, from its spec.
+fn window_attributes(
+    spec: &byard_core::SurfaceSpec,
+    app_id: &str,
+    icon: Option<winit::window::Icon>,
+) -> winit::window::WindowAttributes {
+    let mut attrs = Window::default_attributes()
+        .with_title(&spec.title)
+        .with_inner_size(LogicalSize::new(
+            f64::from(spec.size.0),
+            f64::from(spec.size.1),
+        ))
+        .with_resizable(spec.resizable)
+        .with_decorations(spec.decorations)
+        .with_transparent(spec.transparent)
+        .with_window_icon(icon)
+        .with_visible(!access::NEEDS_HIDDEN_START);
+    if let Some(min) = bound_size(spec.min_size, 0.0) {
+        attrs = attrs.with_min_inner_size(min);
+    }
+    if let Some(max) = bound_size(spec.max_size, 1.0e6) {
+        attrs = attrs.with_max_inner_size(max);
+    }
+    with_app_id(attrs, app_id)
+}
+
 /// Adapts a [`PlatformHost`] to `winit`'s `ApplicationHandler`.
 ///
-/// `window` is `None` until `resumed()` fires, the first point at which
-/// creating a window is valid on every platform `winit` supports, including
-/// Android and iOS.
+/// A program of one window keeps it in `slots` as [`SurfaceId::MAIN`] and
+/// runs the code it always did. A program of several (RFC-0068 §2, §8) opens
+/// a hidden anchor window first, which gives the device a surface to be
+/// chosen against and is never drawn or shown, then a window for each
+/// [`byard_core::SurfaceChange::Create`] the logic thread asks for.
 struct WinitApp<H: PlatformHost> {
     host: H,
-    window: Option<Arc<Window>>,
+    /// Whether the program has several windows, asked of the host once.
+    multi: bool,
+    started: bool,
+    /// Used to make the surface of each window after the first.
+    instance: Option<wgpu::Instance>,
+    /// The hidden window of a program of several windows.
+    anchor: Option<Arc<Window>>,
+    /// The open windows, by surface.
+    slots: byard_core::PerSurface<Slot>,
+    /// What decides which windows are open (a program of several).
+    wins: windows::Windows,
+    /// The surfaces that asked for a redraw in this round of the event loop.
+    redraws: Vec<SurfaceId>,
     title: String,
     width: u32,
     height: u32,
@@ -254,7 +332,6 @@ struct WinitApp<H: PlatformHost> {
     /// `WinitHost::run` checks this after the event loop exits and surfaces
     /// it to its own caller.
     fatal: Option<ByardError>,
-    cursor_pos: (f32, f32),
     /// Mirror of [`WinitHost::poll`]: when `true`, `about_to_wait` requests
     /// a redraw on every event-loop iteration so hot-reload frames appear
     /// immediately without waiting for the next user input event.
@@ -265,17 +342,82 @@ struct WinitApp<H: PlatformHost> {
     /// Latest modifier state, tracked so a key event can be offered to the host
     /// as a chord before it reaches the router (RFC-0030 §V3).
     modifiers: KeyModifiers,
-    /// The caret last handed to the IME, `None` while it is off (RFC-0040
-    /// §4). Kept so the window is only told when something changed.
-    ime_caret: Option<byard_core::frame::Rect>,
     /// The proxy the screen-reader adapter posts its events through.
     #[cfg_attr(
         not(feature = "a11y"),
         allow(dead_code, reason = "only the AccessKit bridge uses it")
     )]
     access_proxy: winit::event_loop::EventLoopProxy<UserEvent>,
-    /// The window's screen-reader adapter, once the window exists (RFC-0042).
+    /// The screen-reader adapter of each window, once it exists (RFC-0042).
     access: access::Bridges,
+}
+
+/// The host's windows as [`windows::Backend`]: the real thing.
+struct Real<'a, H: PlatformHost> {
+    app: &'a mut WinitApp<H>,
+    event_loop: &'a ActiveEventLoop,
+}
+
+impl<H: PlatformHost> windows::Backend for Real<'_, H> {
+    fn create(&mut self, id: SurfaceId, spec: &byard_core::SurfaceSpec) -> Result<(), String> {
+        let app = &mut *self.app;
+        let icon = app.icon_for_window();
+        let window = self
+            .event_loop
+            .create_window(window_attributes(spec, &app.app_id, icon))
+            .map(Arc::new)
+            .map_err(|e| e.to_string())?;
+        app.attach_access(self.event_loop, &window, id);
+        let Some(instance) = app.instance.as_ref() else {
+            return Err("the program has no graphics instance".to_string());
+        };
+        let surface = instance
+            .create_surface(window.clone())
+            .map_err(|e| e.to_string())?;
+        let mut size = to_window_size(window.inner_size(), window.scale_factor());
+        size.refresh_rate_mhz = window
+            .current_monitor()
+            .and_then(|m| m.refresh_rate_millihertz());
+        app.host
+            .on_surface_created(id, surface, size)
+            .map_err(|e| e.to_string())?;
+        app.slots.insert(id, Slot::new(window));
+        Ok(())
+    }
+
+    fn configure(&mut self, id: SurfaceId, spec: &byard_core::SurfaceSpec) {
+        let Some(slot) = self.app.slots.get(id) else {
+            return;
+        };
+        let w = &slot.window;
+        w.set_title(&spec.title);
+        w.set_min_inner_size(bound_size(spec.min_size, 0.0));
+        w.set_max_inner_size(bound_size(spec.max_size, 1.0e6));
+        w.set_resizable(spec.resizable);
+        w.set_decorations(spec.decorations);
+        w.set_transparent(spec.transparent);
+    }
+
+    fn destroy(&mut self, id: SurfaceId) {
+        self.app.host.on_surface_destroyed(id);
+        self.app.access.remove(id);
+        self.app.slots.remove(id);
+        self.app.redraws.retain(|s| *s != id);
+    }
+
+    fn request_redraw(&mut self, id: SurfaceId) {
+        if let Some(slot) = self.app.slots.get(id) {
+            slot.window.request_redraw();
+        }
+    }
+
+    fn send_close(&mut self, id: SurfaceId) {
+        self.app.host.on_surface_close(id);
+    }
+
+    fn exit(&mut self) {
+        self.event_loop.exit();
+    }
 }
 
 impl<H: PlatformHost> WinitApp<H> {
@@ -284,6 +426,14 @@ impl<H: PlatformHost> WinitApp<H> {
     fn fail(&mut self, event_loop: &ActiveEventLoop, err: ByardError) {
         self.fatal = Some(err);
         event_loop.exit();
+    }
+
+    /// The icon, made again for each window.
+    fn icon_for_window(&self) -> Option<winit::window::Icon> {
+        let (rgba, width, height) = self.icon.clone()?;
+        winit::window::Icon::from_rgba(rgba, width, height)
+            .map_err(|e| eprintln!("  the window icon was not used: {e}"))
+            .ok()
     }
 
     #[cfg_attr(
@@ -296,64 +446,180 @@ impl<H: PlatformHost> WinitApp<H> {
     /// Creates the screen-reader adapter for `window`, then shows the window
     /// (RFC-0042 §5). With the feature off the window was never hidden and
     /// there is nothing to build.
-    fn attach_access(&mut self, event_loop: &ActiveEventLoop, window: &Window) {
+    fn attach_access(&mut self, event_loop: &ActiveEventLoop, window: &Window, id: SurfaceId) {
         #[cfg(feature = "a11y")]
         {
             self.access.insert(
-                byard_core::SurfaceId::MAIN,
-                access::Bridge::new(
-                    event_loop,
-                    window,
-                    self.access_proxy.clone(),
-                    byard_core::SurfaceId::MAIN,
-                ),
+                id,
+                access::Bridge::new(event_loop, window, self.access_proxy.clone(), id),
             );
             window.set_visible(true);
         }
         #[cfg(not(feature = "a11y"))]
-        let _ = (event_loop, window);
+        let _ = (event_loop, window, id);
     }
 
-    /// Turns the IME on or off and moves its candidate window to follow the
-    /// focused field's caret, as the frame just presented reports it
-    /// (RFC-0040 §4). Read from the presented frame, so the rectangle is
-    /// always that of what is on screen, and the logic thread never touches
-    /// the window.
-    fn sync_ime(&mut self) {
-        let want = self.host.text_input().map(|t| t.caret);
-        if want == self.ime_caret {
-            return;
-        }
-        let Some(window) = self.window.as_ref() else {
+    /// Turns the IME of `surface`'s window on or off and moves its candidate
+    /// window to follow the focused field's caret, as the frame just
+    /// presented reports it (RFC-0040 §4). Read from the presented frame, so
+    /// the rectangle is always that of what is on screen, and the logic
+    /// thread never touches the window.
+    fn sync_ime(&mut self, surface: SurfaceId) {
+        let want = self.host.text_input(surface).map(|t| t.caret);
+        let Some(slot) = self.slots.get_mut(surface) else {
             return;
         };
-        match (self.ime_caret, want) {
-            (None, Some(_)) => window.set_ime_allowed(true),
-            (Some(_), None) => window.set_ime_allowed(false),
+        if want == slot.ime_caret {
+            return;
+        }
+        match (slot.ime_caret, want) {
+            (None, Some(_)) => slot.window.set_ime_allowed(true),
+            (Some(_), None) => slot.window.set_ime_allowed(false),
             _ => {}
         }
         if let Some(caret) = want {
-            window.set_ime_cursor_area(
+            slot.window.set_ime_cursor_area(
                 winit::dpi::LogicalPosition::new(caret.x, caret.y),
                 LogicalSize::new(caret.width, caret.height),
             );
         }
-        self.ime_caret = want;
+        slot.ime_caret = want;
+    }
+
+    /// The surface and window an event of `window_id` is about. The hidden
+    /// anchor of a program of several windows is nobody's.
+    fn locate(&self, window_id: WindowId) -> Option<(SurfaceId, Arc<Window>)> {
+        self.slots
+            .iter()
+            .find(|(_, s)| s.window.id() == window_id)
+            .map(|(id, s)| (id, s.window.clone()))
+    }
+
+    /// Runs `f` on the window bookkeeping with a [`Real`] backend; a window
+    /// that cannot be made ends the program.
+    fn with_windows<R>(
+        &mut self,
+        event_loop: &ActiveEventLoop,
+        f: impl FnOnce(&mut windows::Windows, &mut Real<'_, H>) -> R,
+    ) -> R {
+        let mut wins = std::mem::take(&mut self.wins);
+        let out = f(
+            &mut wins,
+            &mut Real {
+                app: self,
+                event_loop,
+            },
+        );
+        self.wins = wins;
+        out
+    }
+
+    /// Applies what the logic thread queued about surfaces, then asks for a
+    /// redraw of the windows whose frame is new (a program of several).
+    fn sync_surfaces(&mut self, event_loop: &ActiveEventLoop) {
+        let changes = self.host.take_surface_changes();
+        if !changes.is_empty() {
+            if let Err(e) = self.with_windows(event_loop, |w, b| w.apply(&changes, b)) {
+                self.fail(event_loop, ByardError::Platform(e));
+                return;
+            }
+        }
+        let versions: Vec<(SurfaceId, Option<u64>)> = self
+            .wins
+            .ids()
+            .map(|id| (id, self.host.frame_version(id)))
+            .collect();
+        self.with_windows(event_loop, |w, b| {
+            w.frames_published(
+                |id| {
+                    versions
+                        .iter()
+                        .find(|(s, _)| *s == id)
+                        .and_then(|(_, v)| *v)
+                },
+                b,
+            );
+        });
+    }
+
+    /// Draws the surfaces that asked for it this round as one round, then
+    /// tells each one's IME and screen reader what it now shows.
+    fn flush_redraws(&mut self, event_loop: &ActiveEventLoop) {
+        if self.redraws.is_empty() {
+            return;
+        }
+        let ids = std::mem::take(&mut self.redraws);
+        if let Err(e) = self.host.on_redraw_round(&ids) {
+            self.fail(event_loop, e);
+            return;
+        }
+        for id in ids {
+            self.sync_ime(id);
+            if let (Some(access), Some(slot)) = (self.access.get_mut(id), self.slots.get(id)) {
+                access.sync(&self.host, &slot.window);
+            }
+        }
+    }
+
+    /// The anchor of a program of several windows, and the device's surface.
+    fn resume_anchor(&mut self, event_loop: &ActiveEventLoop, instance: wgpu::Instance) {
+        let attributes = with_app_id(
+            Window::default_attributes()
+                .with_title(&self.title)
+                .with_inner_size(LogicalSize::new(1.0, 1.0))
+                .with_decorations(false)
+                .with_resizable(false)
+                .with_visible(false),
+            &self.app_id,
+        );
+        let window = match event_loop.create_window(attributes) {
+            Ok(w) => Arc::new(w),
+            Err(e) => return self.fail(event_loop, ByardError::Platform(e.to_string())),
+        };
+        let surface = match instance.create_surface(window.clone()) {
+            Ok(s) => s,
+            Err(e) => return self.fail(event_loop, ByardError::Platform(e.to_string())),
+        };
+        let mut size = to_window_size(window.inner_size(), window.scale_factor());
+        size.width = size.width.max(1);
+        size.height = size.height.max(1);
+        size.refresh_rate_mhz = window
+            .current_monitor()
+            .and_then(|m| m.refresh_rate_millihertz());
+        if let Err(e) = self
+            .host
+            .on_resume(&instance, surface, size, self.waker.clone())
+        {
+            return self.fail(event_loop, e);
+        }
+        if let Some(theme) = window.theme() {
+            self.host
+                .on_system_scheme(theme == winit::window::Theme::Dark);
+        }
+        self.instance = Some(instance);
+        self.anchor = Some(window);
     }
 }
 
 impl<H: PlatformHost> ApplicationHandler<UserEvent> for WinitApp<H> {
     fn resumed(&mut self, event_loop: &ActiveEventLoop) {
         // Already initialised, e.g. resumed again after a mobile suspend.
-        if self.window.is_some() {
+        if self.started {
+            return;
+        }
+        self.started = true;
+
+        // wgpu 29: InstanceDescriptor::default() removed.
+        // `new_without_display_handle_from_env` is the direct equivalent:
+        // reads the WGPU_BACKEND env var and works on Metal/Dx12/Vulkan.
+        let instance =
+            wgpu::Instance::new(wgpu::InstanceDescriptor::new_without_display_handle_from_env());
+        if self.multi {
+            self.resume_anchor(event_loop, instance);
             return;
         }
 
-        let icon = self.icon.take().and_then(|(rgba, width, height)| {
-            winit::window::Icon::from_rgba(rgba, width, height)
-                .map_err(|e| eprintln!("  the window icon was not used: {e}"))
-                .ok()
-        });
+        let icon = self.icon_for_window();
         let attributes = with_app_id(
             Window::default_attributes()
                 .with_title(&self.title)
@@ -372,13 +638,8 @@ impl<H: PlatformHost> ApplicationHandler<UserEvent> for WinitApp<H> {
                 return;
             }
         };
-        self.attach_access(event_loop, &window);
+        self.attach_access(event_loop, &window, SurfaceId::MAIN);
 
-        // wgpu 29: InstanceDescriptor::default() removed.
-        // `new_without_display_handle_from_env` is the direct equivalent:
-        // reads the WGPU_BACKEND env var and works on Metal/Dx12/Vulkan.
-        let instance =
-            wgpu::Instance::new(wgpu::InstanceDescriptor::new_without_display_handle_from_env());
         // create_surface requires the window to be Arc'd ('static bound).
         // No `unsafe` needed with wgpu 24+ + winit 0.30.
         let surface = match instance.create_surface(window.clone()) {
@@ -414,39 +675,52 @@ impl<H: PlatformHost> ApplicationHandler<UserEvent> for WinitApp<H> {
         }
 
         window.request_redraw();
-        self.window = Some(window);
+        self.slots.insert(SurfaceId::MAIN, Slot::new(window));
     }
 
+    #[allow(clippy::too_many_lines, reason = "one arm per window event")]
     fn window_event(
         &mut self,
         event_loop: &ActiveEventLoop,
-        _window_id: WindowId,
+        window_id: WindowId,
         event: WindowEvent,
     ) {
-        let Some(window) = self.window.as_ref() else {
+        let Some((surface, window)) = self.locate(window_id) else {
             return;
         };
-        if let Some(access) = self.access.get_mut(SurfaceId::MAIN) {
-            access.process_event(window, &event);
+        let multi = self.multi;
+        // A program of one window asks for a redraw after most events, as it
+        // always did; a program of several draws what the logic thread
+        // publishes, which `sync_surfaces` finds by version.
+        let redraw = |w: &Window| {
+            if !multi {
+                w.request_redraw();
+            }
+        };
+        if let Some(access) = self.access.get_mut(surface) {
+            access.process_event(&window, &event);
         }
 
         match event {
             // on_close_requested() == false means "keep the window open";
             // there's nothing else to do, so it falls through to the `_`
             // arm below rather than getting its own empty branch here.
-            WindowEvent::CloseRequested if self.host.on_close_requested() => {
+            WindowEvent::CloseRequested if multi => {
+                self.with_windows(event_loop, |w, b| w.close_requested(surface, b));
+            }
+            WindowEvent::CloseRequested if self.host.on_close_requested(surface) => {
                 event_loop.exit();
             }
 
             WindowEvent::ThemeChanged(theme) => {
                 self.host
                     .on_system_scheme(theme == winit::window::Theme::Dark);
-                window.request_redraw();
+                redraw(&window);
             }
 
             WindowEvent::Resized(new_size) => {
                 let size = to_window_size(new_size, window.scale_factor());
-                self.host.on_resize(size);
+                self.host.on_resize(surface, size);
                 window.request_redraw();
             }
 
@@ -455,29 +729,34 @@ impl<H: PlatformHost> ApplicationHandler<UserEvent> for WinitApp<H> {
             // physical size after the factor change is supplied by winit.
             WindowEvent::ScaleFactorChanged { scale_factor, .. } => {
                 let size = to_window_size(window.inner_size(), scale_factor);
-                self.host.on_resize(size);
+                self.host.on_resize(surface, size);
                 window.request_redraw();
             }
 
             WindowEvent::RedrawRequested => {
-                if let Err(e) = self.host.on_redraw() {
+                if multi {
+                    // Drawn with the others of this round, in `about_to_wait`.
+                    if !self.redraws.contains(&surface) {
+                        self.redraws.push(surface);
+                    }
+                    return;
+                }
+                if let Err(e) = self.host.on_redraw(surface) {
                     self.fail(event_loop, e);
                     return;
                 }
-                self.sync_ime();
+                self.sync_ime(surface);
                 // RFC-0042: sends the screen reader the tree the frame just
                 // presented carries, if it differs from the last one sent. A
                 // window with no reader connected does nothing here.
-                if let (Some(access), Some(window)) =
-                    (self.access.get_mut(SurfaceId::MAIN), self.window.as_ref())
-                {
-                    access.sync(&self.host, window);
+                if let Some(access) = self.access.get_mut(surface) {
+                    access.sync(&self.host, &window);
                 }
             }
 
             WindowEvent::Ime(ime) => {
-                self.host.on_ime(to_ime_event(ime));
-                window.request_redraw();
+                self.host.on_ime(surface, to_ime_event(ime));
+                redraw(&window);
             }
 
             WindowEvent::CursorMoved { position, .. } => {
@@ -487,29 +766,32 @@ impl<H: PlatformHost> ApplicationHandler<UserEvent> for WinitApp<H> {
                 let x = logical.x as f32;
                 #[allow(clippy::cast_possible_truncation)]
                 let y = logical.y as f32;
-                self.cursor_pos = (x, y);
-                self.host.on_cursor_moved(x, y);
-                window.request_redraw();
+                if let Some(slot) = self.slots.get_mut(surface) {
+                    slot.cursor_pos = (x, y);
+                }
+                self.host.on_cursor_moved(surface, x, y);
+                redraw(&window);
             }
 
             WindowEvent::MouseInput { state, button, .. } => {
-                let (x, y) = self.cursor_pos;
+                let (x, y) = self.slots.get(surface).map_or((0.0, 0.0), |s| s.cursor_pos);
                 self.host.on_pointer_input(
+                    surface,
                     to_pointer_button(button),
                     to_pointer_state(state),
                     x,
                     y,
                 );
-                window.request_redraw();
+                redraw(&window);
             }
 
             WindowEvent::MouseWheel { delta, .. } => {
-                let (x, y) = self.cursor_pos;
+                let (x, y) = self.slots.get(surface).map_or((0.0, 0.0), |s| s.cursor_pos);
                 match to_scroll_origin(delta, window.scale_factor()) {
-                    ScrollOrigin::Wheel(dx, dy) => self.host.on_wheel(dx, dy, x, y),
-                    ScrollOrigin::Scroll(dx, dy) => self.host.on_scroll(dx, dy, x, y),
+                    ScrollOrigin::Wheel(dx, dy) => self.host.on_wheel(surface, dx, dy, x, y),
+                    ScrollOrigin::Scroll(dx, dy) => self.host.on_scroll(surface, dx, dy, x, y),
                 }
-                window.request_redraw();
+                redraw(&window);
             }
 
             WindowEvent::ModifiersChanged(state) => {
@@ -522,8 +804,9 @@ impl<H: PlatformHost> ApplicationHandler<UserEvent> for WinitApp<H> {
             // Whether anyone is typing into this window. The caret of a
             // focused field stops blinking when nobody is (RFC-0041 §6).
             WindowEvent::Focused(focused) => {
-                self.host.on_window_focus(focused);
-                window.request_redraw();
+                self.wins.focus_changed(surface, focused);
+                self.host.on_window_focus(surface, focused);
+                redraw(&window);
             }
 
             WindowEvent::KeyboardInput { event, .. } => {
@@ -533,14 +816,16 @@ impl<H: PlatformHost> ApplicationHandler<UserEvent> for WinitApp<H> {
                 // chord that reached the router would be indistinguishable from
                 // the user typing, so a consumed chord stops here, no
                 // `on_key`, no `on_text` (RFC-0030 §V3).
-                let consumed =
-                    !key_str.is_empty() && self.host.on_chord(&key_str, pressed, self.modifiers);
+                let consumed = !key_str.is_empty()
+                    && self
+                        .host
+                        .on_chord(surface, &key_str, pressed, self.modifiers);
                 if consumed {
-                    window.request_redraw();
+                    redraw(&window);
                     return;
                 }
                 if !key_str.is_empty() {
-                    self.host.on_key(&key_str, pressed);
+                    self.host.on_key(surface, &key_str, pressed);
                 }
                 // Typed text, on press. Read from `text` rather than the logical
                 // key: it is what carries a dead-key combination on Windows.
@@ -550,10 +835,10 @@ impl<H: PlatformHost> ApplicationHandler<UserEvent> for WinitApp<H> {
                 // `Ime::Commit` instead (RFC-0040 §3).
                 if pressed {
                     if let Some(text) = typed_text(&event) {
-                        self.host.on_text(text);
+                        self.host.on_text(surface, text);
                     }
                 }
-                window.request_redraw();
+                redraw(&window);
             }
 
             _ => {}
@@ -567,23 +852,39 @@ impl<H: PlatformHost> ApplicationHandler<UserEvent> for WinitApp<H> {
     /// Or the screen-reader adapter has something to say (RFC-0042 §5), which
     /// also ends in a redraw: a reader that just connected needs the tree
     /// sent, and one that asked a node to act needs the result shown.
-    fn user_event(&mut self, _event_loop: &ActiveEventLoop, event: UserEvent) {
+    ///
+    /// In a program of several windows this is also where the windows the
+    /// logic thread opened, changed or closed are made to match, and where the
+    /// windows with a new frame are found (RFC-0068 §5).
+    fn user_event(&mut self, event_loop: &ActiveEventLoop, event: UserEvent) {
         match event {
             UserEvent::FramePublished => {}
             #[cfg(feature = "a11y")]
             UserEvent::Access(event) => {
-                // The one window is `SurfaceId::MAIN`; with several, the window
-                // id on the event names the surface.
+                // The window id on the event names the surface.
+                let surface = self
+                    .locate(event.window_id)
+                    .map_or(SurfaceId::MAIN, |(id, _)| id);
                 access::handle_event(
                     &mut self.access,
-                    SurfaceId::MAIN,
+                    surface,
                     &mut self.host,
                     event.window_event,
                 );
+                if self.multi {
+                    if let Some(slot) = self.slots.get(surface) {
+                        slot.window.request_redraw();
+                    }
+                    return;
+                }
             }
         }
-        if let Some(window) = &self.window {
-            window.request_redraw();
+        if self.multi {
+            self.sync_surfaces(event_loop);
+            return;
+        }
+        if let Some(slot) = self.slots.get(SurfaceId::MAIN) {
+            slot.window.request_redraw();
         }
     }
 
@@ -597,13 +898,26 @@ impl<H: PlatformHost> ApplicationHandler<UserEvent> for WinitApp<H> {
     /// back to `Wait` and genuinely idles at zero frames; input events and the
     /// logic thread's frame waker both bring it back.
     fn about_to_wait(&mut self, event_loop: &ActiveEventLoop) {
+        if self.multi {
+            // Every window that asked this round is drawn together, so the
+            // glyph atlas is trimmed once (RFC-0068 §5).
+            self.flush_redraws(event_loop);
+            if !self.poll {
+                return;
+            }
+            event_loop.set_control_flow(control_flow_for(self.host.wants_frames()));
+            if self.host.wants_frames() {
+                self.sync_surfaces(event_loop);
+            }
+            return;
+        }
         if !self.poll {
             return;
         }
         event_loop.set_control_flow(control_flow_for(self.host.wants_frames()));
         if self.host.wants_frames() {
-            if let Some(window) = &self.window {
-                window.request_redraw();
+            if let Some(slot) = self.slots.get(SurfaceId::MAIN) {
+                slot.window.request_redraw();
             }
         }
     }
@@ -796,6 +1110,17 @@ mod tests {
 
     /// A window carries the id its app names, and Byard's own tools keep
     /// `dev.byard.Byard`.
+    /// A window's bounds are per axis: an axis with none is left open, and a
+    /// window with no bound on either has none to set.
+    #[test]
+    fn a_window_bound_is_per_axis_and_absent_when_neither_is_written() {
+        assert_eq!(bound_size((None, None), 0.0), None);
+        let min = bound_size((Some(200.0), None), 0.0).unwrap();
+        assert_eq!((min.width, min.height), (200.0, 0.0));
+        let max = bound_size((None, Some(500.0)), 1.0e6).unwrap();
+        assert_eq!((max.width, max.height), (1.0e6, 500.0));
+    }
+
     #[test]
     fn a_host_carries_the_app_id_it_is_given() {
         assert_eq!(WinitHost::new("t", 1, 1).app_id, "dev.byard.Byard");

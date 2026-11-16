@@ -149,7 +149,7 @@ impl PlatformHost for App {
         Ok(())
     }
 
-    fn on_resize(&mut self, size: WindowSize) {
+    fn on_resize(&mut self, _surface: byard_core::SurfaceId, size: WindowSize) {
         if let Some(e) = self.engine.as_mut() {
             e.on_resize(size.width, size.height, size.scale_factor);
             #[allow(clippy::cast_precision_loss, clippy::cast_possible_truncation)]
@@ -165,14 +165,21 @@ impl PlatformHost for App {
         }
     }
 
-    fn on_redraw(&mut self) -> Result<(), ByardError> {
+    fn on_redraw(&mut self, _surface: byard_core::SurfaceId) -> Result<(), ByardError> {
         if let Some(e) = self.engine.as_mut() {
             e.render_latest()?;
         }
         Ok(())
     }
 
-    fn on_pointer_input(&mut self, _button: PointerButton, state: PointerState, x: f32, y: f32) {
+    fn on_pointer_input(
+        &mut self,
+        _surface: byard_core::SurfaceId,
+        _button: PointerButton,
+        state: PointerState,
+        x: f32,
+        y: f32,
+    ) {
         if let Some(engine) = &self.engine {
             let kind = match state {
                 PointerState::Pressed => byard_core::platform::EventKind::PointerDown,
@@ -190,7 +197,7 @@ impl PlatformHost for App {
         }
     }
 
-    fn on_cursor_moved(&mut self, x: f32, y: f32) {
+    fn on_cursor_moved(&mut self, _surface: byard_core::SurfaceId, x: f32, y: f32) {
         if let Some(engine) = &self.engine {
             engine.push_input(byard_core::platform::InputEvent {
                 surface: byard_core::SurfaceId::MAIN,
@@ -204,7 +211,7 @@ impl PlatformHost for App {
         }
     }
 
-    fn on_key(&mut self, key: &str, pressed: bool) {
+    fn on_key(&mut self, _surface: byard_core::SurfaceId, key: &str, pressed: bool) {
         if let Some(engine) = &self.engine {
             let kind = if pressed {
                 byard_core::platform::EventKind::KeyDown
@@ -223,7 +230,7 @@ impl PlatformHost for App {
         }
     }
 
-    fn on_text(&mut self, text: &str) {
+    fn on_text(&mut self, _surface: byard_core::SurfaceId, text: &str) {
         if let Some(engine) = &self.engine {
             engine.push_input(byard_core::platform::InputEvent {
                 surface: byard_core::SurfaceId::MAIN,

@@ -558,6 +558,27 @@ View Gauge() {
     assert_eq!(w.paints("Narrow"), 1);
 }
 
+/// The host tells the program the size the platform gave a window as an event
+/// of that surface, not by reaching into the interpreter.
+#[test]
+fn the_size_the_platform_gives_a_window_arrives_as_an_event_of_its_surface() {
+    let src = r#"
+View Main() {
+    Window #[title: "Narrow", width: 300, height: 200] { Text("w={window.width}") }
+    Window #[title: "Wide", width: 900, height: 200] { Text("w={window.width}") }
+}
+"#;
+    let mut w = Windows::new(src);
+    w.settle();
+    let wide = w.surface("Wide");
+    let resized = w.event(wide, EventKind::SurfaceResized, (555.0, 321.0));
+    w.step(&[resized]);
+    w.settle();
+    assert_eq!(w.texts("Wide"), ["w=555"]);
+    assert_eq!(w.texts("Narrow"), ["w=300"]);
+    assert_eq!(w.interp.surface_size(wide), Some((555.0, 321.0)));
+}
+
 #[test]
 fn a_when_on_window_width_is_per_window() {
     let src = r#"

@@ -182,14 +182,3 @@ fn the_scenarios_tap_in_one_window_and_read_the_other() {
     assert!(out.status.success(), "{text}");
     assert!(text.contains("4 passed; 0 failed"), "{text}");
 }
-
-#[test]
-fn a_program_with_windows_does_not_start_in_the_window_host_yet() {
-    // `byard dev` opens one window, and says so instead of drawing nothing.
-    let (out, text) = run(&["dev", example_dir().to_str().unwrap()]);
-    assert!(!out.status.success(), "{text}");
-    assert!(
-        text.contains("host that opens more than one window"),
-        "{text}"
-    );
-}

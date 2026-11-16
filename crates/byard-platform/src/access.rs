@@ -368,7 +368,7 @@ impl Bridge {
             }
             accesskit_winit::WindowEvent::ActionRequested(r) => {
                 if let Some(request) = request(&r) {
-                    host.on_surface_access_request(self.surface, request);
+                    host.on_access_request(self.surface, request);
                 }
             }
             accesskit_winit::WindowEvent::AccessibilityDeactivated => {
@@ -387,7 +387,7 @@ impl Bridge {
         if !self.active {
             return;
         }
-        let Some(frame) = host.access_frame_for(self.surface) else {
+        let Some(frame) = host.access_frame(self.surface) else {
             return;
         };
         let Some(tree) = frame.access() else {

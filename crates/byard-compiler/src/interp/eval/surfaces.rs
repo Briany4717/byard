@@ -445,6 +445,19 @@ impl Interpreter {
         }
     }
 
+    /// Asks for surface `id` to be drawn at the next tick even if nothing it
+    /// shows changed: a host that puts something of its own over a window
+    /// (the dev runner's error overlay) needs the window's frame to put it on.
+    pub fn request_surface_paint(&mut self, id: SurfaceId) {
+        if let Some(l) = self
+            .surfaces
+            .as_mut()
+            .and_then(|s| s.live.iter_mut().find(|l| l.id == id))
+        {
+            l.input = true;
+        }
+    }
+
     /// Takes the changes to the set of surfaces the last tick made, in order:
     /// the host applies them on its main thread.
     pub fn take_surface_changes(&mut self) -> Vec<SurfaceChange> {
@@ -509,6 +522,8 @@ impl Interpreter {
                     }
                 }
                 CoreKind::CloseRequest => self.close_requested(ev.surface),
+                // The platform gave a window its size (or the user changed it).
+                CoreKind::SurfaceResized => self.set_surface_size(ev.surface, ev.pos),
                 _ => match groups.iter_mut().find(|(id, _)| *id == ev.surface) {
                     Some((_, group)) => group.push(ev.clone()),
                     None => groups.push((ev.surface, vec![ev.clone()])),
@@ -718,6 +733,18 @@ impl Interpreter {
     ) -> byard_core::relay::SurfaceTick {
         let mut out = Vec::new();
         self.render_surfaces(tree, &mut || relay.acquire_recycled(), &mut out);
+        self.publish_surfaces(out, relay)
+    }
+
+    /// Hands the frames [`render_surfaces`](Self::render_surfaces) made to the
+    /// relay, and queues the surface changes of the tick: the second half of
+    /// [`render_surfaces_to`](Self::render_surfaces_to), for a host (the dev
+    /// runner) that adds something to a frame before it is published.
+    pub fn publish_surfaces(
+        &mut self,
+        out: Vec<(SurfaceId, byard_core::frame::RenderFrame)>,
+        relay: &byard_core::relay::Relay,
+    ) -> byard_core::relay::SurfaceTick {
         let mut tick = byard_core::relay::SurfaceTick::default();
         for (id, frame) in out {
             // The accessibility tree of this surface, when it differs from the

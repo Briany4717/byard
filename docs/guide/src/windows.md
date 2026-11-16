@@ -187,6 +187,10 @@ steps = [{ tap = 'Button "Add one"' }]
 expect = ['Window "Inspector"', 'Label "The counter reads 1"']
 ```
 
-Opening more than one window on the desktop needs the window host that comes after this
-chapter's language and interpreter half (RFC-0068 step 2b); `byard dev` and a built app
-say so and stop for now, and `byard shot` and `byard test` run any program of windows.
+`byard dev` and a built app open each window on the desktop. They run on winit, one native
+window each, from one event loop: a press in one window changes what another shows, closing a
+window with a `close =>` runs it, and a window whose `when` goes false closes. While `byard dev`
+runs, an edit keeps the windows that are still written open, where they were; the error
+overlay, the HUD and the reload flash appear over the window that has the keyboard (the first
+one, when none does). An edit that adds the program's first `Window`, or removes the last,
+needs `byard dev` to be started again. A program with a `Panel` does not start yet.

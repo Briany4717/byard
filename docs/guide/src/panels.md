@@ -115,6 +115,53 @@ would hand each bar the next screen's place, with its state. A `for` that makes 
 without a `key` is `SurfaceForNeedsKey`. A screen that is re-scaled keeps its panels, and
 what reads `s.scale` follows.
 
+## Popups
+
+A bar is 40 pixels high, so a menu that hangs from it cannot be drawn inside it. In a
+`Panel`, an `Overlay` whose first child has `anchor_to` is written the way it is in any
+app (see [Layout](layout.md)), and becomes a popup: a surface of its own, placed by the
+compositor against the element it names, allowed to be larger than the bar, and flipped to
+the other side of the element when there is no room.
+
+```byld
+View Main() {
+    var open = false
+    Panel #[edge: top, height: 40, namespace: "bar"] {
+        Row #[pl: 12, align: center] {
+            Button("Menu") #[width: 80, height: 30] as menu => open = !open
+        }
+        when open {
+            Overlay #[modal: false] {
+                Column #[anchor_to: menu, anchor_edge: below, anchor_gap: 4, width: 180,
+                         bg: 0x2B2930, radius: 12, p: 8, a11y_role: menu,
+                         dismiss => open = false] {
+                    Button("Settings") #[height: 32]
+                    Button("Quit") #[height: 32]
+                }
+            }
+        }
+    }
+}
+```
+
+`anchor_edge`, `anchor_align` and `anchor_gap` say where the popup goes, as they do in a
+window; `anchor_flip: false` keeps it from flipping. Its size is what its content measures,
+laid out with no limit, and it follows the content when it changes. It is created when the
+overlay mounts, and destroyed after its `on leave` motion has settled, so a popup that
+fades out stays until it has.
+
+A popup that is a focus scope (the overlay is modal, or its first element with a role is a
+`menu` or a `dialog`) has the grab: it takes the keyboard, Escape and a click outside it
+run its `dismiss`, as a press outside does in a window, and the keyboard goes back to the
+panel when it closes. A popup that is not one, a tooltip, never takes the keyboard. A
+`dismiss` that does not close the overlay leaves it open, although the compositor has
+already dismissed it.
+
+An overlay in a panel with no `anchor_to` is drawn inside the panel, as in a window, and
+so is every overlay in a `Window`: only a panel's popups are surfaces. An anchored overlay
+inside a popup, a submenu, is a popup whose parent is the popup. A popup is drawn only
+when something it shows changed, like any surface.
+
 ## Drawing and testing without a compositor
 
 `byard shot` has no compositor, so it places the panels itself, by layer shell's rules

@@ -160,7 +160,7 @@ pub(super) fn index_windows(
 /// What says which window a `Window` is when the tree is lowered again: the
 /// element's place in the program, which an edit elsewhere does not move.
 #[derive(Clone, Debug, Default, PartialEq)]
-struct Site {
+pub(super) struct Site {
     view: Option<Symbol>,
     ordinal: u32,
     inst: u32,
@@ -198,40 +198,46 @@ fn title_key(attrs: &[Attr]) -> String {
 /// One open surface: a mounted `Window`.
 // The flags are independent reasons to draw it again, each its own switch.
 #[allow(clippy::struct_excessive_bools)]
-struct Live {
-    id: SurfaceId,
+pub(super) struct Live {
+    pub(super) id: SurfaceId,
     /// The identity of the `Window` node that is this surface: its element's
     /// uid, which a `for … key` keeps with the item through any reorder.
-    uid: u32,
-    spec: SurfaceSpec,
+    pub(super) uid: u32,
+    pub(super) spec: SurfaceSpec,
     /// The size the surface is drawn at, logical pixels. The spec's opening
     /// size until the host says otherwise.
-    size: (f32, f32),
-    /// The signals behind `window.width` and `window.height` inside it.
-    win: (SignalId, SignalId),
-    site: Site,
-    close: Option<Rc<RefCell<Action>>>,
+    pub(super) size: (f32, f32),
+    /// The signals behind `window.width` and `window.height` inside it; a
+    /// popup has none (it is not a window, and signals are never recycled).
+    pub(super) win: Option<(SignalId, SignalId)>,
+    pub(super) site: Site,
+    pub(super) close: Option<Rc<RefCell<Action>>>,
     /// The surface's own state while another is bound; `None` while this one is.
-    state: Option<Box<SurfaceState>>,
+    pub(super) state: Option<Box<SurfaceState>>,
     /// What the last drawing read, and the sequence it ended at.
-    reads: ReadSet,
-    drawn_seq: u64,
+    pub(super) reads: ReadSet,
+    pub(super) drawn_seq: u64,
     /// The size it was last drawn at; `None` before the first drawing.
-    drawn_size: Option<(f32, f32)>,
+    pub(super) drawn_size: Option<(f32, f32)>,
     /// Something is still moving in it.
-    wants_frame: bool,
+    pub(super) wants_frame: bool,
     /// Input was routed to it since it was drawn.
-    input: bool,
+    pub(super) input: bool,
     /// Its own structure moved since it was drawn.
-    structure_moved: bool,
+    pub(super) structure_moved: bool,
     /// Whether the caret was blinked off when it was last drawn.
-    caret_seen: bool,
+    pub(super) caret_seen: bool,
     /// The hash of the accessibility tree last handed to the relay.
-    access_hash: Option<u64>,
+    pub(super) access_hash: Option<u64>,
     /// How many times it has been drawn.
-    paints: u64,
+    pub(super) paints: u64,
     /// What a panel adds to a window; `None` for a window.
-    panel: Option<PanelLive>,
+    pub(super) panel: Option<PanelLive>,
+    /// What a popup is; `None` for a window or a panel (RFC-0068 §7).
+    pub(super) popup: Option<super::popups::PopupLive>,
+    /// Where the elements `anchor_to` can name landed when it was last drawn,
+    /// for the popups that hang from it. Empty for a surface with none.
+    pub(super) anchors: super::popups::HostAnchors,
 }
 
 /// What a `Panel` asks, read from its attributes (RFC-0068 §3).
@@ -245,13 +251,13 @@ struct PanelAsk {
 }
 
 /// The state of a panel that a window has no use for.
-struct PanelLive {
+pub(super) struct PanelLive {
     ask: PanelAsk,
     /// The content's measured size along the axes that take it.
     measured: (f32, f32),
     /// Whether the host has been told it exists (`Create` sent). A panel has
     /// no size to ask for until it has been measured.
-    announced: bool,
+    pub(super) announced: bool,
     /// The last input region sent.
     region: InputRegion,
 }
@@ -296,26 +302,30 @@ impl PanelLive {
 }
 
 /// The surfaces of a program with windows.
+#[allow(clippy::struct_excessive_bools)]
 #[derive(Default)]
 pub(super) struct Surfaces {
     /// The next id: `MAIN` is the implicit window of a single-surface program,
     /// so a window gets one from `1`, and none is used twice in a run.
-    next_id: u32,
-    live: Vec<Live>,
-    changes: Vec<SurfaceChange>,
+    pub(super) next_id: u32,
+    pub(super) live: Vec<Live>,
+    pub(super) changes: Vec<SurfaceChange>,
     /// The program asked to end (a window closed with no `close =>`, or the
     /// last window closed).
-    quit: bool,
+    pub(super) quit: bool,
     /// Whether a window was ever open, so the last one closing can be told
     /// from none having opened yet.
-    had_any: bool,
+    pub(super) had_any: bool,
     /// The sequence the last tick that drew ended at; nothing to do while it
     /// has not moved.
-    idle_seq: Option<u64>,
+    pub(super) idle_seq: Option<u64>,
     /// Every surface is drawn again at the next tick.
-    force: bool,
+    pub(super) force: bool,
+    /// An element is leaving: the next tick settles it, whether or not
+    /// anything else happened.
+    pub(super) leaving: bool,
     /// The reloads that have been matched with the windows.
-    reloads_seen: u32,
+    pub(super) reloads_seen: u32,
 }
 
 impl Surfaces {
@@ -324,15 +334,44 @@ impl Surfaces {
         self.force = true;
     }
 
-    fn index(&self, id: SurfaceId) -> Option<usize> {
+    pub(super) fn index(&self, id: SurfaceId) -> Option<usize> {
         self.live.iter().position(|l| l.id == id)
+    }
+
+    /// Closes every popup that hangs from `id`, the innermost first: each is a
+    /// `Destroy`, and none outlives its parent (RFC-0068 §7).
+    pub(super) fn close_popups_of(&mut self, id: SurfaceId) {
+        let children: Vec<SurfaceId> = self
+            .live
+            .iter()
+            .filter(|l| l.popup.as_ref().is_some_and(|p| p.parent == id))
+            .map(|l| l.id)
+            .collect();
+        for child in children {
+            self.close_popups_of(child);
+            self.close_popup(child);
+        }
+    }
+
+    /// Closes one popup, that has no popups of its own.
+    pub(super) fn close_popup(&mut self, id: SurfaceId) {
+        if let Some(at) = self.index(id) {
+            let gone = self.live.remove(at);
+            if gone.popup.as_ref().is_some_and(|p| p.announced) {
+                self.changes.push(SurfaceChange::Destroy { id: gone.id });
+            }
+        }
     }
 }
 
 impl Live {
     /// Whether anything this surface showed may have changed since it was
     /// drawn.
-    fn needs_drawing(&self, ctx: &crate::interp::reactive::ReactiveCtx, force: bool) -> bool {
+    pub(super) fn needs_drawing(
+        &self,
+        ctx: &crate::interp::reactive::ReactiveCtx,
+        force: bool,
+    ) -> bool {
         self.ready()
             && (self.drawn_size != Some(self.size)
                 || force
@@ -346,7 +385,7 @@ impl Live {
     /// the compositor has configured it along every axis it stretches
     /// (RFC-0068 §5: it draws its first frame when the platform gave it a size).
     fn ready(&self) -> bool {
-        self.panel.is_none() || (self.size.0 > 0.0 && self.size.1 > 0.0)
+        (self.panel.is_none() && self.popup.is_none()) || (self.size.0 > 0.0 && self.size.1 > 0.0)
     }
 }
 
@@ -565,6 +604,7 @@ impl Interpreter {
     pub(super) fn surfaces_want_frame(&self) -> bool {
         self.surfaces.as_ref().is_some_and(|s| {
             s.force
+                || s.leaving
                 || s.live.iter().any(|l| {
                     l.wants_frame
                         || l.structure_moved
@@ -608,6 +648,8 @@ impl Interpreter {
                     }
                 }
                 CoreKind::CloseRequest => self.close_requested(ev.surface),
+                // The compositor dismissed a popup (RFC-0068 §7).
+                CoreKind::PopupDone => self.popup_done(ev.surface),
                 // The platform gave a window its size (or the user changed it).
                 CoreKind::SurfaceResized => self.set_surface_size(ev.surface, ev.pos),
                 _ => match groups.iter_mut().find(|(id, _)| *id == ev.surface) {
@@ -716,80 +758,123 @@ impl Interpreter {
             let RenderNode::Box { children, .. } = node else {
                 continue;
             };
-            if self
+            let is_panel = self
                 .surfaces
                 .as_ref()
-                .is_some_and(|s| s.live[index].panel.is_some())
-            {
+                .is_some_and(|s| s.live[index].panel.is_some());
+            if is_panel {
                 self.settle_panel(index, children, pools, force);
             }
-            let Some(live) = self.surfaces.as_ref().map(|s| &s.live[index]) else {
-                continue;
-            };
-            if !live.needs_drawing(&self.ctx, force) {
-                continue;
+            let drew = self.draw_surface(index, children, pools, force, None, new_frame, out);
+            if is_panel {
+                let slot = super::animation::AnimSlot::default();
+                self.sync_popups(index, children, pools, slot, drew, force, new_frame, out);
             }
-            let (size, structure_moved) = (live.size, live.structure_moved);
-            let id = live.id;
-            let mut frame = new_frame();
-            let st = self.bind_surface(index);
-            if force {
-                // A reload or a theme change: this surface's last layout says
-                // nothing about the tree it is drawn from now.
-                self.retained.invalidated = true;
-                self.paint.reset();
-            }
-            self.ctx.watch_reads();
-            self.ctx.push_scope_tracker();
-            self.render_frame(
-                children,
-                &mut frame,
-                size.0,
-                size.1,
-                Some(SharedFrame {
-                    pools,
-                    structure_changed: structure_moved,
-                }),
-            );
-            self.frame_scopes = self.ctx.pop_scope_tracker();
-            let reads = self.ctx.take_reads();
-            let wants = self.any_active
-                || self.endless_seq == self.frame_seq
-                || self.theme_transitioning()
-                || self.measure_fired
-                || !self.ripples.is_empty();
-            let blink = self.blink.is_some();
-            let region = self.panel_region(index);
-            self.unbind_surface(index, st);
-            let seq = self.ctx.seq();
-            let caret_off = self.caret_off.get();
-            if let Some(s) = self.surfaces.as_mut() {
-                let l = &mut s.live[index];
-                l.reads = reads;
-                l.drawn_seq = seq;
-                l.drawn_size = Some(size);
-                l.wants_frame = wants;
-                l.input = false;
-                l.structure_moved = false;
-                l.caret_seen = blink && caret_off;
-                l.paints += 1;
-                if let (Some(p), Some(region)) = (l.panel.as_mut(), region) {
-                    if p.region != region {
-                        p.region = region.clone();
-                        s.changes.push(SurfaceChange::InputRegion { id, region });
-                    }
-                }
-            }
-            out.push((id, frame));
         }
+        // Something that is leaving (RFC-0066 §3) is not gone until a tick has
+        // seen its motion settle, which is a tick with nothing else to do.
+        let leaving = when_pools.iter().any(|p| p.leaving.is_some())
+            || for_pools.iter().any(|f| f.leaving_to > f.len);
         self.for_pools = for_pools;
         self.when_pools = when_pools;
         self.nav_pools = nav_pools;
         let seq = self.ctx.seq();
         if let Some(s) = self.surfaces.as_mut() {
             s.force = false;
+            s.leaving = leaving;
             s.idle_seq = Some(seq);
         }
+    }
+
+    /// Draws surface `index` from `children` if anything it showed has changed
+    /// (RFC-0068 §5), into a frame of its own. `popup` is what makes it a
+    /// popup's frame: the focus scope, the dismiss and the motion it plays in.
+    #[allow(clippy::too_many_arguments)]
+    pub(super) fn draw_surface(
+        &mut self,
+        index: usize,
+        children: &[RenderNode],
+        pools: Pools<'_>,
+        force: bool,
+        popup: Option<super::popups::PopupFrame>,
+        new_frame: &mut dyn FnMut() -> RenderFrame,
+        out: &mut Vec<(SurfaceId, RenderFrame)>,
+    ) -> bool {
+        let Some(live) = self.surfaces.as_ref().map(|s| &s.live[index]) else {
+            return false;
+        };
+        if !live.needs_drawing(&self.ctx, force) {
+            return false;
+        }
+        let (size, structure_moved) = (live.size, live.structure_moved);
+        // A popup's layout is built again every time it is drawn: its content
+        // moves with the `when` and `for` inside it, which no surface node
+        // reports.
+        let structure_moved = structure_moved || popup.is_some();
+        // A panel or a popup is where an anchored overlay becomes a popup.
+        self.popup.host = live.panel.is_some() || live.popup.is_some();
+        self.popup.frame = popup;
+        let id = live.id;
+        let mut frame = new_frame();
+        let st = self.bind_surface(index);
+        if force {
+            // A reload or a theme change: this surface's last layout says
+            // nothing about the tree it is drawn from now.
+            self.retained.invalidated = true;
+            self.paint.reset();
+        }
+        self.ctx.watch_reads();
+        self.ctx.push_scope_tracker();
+        self.render_frame(
+            children,
+            &mut frame,
+            size.0,
+            size.1,
+            Some(SharedFrame {
+                pools,
+                structure_changed: structure_moved,
+            }),
+        );
+        self.frame_scopes = self.ctx.pop_scope_tracker();
+        let reads = self.ctx.take_reads();
+        let wants = self.any_active
+            || self.endless_seq == self.frame_seq
+            || self.theme_transitioning()
+            || self.measure_fired
+            || !self.ripples.is_empty();
+        let blink = self.blink.is_some();
+        let region = self.panel_region(index);
+        let anchors = self
+            .popup
+            .host
+            .then(|| super::popups::HostAnchors::of(self));
+        self.popup.host = false;
+        self.popup.frame = None;
+        self.unbind_surface(index, st);
+        let seq = self.ctx.seq();
+        let caret_off = self.caret_off.get();
+        if let Some(s) = self.surfaces.as_mut() {
+            let l = &mut s.live[index];
+            l.reads = reads;
+            l.drawn_seq = seq;
+            l.drawn_size = Some(size);
+            l.wants_frame = wants;
+            l.input = false;
+            l.structure_moved = false;
+            l.caret_seen = blink && caret_off;
+            l.paints += 1;
+            if let Some(anchors) = anchors {
+                l.anchors = anchors;
+            }
+            if let (Some(p), Some(region)) = (l.panel.as_mut(), region) {
+                if p.region != region {
+                    p.region = region.clone();
+                    s.changes.push(SurfaceChange::InputRegion { id, region });
+                }
+            }
+        }
+        out.push((id, frame));
+        true
     }
 
     /// The `Window` nodes mounted at the surface level of `tree` right now: the
@@ -887,6 +972,7 @@ impl Interpreter {
         };
         s.idle_seq == Some(self.ctx.seq())
             && !s.force
+            && !s.leaving
             && !self.theme_transitioning()
             && s.live.iter().all(|l| {
                 !l.wants_frame
@@ -894,6 +980,7 @@ impl Interpreter {
                     && !l.structure_moved
                     && (!l.ready() || l.drawn_size == Some(l.size))
                     && l.panel.as_ref().is_none_or(|p| p.announced)
+                    && l.popup.as_ref().is_none_or(|p| p.announced)
                     && (!self.caret_off_changed(l))
             })
     }
@@ -911,8 +998,11 @@ impl Interpreter {
         let Some(surfaces) = self.surfaces.as_ref() else {
             return false;
         };
-        let sizes: Vec<((SignalId, SignalId), (f32, f32))> =
-            surfaces.live.iter().map(|l| (l.win, l.size)).collect();
+        let sizes: Vec<((SignalId, SignalId), (f32, f32))> = surfaces
+            .live
+            .iter()
+            .filter_map(|l| Some((l.win?, l.size)))
+            .collect();
         let mut changed = false;
         for ((w, h), (vw, vh)) in sizes {
             for (sig, now) in [(w, vw), (h, vh)] {
@@ -983,8 +1073,12 @@ impl Interpreter {
                 _ => None,
             })
             .collect();
+        // A popup is not written at the surface level: the popups of a panel are
+        // found again from it.
         let mut stale: Vec<usize> = (0..surfaces.live.len())
-            .filter(|&i| !mounted.contains(&surfaces.live[i].uid))
+            .filter(|&i| {
+                surfaces.live[i].popup.is_none() && !mounted.contains(&surfaces.live[i].uid)
+            })
             .collect();
         let live_uids: Vec<u32> = surfaces.live.iter().map(|l| l.uid).collect();
         let mut fresh: Vec<&RenderNode> = windows
@@ -1034,7 +1128,7 @@ impl Interpreter {
                 if let Some(l) = self.surfaces.as_mut().map(|s| &mut s.live[index]) {
                     l.uid = *uid;
                     if let Some(win) = win {
-                        l.win = win;
+                        l.win = Some(win);
                     }
                     l.site = site;
                     l.close = close;
@@ -1087,6 +1181,9 @@ impl Interpreter {
                     if p.ask.layer.namespace != ask.layer.namespace
                         || p.ask.layer.screen != ask.layer.screen
                     {
+                        let id = l.id;
+                        s.close_popups_of(id);
+                        let index = s.index(id).unwrap_or(index);
                         let gone = s.live.remove(index);
                         if gone.panel.as_ref().is_some_and(|p| p.announced) {
                             s.changes.push(SurfaceChange::Destroy { id: gone.id });
@@ -1118,13 +1215,18 @@ impl Interpreter {
         if let Some(s) = self.surfaces.as_mut() {
             let mut i = 0;
             while i < s.live.len() {
-                if seen.contains(&s.live[i].uid) {
+                if seen.contains(&s.live[i].uid) || s.live[i].popup.is_some() {
                     i += 1;
                 } else {
-                    let gone = s.live.remove(i);
+                    // The popups of a surface go before it does.
+                    let id = s.live[i].id;
+                    s.close_popups_of(id);
+                    let at = s.index(id).unwrap_or(i);
+                    let gone = s.live.remove(at);
                     if gone.panel.as_ref().is_none_or(|p| p.announced) {
                         s.changes.push(SurfaceChange::Destroy { id: gone.id });
                     }
+                    i = 0;
                 }
             }
             if s.live.is_empty() && s.had_any {
@@ -1194,7 +1296,7 @@ impl Interpreter {
             uid: *uid,
             spec,
             size: opening,
-            win,
+            win: Some(win),
             site,
             close,
             state: Some(Box::default()),
@@ -1208,6 +1310,8 @@ impl Interpreter {
             access_hash: None,
             paints: 0,
             panel,
+            popup: None,
+            anchors: super::popups::HostAnchors::default(),
         });
         surfaces.live.len() - 1
     }
@@ -1569,7 +1673,7 @@ impl Interpreter {
 
     /// The size `children` take when laid out with each axis that is `None`
     /// unbounded and each that is `Some` as long as that.
-    fn measure_content(
+    pub(super) fn measure_content(
         &mut self,
         children: &[RenderNode],
         pools: Pools<'_>,

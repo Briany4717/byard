@@ -30,7 +30,7 @@ impl Interpreter {
 }
 
 /// What an `anchor_to:` points at (RFC-0066 §5).
-enum AnchorTarget {
+pub(super) enum AnchorTarget {
     /// An element, by the identity its `as` name has in the view the overlay
     /// child was written in.
     Element(u32),
@@ -229,24 +229,47 @@ impl Interpreter {
         pools: Pools<'a>,
         out: &mut Vec<(&'a RenderNode, super::animation::AnimSlot)>,
     ) {
-        self.collect_overlays_in(nodes, pools, self.anim_slot, out);
+        self.collect_overlays_in(nodes, pools, self.anim_slot, out, None);
     }
 
-    fn collect_overlays_in<'a>(
+    /// [`collect_overlays`](Self::collect_overlays) from an explicit slot. In a
+    /// surface that hosts popups (RFC-0068 §7) an anchored overlay is not one of
+    /// the surface's overlays, nor is anything inside it: it goes to `popups`
+    /// when the caller wants them, and is dropped otherwise.
+    pub(super) fn collect_overlays_in<'a>(
         &self,
         nodes: &'a [RenderNode],
         pools: Pools<'a>,
         slot: super::animation::AnimSlot,
         out: &mut Vec<(&'a RenderNode, super::animation::AnimSlot)>,
+        mut popups: Option<&mut Vec<(&'a RenderNode, super::animation::AnimSlot)>>,
     ) {
         for concrete in self.expand_concrete_in(nodes, pools, slot) {
             match concrete.node {
                 RenderNode::Overlay { children, .. } => {
+                    if self.popup.host && self.is_popup_overlay(children, pools, concrete.slot) {
+                        if let Some(popups) = popups.as_deref_mut() {
+                            popups.push((concrete.node, concrete.slot));
+                        }
+                        continue;
+                    }
                     out.push((concrete.node, concrete.slot));
-                    self.collect_overlays_in(children, pools, concrete.slot, out);
+                    self.collect_overlays_in(
+                        children,
+                        pools,
+                        concrete.slot,
+                        out,
+                        popups.as_deref_mut(),
+                    );
                 }
                 RenderNode::Box { children, .. } => {
-                    self.collect_overlays_in(children, pools, concrete.slot, out);
+                    self.collect_overlays_in(
+                        children,
+                        pools,
+                        concrete.slot,
+                        out,
+                        popups.as_deref_mut(),
+                    );
                 }
                 // RFC-0026 × RFC-0017: a modal opened by a live screen floats
                 // over the whole app, exactly as one opened anywhere else.
@@ -258,6 +281,7 @@ impl Interpreter {
                                 pools,
                                 concrete.slot,
                                 out,
+                                popups.as_deref_mut(),
                             );
                         }
                     }
@@ -337,7 +361,7 @@ impl Interpreter {
     /// if it anchors to an element rather than to the viewport: the element an
     /// `as` name tags in the view the child was written in, or a text, looked up
     /// in the whole window.
-    fn anchor_target(&mut self, child: &RenderNode) -> Option<AnchorTarget> {
+    pub(super) fn anchor_target(&mut self, child: &RenderNode) -> Option<AnchorTarget> {
         let RenderNode::Box {
             attrs,
             env_snapshot,

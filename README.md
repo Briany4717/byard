@@ -1,3 +1,10 @@
+<p align="center">
+  <picture>
+    <source media="(prefers-color-scheme: dark)" srcset="assets/brand/byard-mark-dark.svg">
+    <img src="assets/brand/byard-mark-light.svg" alt="Byard" width="128">
+  </picture>
+</p>
+
 # Byard
 
 A UI framework for native apps, written in Rust and rendered straight to the

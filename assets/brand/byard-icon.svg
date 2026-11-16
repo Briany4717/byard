@@ -1,0 +1,8 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" role="img" aria-label="Byard">
+  <rect width="64" height="64" rx="14" fill="#101114"/>
+  <svg x="11" y="11" width="42" height="42" viewBox="28 26 120 120">
+    <rect x="38" y="34" width="24" height="102" rx="2" fill="#F3F1EC"/>
+    <path d="M70 72 H98 A32 32 0 0 1 98 136 H70 Z M86 92 H98 A12 12 0 0 1 98 116 H86 Z" fill="#F3F1EC" fill-rule="evenodd"/>
+    <rect x="122" y="122" width="22" height="22" fill="#FF6A2B"/>
+  </svg>
+</svg>

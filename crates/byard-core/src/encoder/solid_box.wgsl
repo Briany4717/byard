@@ -203,7 +203,15 @@ fn shade(in: VertexOutput) -> vec4<f32> {
     // We use length([dpdx, dpdy]) instead of fwidth (Manhattan norm) to get a
     // uniform anti-alias band in every direction, fwidth is up to √2 wider at
     // diagonals, which makes circles look slightly diamond-shaped.
-    let edge_softness = length(vec2<f32>(dpdx(distance), dpdy(distance)));
+    //
+    // The floor is for a driver whose derivatives come out 0 where they cannot
+    // be: WARP, Windows' software adapter, along the diagonal the quad's two
+    // triangles share (the bug #436 met in the clear quad). A softness of 0
+    // makes `smoothstep(0, 0, d)` divide by zero, which reads as no coverage
+    // for a pixel well inside the shape, and the pixel vanishes. On a real GPU
+    // the softness is about a pixel's worth of distance, far above the floor,
+    // so nothing changes there.
+    let edge_softness = max(length(vec2<f32>(dpdx(distance), dpdy(distance))), 1e-4);
     let alpha = smoothstep(edge_softness, 0.0, distance);
     return vec4<f32>(in.color.rgb, in.color.a * alpha * in.opacity * clip_coverage(in.position.xy));
 }

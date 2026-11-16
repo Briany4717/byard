@@ -25,10 +25,12 @@
 //! into `byard shot`.
 
 pub mod id;
+pub mod panel;
 pub mod placement;
 pub mod positioner;
 
 pub use id::{PerSurface, SurfaceChange, SurfaceId, SurfaceKind, SurfaceSpec};
+pub use panel::{Exclusive, InputMode, InputRegion, KeyboardMode, LayerSpec, ScreenInfo};
 
 /// A rectangle in whole logical pixels, with `y` growing downwards.
 ///

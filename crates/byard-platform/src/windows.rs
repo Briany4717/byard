@@ -97,7 +97,10 @@ impl Windows {
                         }
                     }
                 }
-                SurfaceChange::Destroy { .. } => {}
+                // Destroys are applied after every create and configure of
+                // the batch, below. An input region is only ever sent for a
+                // panel, and the winit host makes no panels.
+                SurfaceChange::Destroy { .. } | SurfaceChange::InputRegion { .. } => {}
             }
         }
         for change in changes {

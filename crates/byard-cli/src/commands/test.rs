@@ -799,11 +799,11 @@ fn write_picture(gpu: &Gpu, scene: &Scene, size: (u32, u32), out: &Path) -> Resu
             let path = PathBuf::from(format!("{}-{}.png", stem.display(), slug(s.name)));
             #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
             let size = (s.size.0.round() as u32, s.size.1.round() as u32);
-            save_png(gpu, s.frame, size, scale, &path)?;
+            save_png(gpu, s.frame, size, scale, s.is_panel, &path)?;
         }
         return Ok(());
     }
-    save_png(gpu, scene.frame(), size, scale, out)
+    save_png(gpu, scene.frame(), size, scale, false, out)
 }
 
 fn save_png(
@@ -811,9 +811,10 @@ fn save_png(
     frame: &byard_core::frame::RenderFrame,
     size: (u32, u32),
     scale: f32,
+    transparent: bool,
     out: &Path,
 ) -> Result<(), String> {
-    let pixels = gpu.paint(frame, size, scale)?;
+    let pixels = gpu.paint(frame, size, scale, transparent)?;
     #[allow(
         clippy::cast_precision_loss,
         clippy::cast_possible_truncation,

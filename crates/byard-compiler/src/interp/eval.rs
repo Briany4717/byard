@@ -1140,6 +1140,12 @@ pub struct Interpreter {
     /// The title of a `Window` that has none: the one the program's single
     /// window would have.
     default_window_title: String,
+    /// The namespace of a `Panel` that has none: the program's app id.
+    default_namespace: String,
+    /// The connected screens, as the host last said (RFC-0068 §4).
+    screens: Vec<byard_core::ScreenInfo>,
+    /// The signal behind `screens`, made when a program first reads it.
+    screens_sig: Option<SignalId>,
 }
 
 /// What an `on measure` was last told, as raw bits: width, height, x, y

@@ -21,6 +21,7 @@
 - [Drawing](drawing.md)
 - [Navigation](navigation.md)
 - [Several windows](windows.md)
+- [Panels and screens](panels.md)
 - [Data and I/O](data-and-io.md)
 
 # Theming

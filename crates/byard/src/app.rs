@@ -604,9 +604,9 @@ pub(crate) fn refuse_panels(
     Err(announced(ByardError::compile(CompileReport::new(
         vec![byard_compiler::CompileError::Project {
             span: byard_compiler::Span::new(0, 0),
-            message: "this program writes `Panel`, and the host that opens panels is not part \
-                      of this build yet (RFC-0068 step 3); `byard shot` and `byard test` run \
-                      it headlessly"
+            message: "this program writes `Panel`, and the Wayland shell backend that creates \
+                      layer surfaces is not part of this build yet (RFC-0068 step 3b); \
+                      `byard shot` and `byard test` run it headlessly"
                 .to_string(),
         }],
         source_map.clone(),

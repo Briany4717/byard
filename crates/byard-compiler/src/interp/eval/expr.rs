@@ -536,6 +536,12 @@ impl Interpreter {
                         ])
                     });
                 }
+                // RFC-0068 §4: the connected screens, a signal made on this
+                // first read and not before.
+                if name.as_str() == "screens" && self.is_builtin_name(name, payload_name) {
+                    let sig = self.screens_signal();
+                    return Box::new(move |ctx| ctx.read_signal(sig));
+                }
                 self.lower_ident(name, payload_name)
             }
             Expr::Array(elems, _) => {

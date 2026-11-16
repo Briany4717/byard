@@ -21,6 +21,7 @@ use std::sync::Arc;
 
 use byard_compiler::interp::eval::Interpreter;
 use byard_compiler::parser::ast::ViewDecl;
+use byard_core::ScreenInfo;
 use byard_core::encoder::EncoderSubsystem;
 use byard_core::frame::{RenderFrame, Viewport};
 use byard_core::platform::{EventKind, InputEvent};
@@ -307,6 +308,10 @@ struct Windows {
     frames: Vec<(byard_core::SurfaceId, RenderFrame)>,
     /// The window that has the keyboard: the one last tapped, else the first.
     focus: Option<byard_core::SurfaceId>,
+    /// The panels the simulated compositor knows, in creation order.
+    panels: Vec<(byard_core::SurfaceId, byard_core::SurfaceSpec)>,
+    /// The simulated screen the panels are placed on.
+    screen: ScreenInfo,
 }
 
 /// One window of a [`Scene`], as the CLI needs it.
@@ -321,6 +326,11 @@ pub struct SurfaceView<'a> {
     pub size: (f32, f32),
     /// Its last frame.
     pub frame: &'a RenderFrame,
+    /// Whether it is a panel: drawn with no background, so its picture has
+    /// transparent pixels.
+    pub is_panel: bool,
+    /// Its screen's name, for a panel.
+    pub screen: &'a str,
 }
 
 /// One line of the accessibility dump, with where its node is.
@@ -380,6 +390,14 @@ impl Scene {
         if multi {
             interp.enable_surfaces();
             interp.set_default_window_title(&project.manifest.name);
+            interp.set_default_namespace(&project.manifest.name);
+            // The headless screen: one, of the shot's size (RFC-0068 §9).
+            #[allow(clippy::cast_precision_loss)]
+            interp.set_screens(vec![ScreenInfo::new(
+                "screen-1",
+                options.size.0 as f32,
+                options.size.1 as f32,
+            )]);
         }
         let known: Vec<&str> = project
             .program
@@ -401,6 +419,8 @@ impl Scene {
             windows: multi.then(|| Windows {
                 frames: Vec::new(),
                 focus: None,
+                panels: Vec::new(),
+                screen: ScreenInfo::new("screen-1", size.0, size.1),
             }),
         };
         scene.frame_with(&[]);
@@ -430,6 +450,8 @@ impl Scene {
                     title: &spec.title,
                     size: self.interp.surface_size(id)?,
                     frame,
+                    is_panel: spec.layer.is_some(),
+                    screen: &w.screen.name,
                 })
             })
             .collect()
@@ -474,7 +496,11 @@ impl Scene {
         let mut out = Vec::new();
         for s in self.surfaces() {
             out.push(AccessLine {
-                text: format!("Window {:?}", s.title),
+                text: if s.is_panel {
+                    format!("Panel {:?} @ {}", s.title, s.screen)
+                } else {
+                    format!("Window {:?}", s.title)
+                },
                 surface: s.id,
                 bounds: None,
             });
@@ -597,31 +623,89 @@ impl Scene {
     /// drawn into a frame of its own, and the rest keep the one they have.
     fn surface_frames(&mut self) {
         let access = self.access;
-        let mut out = Vec::new();
-        self.interp.render_surfaces(
-            &self.tree,
-            &mut || {
-                // As a shot of the one window does: a picture is drawn from
-                // nothing, so the frame redraws everything.
-                let mut frame = RenderFrame::new();
-                frame.request_full_redraw();
-                frame.set_access_wanted(access);
-                frame
-            },
-            &mut out,
-        );
-        let open = self.interp.surface_ids();
-        if let Some(w) = self.windows.as_mut() {
-            for (id, frame) in out {
-                match w.frames.iter_mut().find(|(i, _)| *i == id) {
-                    Some(slot) => slot.1 = frame,
-                    None => w.frames.push((id, frame)),
+        // A panel is drawn once the simulated compositor has given it a size,
+        // which is a round after the program asked for one: a few rounds are
+        // run until nothing is asked of the platform any more.
+        for _ in 0..6 {
+            let mut out = Vec::new();
+            self.interp.render_surfaces(
+                &self.tree,
+                &mut || {
+                    // As a shot of the one window does: a picture is drawn from
+                    // nothing, so the frame redraws everything.
+                    let mut frame = RenderFrame::new();
+                    frame.request_full_redraw();
+                    frame.set_access_wanted(access);
+                    frame
+                },
+                &mut out,
+            );
+            let open = self.interp.surface_ids();
+            if let Some(w) = self.windows.as_mut() {
+                for (id, frame) in out {
+                    match w.frames.iter_mut().find(|(i, _)| *i == id) {
+                        Some(slot) => slot.1 = frame,
+                        None => w.frames.push((id, frame)),
+                    }
                 }
+                w.frames.retain(|(id, _)| open.contains(id));
             }
-            w.frames.retain(|(id, _)| open.contains(id));
+            if !self.compose_panels() {
+                break;
+            }
         }
-        // What the program asked of the platform has nobody to ask here.
-        let _ = self.interp.take_surface_changes();
+    }
+
+    /// What the compositor does with the panels the program asked for: places
+    /// them on the screen by layer shell's rules and tells the program the size
+    /// each got. Returns whether anything changed, so the program is drawn again.
+    fn compose_panels(&mut self) -> bool {
+        use byard_core::surface::Size;
+        let Some(w) = self.windows.as_mut() else {
+            return false;
+        };
+        let mut asked = false;
+        for change in self.interp.take_surface_changes() {
+            asked = true;
+            match change {
+                byard_core::SurfaceChange::Create { id, spec } if spec.layer.is_some() => {
+                    w.panels.push((id, spec));
+                }
+                byard_core::SurfaceChange::Configure { id, spec } => {
+                    if let Some(p) = w.panels.iter_mut().find(|(i, _)| *i == id) {
+                        p.1 = spec;
+                    }
+                }
+                byard_core::SurfaceChange::Destroy { id } => w.panels.retain(|(i, _)| *i != id),
+                _ => {}
+            }
+        }
+        #[allow(clippy::cast_possible_truncation)]
+        let layers: Vec<_> = w
+            .panels
+            .iter()
+            .filter_map(|(_, spec)| {
+                let size = Size::new(spec.size.0.round() as i32, spec.size.1.round() as i32);
+                Some(spec.layer.as_ref()?.layer_surface(size))
+            })
+            .collect();
+        #[allow(clippy::cast_possible_truncation)]
+        let screen = Size::new(w.screen.width as i32, w.screen.height as i32);
+        // A panel the protocol would refuse (a size of 0 with nothing to stretch)
+        // is left as it is: the compositor would have closed it.
+        let Ok(placed) = byard_core::surface::placement::arrange(screen, &layers) else {
+            return asked;
+        };
+        let mut moved = false;
+        for ((id, _), p) in w.panels.iter().zip(&placed.surfaces) {
+            #[allow(clippy::cast_precision_loss)]
+            let size = (p.configure.width as f32, p.configure.height as f32);
+            if self.interp.surface_size(*id) != Some(size) {
+                self.interp.set_surface_size(*id, size);
+                moved = true;
+            }
+        }
+        asked || moved
     }
 
     /// Runs frames until `at_ms` of app time has passed, then once more at
@@ -751,7 +835,7 @@ pub fn run(args: &ShotArgs<'_>) -> Result<(), String> {
     };
     // What is drawn, and at what size: the one window as it always was, or one
     // window of several at the size it opens at (RFC-0068 §9).
-    let (frame, size): (&RenderFrame, (u32, u32)) = if scene.has_windows() {
+    let (frame, size, transparent): (&RenderFrame, (u32, u32), bool) = if scene.has_windows() {
         let all = scene.surfaces();
         let picked = match (args.surface, all.as_slice()) {
             (Some(name), _) => all.iter().find(|s| s.name == name).ok_or_else(|| {
@@ -773,13 +857,13 @@ pub fn run(args: &ShotArgs<'_>) -> Result<(), String> {
         };
         #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
         let size = (picked.size.0.round() as u32, picked.size.1.round() as u32);
-        (picked.frame, size)
+        (picked.frame, size, picked.is_panel)
     } else {
-        (scene.frame(), args.size)
+        (scene.frame(), args.size, false)
     };
     #[allow(clippy::cast_precision_loss)]
     let (w, h) = (size.0 as f32, size.1 as f32);
-    let pixels = Gpu::open()?.paint(frame, size, args.scale)?;
+    let pixels = Gpu::open()?.paint(frame, size, args.scale, transparent)?;
     #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
     let (pw, ph) = (
         (w * args.scale).round() as u32,
@@ -823,12 +907,15 @@ impl Gpu {
         })
     }
 
-    /// Draws `frame` offscreen and reads it back as RGBA8 (sRGB) rows.
+    /// Draws `frame` offscreen and reads it back as RGBA8 (sRGB) rows. A window
+    /// shows black where nothing was drawn; with `transparent` (a panel has no
+    /// background) the alpha of what was drawn is kept, as a PNG holds it.
     pub fn paint(
         &self,
         frame: &RenderFrame,
         size: (u32, u32),
         scale: f32,
+        transparent: bool,
     ) -> Result<Vec<u8>, String> {
         let (device, queue) = (&self.device, &self.queue);
         #[allow(
@@ -887,6 +974,17 @@ impl Gpu {
         // show as white or a checkerboard; flattening onto black makes the shot
         // the picture the window shows. The colour is premultiplied, so black is
         // already underneath and only the alpha changes.
+        if transparent {
+            for px in pixels.chunks_exact_mut(4) {
+                let a = u32::from(px[3]);
+                if a != 0 && a != 255 {
+                    for c in &mut px[..3] {
+                        *c = ((u32::from(*c) * 255 + a / 2) / a).min(255) as u8;
+                    }
+                }
+            }
+            return Ok(pixels);
+        }
         for alpha in pixels.iter_mut().skip(3).step_by(4) {
             *alpha = 255;
         }

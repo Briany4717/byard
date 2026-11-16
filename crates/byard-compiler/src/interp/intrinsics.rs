@@ -35,6 +35,7 @@ pub const INTRINSIC_NAMES: &[&str] = &[
     "VectorIcon",
     "Overlay",
     "Window",
+    "Panel",
     "Canvas",
     "Grid",
     "Clip",
@@ -101,6 +102,11 @@ pub enum PropType {
     /// A spring curve literal (`anim.spring(...)`), RFC-0021 `snap_spring`. Shape
     /// is validated at lower time via `resolve_curve`.
     Spring,
+    /// A `Screen` record from `screens` (RFC-0068 §4).
+    Screen,
+    /// `exclusive`: `true`, `false`, `ignore` or a number of pixels
+    /// (RFC-0068 §3).
+    Exclusive,
     /// A list of values, the shape a chart's series takes (RFC-0039).
     ///
     /// Checked as far as syntax can check it: a literal of the wrong kind is
@@ -171,6 +177,10 @@ const SNAP_ALIGN: &[&str] = &["start", "center", "end"];
 /// coordinate-passing covers the gap in the interim.
 const ANCHOR: &[&str] = &["center", "top", "bottom", "start", "end"];
 /// RFC-0036 `anchor_edge`: which side of the anchor the overlay sits on.
+const PANEL_EDGES: &[&str] = &["top", "bottom", "left", "right"];
+const PANEL_LAYERS: &[&str] = &["background", "bottom", "top", "overlay"];
+const PANEL_KEYBOARD: &[&str] = &["none", "on_demand", "exclusive"];
+const PANEL_INPUT: &[&str] = &["auto", "all", "none"];
 const ANCHOR_EDGE: &[&str] = &["above", "below", "before", "after"];
 /// RFC-0036 `anchor_align`: how the overlay lines up along the anchor's other
 /// axis.
@@ -1140,6 +1150,33 @@ fn lookup_intrinsic(name: &str) -> Option<Intrinsic> {
                 events: HashSet::from(["close"]),
             }
         }
+        // RFC-0068 §3: `Panel`, a layer surface. Children: its content, laid
+        // out like a window's; no background of its own.
+        "Panel" => {
+            let mut props: HashMap<&'static str, PropDef> = HashMap::new();
+            props.insert("screen", pnt(PropType::Screen));
+            props.insert("edge", pnt(PropType::Enum(PANEL_EDGES)));
+            props.insert("anchor", pnt(PropType::Enum(PANEL_EDGES)));
+            props.insert("layer", pnt(PropType::Enum(PANEL_LAYERS)));
+            props.insert("exclusive", pnt(PropType::Exclusive));
+            props.insert("keyboard", pnt(PropType::Enum(PANEL_KEYBOARD)));
+            props.insert("namespace", pnt(PropType::Str));
+            props.insert("width", pnt(PropType::Float));
+            props.insert("height", pnt(PropType::Float));
+            for m in ["m", "mt", "mr", "mb", "ml", "mx", "my"] {
+                props.insert(m, pnt(PropType::Float));
+            }
+            props.insert("input", pnt(PropType::Enum(PANEL_INPUT)));
+            Intrinsic {
+                arity: 0,
+                content: None,
+                children: true,
+                focusable: false,
+                interactive: false,
+                props,
+                events: HashSet::new(),
+            }
+        }
         // RFC-0017: the overlay escape-hatch. Content: none. Children: the
         // overlay's floating subtree, laid out against the viewport rather than
         // the parent's flow. Props: `modal` (default true, captures all input
@@ -1722,6 +1759,16 @@ fn check_combinations(name: &str, attrs: &[Attr], errs: &mut Vec<CompileError>) 
         });
     };
     // A count below one is meaningless wherever it is written.
+    if name == "Panel" {
+        if let (Some(_), Some((at, _))) = (prop("edge"), prop("anchor")) {
+            bad(
+                at,
+                "`edge` already anchors the panel (`edge: top` is `anchor: (top, left, right)`): \
+                 write one of them"
+                    .to_string(),
+            );
+        }
+    }
     let counts: &[&str] = match name {
         "Text" => &["max_lines"],
         "TextField" => &["lines", "min_lines", "max_lines"],
@@ -2040,6 +2087,13 @@ fn check_value_type(ty: PropType, value: &Expr) -> Option<CompileError> {
             }
         }
         (PropType::Str, Expr::IntLit(..) | Expr::FloatLit(..)) => mismatch("a string"),
+        (
+            PropType::Screen,
+            Expr::IntLit(..) | Expr::FloatLit(..) | Expr::StrLit(..) | Expr::Tuple(..),
+        ) => mismatch("a `Screen` from `screens`"),
+        (PropType::Exclusive, Expr::StrLit(..)) => {
+            mismatch("`true`, `false`, `ignore` or a number of pixels")
+        }
         (
             PropType::List,
             Expr::IntLit(..) | Expr::FloatLit(..) | Expr::StrLit(..) | Expr::ClassRef(..),

@@ -38,18 +38,33 @@ use std::rc::Rc;
 
 use byard_core::frame::RenderFrame;
 use byard_core::platform::{EventKind as CoreKind, InputPayload};
-use byard_core::{InputEvent, SurfaceChange, SurfaceId, SurfaceSpec};
+use byard_core::surface::placement::{Anchors, Layer, Margin};
+use byard_core::surface::{
+    Exclusive, InputMode, InputRegion, KeyboardMode, LayerSpec, Rect as IRect,
+};
+use byard_core::{InputEvent, ScreenInfo, SurfaceChange, SurfaceId, SurfaceSpec};
 
 use super::layout::{Pools, SharedFrame};
 use super::{Interpreter, RenderNode};
 use crate::interp::env::{SignalId, Value};
 use crate::interp::events::Action;
 use crate::interp::reactive::ReadSet;
-use crate::parser::ast::{Attr, AttrKind, ElementNode, Member};
+use crate::parser::ast::{Attr, AttrKind, ElementNode, Expr, Member};
 use crate::symbol::Symbol;
 
 /// The element that is a window.
 pub(super) const WINDOW: &str = "Window";
+
+/// The element that is a layer surface.
+pub(super) const PANEL: &str = "Panel";
+
+/// Whether a node name is a surface element.
+pub(super) fn is_surface_name(name: &str) -> bool {
+    name == WINDOW || name == PANEL
+}
+
+/// How far a measure lets an unbounded axis run.
+const UNBOUNDED: f32 = 100_000.0;
 
 /// The name of the context node a `Window` puts in the chain while its content
 /// is lowered: no program can write a name that starts with `$`.
@@ -117,7 +132,7 @@ pub(super) fn index_windows(
         for m in members {
             match m {
                 Member::Element(el) => {
-                    if el.name.as_str() == WINDOW {
+                    if is_surface_name(el.name.as_str()) {
                         out.insert((el.span.start, el.span.end), (view.clone(), *n));
                         *n += 1;
                     }
@@ -215,6 +230,69 @@ struct Live {
     access_hash: Option<u64>,
     /// How many times it has been drawn.
     paints: u64,
+    /// What a panel adds to a window; `None` for a window.
+    panel: Option<PanelLive>,
+}
+
+/// What a `Panel` asks, read from its attributes (RFC-0068 §3).
+#[derive(Clone, Debug, PartialEq)]
+struct PanelAsk {
+    layer: LayerSpec,
+    /// `width` and `height` as written; `None` is the content's.
+    size: (Option<f32>, Option<f32>),
+    /// The `as` name, else the namespace.
+    name: String,
+}
+
+/// The state of a panel that a window has no use for.
+struct PanelLive {
+    ask: PanelAsk,
+    /// The content's measured size along the axes that take it.
+    measured: (f32, f32),
+    /// Whether the host has been told it exists (`Create` sent). A panel has
+    /// no size to ask for until it has been measured.
+    announced: bool,
+    /// The last input region sent.
+    region: InputRegion,
+}
+
+impl PanelLive {
+    /// Whether the compositor stretches this panel along each axis (anchored
+    /// at both ends), which is size 0 on the wire.
+    fn stretched(&self) -> (bool, bool) {
+        let a = self.ask.layer.anchors;
+        (
+            a.contains(Anchors::LEFT) && a.contains(Anchors::RIGHT),
+            a.contains(Anchors::TOP) && a.contains(Anchors::BOTTOM),
+        )
+    }
+
+    /// The size the panel asks for: 0 where it is stretched, else what is
+    /// written, else what the content measured.
+    fn requested(&self) -> (f32, f32) {
+        let (sw, sh) = self.stretched();
+        (
+            if sw {
+                0.0
+            } else {
+                self.ask.size.0.unwrap_or(self.measured.0)
+            },
+            if sh {
+                0.0
+            } else {
+                self.ask.size.1.unwrap_or(self.measured.1)
+            },
+        )
+    }
+
+    /// Which axes take the content's size and so have to be measured.
+    fn measures(&self) -> (bool, bool) {
+        let (sw, sh) = self.stretched();
+        (
+            !sw && self.ask.size.0.is_none(),
+            !sh && self.ask.size.1.is_none(),
+        )
+    }
 }
 
 /// The surfaces of a program with windows.
@@ -255,12 +333,20 @@ impl Live {
     /// Whether anything this surface showed may have changed since it was
     /// drawn.
     fn needs_drawing(&self, ctx: &crate::interp::reactive::ReactiveCtx, force: bool) -> bool {
-        self.drawn_size != Some(self.size)
-            || force
-            || self.input
-            || self.wants_frame
-            || self.structure_moved
-            || ctx.reads_changed_since(&self.reads, self.drawn_seq)
+        self.ready()
+            && (self.drawn_size != Some(self.size)
+                || force
+                || self.input
+                || self.wants_frame
+                || self.structure_moved
+                || ctx.reads_changed_since(&self.reads, self.drawn_seq))
+    }
+
+    /// Whether the surface has a size to be drawn at. A panel has none until
+    /// the compositor has configured it along every axis it stretches
+    /// (RFC-0068 §5: it draws its first frame when the platform gave it a size).
+    fn ready(&self) -> bool {
+        self.panel.is_none() || (self.size.0 > 0.0 && self.size.1 > 0.0)
     }
 }
 
@@ -314,7 +400,7 @@ impl Interpreter {
         let children = self.lower_members(members, known_views);
         self.ctx_chain = outer;
         RenderNode::Box {
-            name: Symbol::intern(WINDOW),
+            name: el.name.clone(),
             attrs,
             state_blocks: Vec::new(),
             anchor_name: el.anchor_name.clone(),
@@ -630,6 +716,13 @@ impl Interpreter {
             let RenderNode::Box { children, .. } = node else {
                 continue;
             };
+            if self
+                .surfaces
+                .as_ref()
+                .is_some_and(|s| s.live[index].panel.is_some())
+            {
+                self.settle_panel(index, children, pools, force);
+            }
             let Some(live) = self.surfaces.as_ref().map(|s| &s.live[index]) else {
                 continue;
             };
@@ -666,6 +759,7 @@ impl Interpreter {
                 || self.measure_fired
                 || !self.ripples.is_empty();
             let blink = self.blink.is_some();
+            let region = self.panel_region(index);
             self.unbind_surface(index, st);
             let seq = self.ctx.seq();
             let caret_off = self.caret_off.get();
@@ -679,6 +773,12 @@ impl Interpreter {
                 l.structure_moved = false;
                 l.caret_seen = blink && caret_off;
                 l.paints += 1;
+                if let (Some(p), Some(region)) = (l.panel.as_mut(), region) {
+                    if p.region != region {
+                        p.region = region.clone();
+                        s.changes.push(SurfaceChange::InputRegion { id, region });
+                    }
+                }
             }
             out.push((id, frame));
         }
@@ -698,7 +798,7 @@ impl Interpreter {
         self.expand_concrete_in(tree, pools, super::animation::AnimSlot::default())
             .into_iter()
             .map(|c| c.node)
-            .filter(|n| matches!(n, RenderNode::Box { name, .. } if name.as_str() == WINDOW))
+            .filter(|n| matches!(n, RenderNode::Box { name, .. } if is_surface_name(name.as_str())))
             .collect()
     }
 
@@ -792,7 +892,8 @@ impl Interpreter {
                 !l.wants_frame
                     && !l.input
                     && !l.structure_moved
-                    && l.drawn_size == Some(l.size)
+                    && (!l.ready() || l.drawn_size == Some(l.size))
+                    && l.panel.as_ref().is_none_or(|p| p.announced)
                     && (!self.caret_off_changed(l))
             })
     }
@@ -973,6 +1074,29 @@ impl Interpreter {
                 .as_ref()
                 .and_then(|s| s.live.iter().position(|l| l.uid == *uid));
             match existing {
+                Some(index) if node_is_panel(node) => {
+                    let ask = self.panel_ask(attrs, anchor_name.as_ref(), env_snapshot);
+                    let Some(s) = self.surfaces.as_mut() else {
+                        continue;
+                    };
+                    let l = &mut s.live[index];
+                    let Some(p) = l.panel.as_mut() else {
+                        continue;
+                    };
+                    // Fixed when the surface is made: a change makes it again.
+                    if p.ask.layer.namespace != ask.layer.namespace
+                        || p.ask.layer.screen != ask.layer.screen
+                    {
+                        let gone = s.live.remove(index);
+                        if gone.panel.as_ref().is_some_and(|p| p.announced) {
+                            s.changes.push(SurfaceChange::Destroy { id: gone.id });
+                        }
+                        self.open_surface(node);
+                    } else if p.ask != ask {
+                        p.ask = ask;
+                        l.structure_moved = true;
+                    }
+                }
                 Some(index) => {
                     let prev = self.surfaces.as_ref().map(|s| s.live[index].spec.clone());
                     let spec =
@@ -998,7 +1122,9 @@ impl Interpreter {
                     i += 1;
                 } else {
                     let gone = s.live.remove(i);
-                    s.changes.push(SurfaceChange::Destroy { id: gone.id });
+                    if gone.panel.as_ref().is_none_or(|p| p.announced) {
+                        s.changes.push(SurfaceChange::Destroy { id: gone.id });
+                    }
                 }
             }
             if s.live.is_empty() && s.had_any {
@@ -1022,7 +1148,18 @@ impl Interpreter {
         else {
             unreachable!("a window is a box");
         };
-        let spec = self.window_spec(attrs, anchor_name.as_ref(), env_snapshot, None);
+        let panel = node_is_panel(node)
+            .then(|| self.panel_ask(attrs, anchor_name.as_ref(), env_snapshot))
+            .map(|ask| PanelLive {
+                ask,
+                measured: (0.0, 0.0),
+                announced: false,
+                region: InputRegion::All,
+            });
+        let spec = match &panel {
+            Some(p) => compose_panel_spec(p),
+            None => self.window_spec(attrs, anchor_name.as_ref(), env_snapshot, None),
+        };
         let close = self.lower_close(attrs, env_snapshot);
         let win = self
             .window_pairs
@@ -1044,10 +1181,13 @@ impl Interpreter {
         surfaces.next_id += 1;
         surfaces.had_any = true;
         let id = SurfaceId::new(surfaces.next_id);
-        surfaces.changes.push(SurfaceChange::Create {
-            id,
-            spec: spec.clone(),
-        });
+        // A panel is announced once it has been measured (`settle_panel`).
+        if panel.is_none() {
+            surfaces.changes.push(SurfaceChange::Create {
+                id,
+                spec: spec.clone(),
+            });
+        }
         let opening = spec.size;
         surfaces.live.push(Live {
             id,
@@ -1067,6 +1207,7 @@ impl Interpreter {
             caret_seen: false,
             access_hash: None,
             paints: 0,
+            panel,
         });
         surfaces.live.len() - 1
     }
@@ -1136,4 +1277,395 @@ impl Interpreter {
         self.env.truncate(env_base);
         spec
     }
+}
+
+/// Whether a surface node is a `Panel`.
+fn node_is_panel(node: &RenderNode) -> bool {
+    matches!(node, RenderNode::Box { name, .. } if name.as_str() == PANEL)
+}
+
+/// What a panel is made of, from what it asks and what its content measured.
+fn compose_panel_spec(p: &PanelLive) -> SurfaceSpec {
+    let mut spec = SurfaceSpec::panel(p.ask.layer.namespace.clone());
+    spec.name.clone_from(&p.ask.name);
+    spec.size = p.requested();
+    spec.layer = Some(p.ask.layer.clone());
+    spec
+}
+
+/// The edges a keyword or a tuple of keywords names.
+fn edges_of(expr: &Expr) -> Anchors {
+    fn one(word: &str) -> Anchors {
+        match word {
+            "top" => Anchors::TOP,
+            "bottom" => Anchors::BOTTOM,
+            "left" => Anchors::LEFT,
+            "right" => Anchors::RIGHT,
+            _ => Anchors::NONE,
+        }
+    }
+    match expr {
+        Expr::Tuple(args, _) => args
+            .iter()
+            .fold(Anchors::NONE, |acc, a| acc | edges_of(&a.value)),
+        e => Interpreter::enum_token(e).map_or(Anchors::NONE, one),
+    }
+}
+
+impl Interpreter {
+    // ── panels ──────────────────────────────────────────────────────────
+
+    /// Whether `name` is the built-in `name` and nothing the program binds.
+    pub(super) fn is_builtin_name(&self, name: &Symbol, payload_name: Option<&Symbol>) -> bool {
+        payload_name != Some(name)
+            && !self.lambda_params.contains(name)
+            && self.env.lookup(name).is_none()
+            && !self.consts.contains_key(name)
+    }
+
+    /// The signal behind `screens`, made on the first read (RFC-0068 §4).
+    pub(super) fn screens_signal(&mut self) -> SignalId {
+        if let Some(sig) = self.screens_sig {
+            return sig;
+        }
+        let sig = self.ctx.create_signal(screens_value(&self.screens));
+        self.screens_sig = Some(sig);
+        sig
+    }
+
+    /// Tells the program which screens are connected (RFC-0068 §4). The host
+    /// calls it when an output is added, removed or changes; the list is read in
+    /// the order given (see [`ScreenInfo::sort`]). Nothing happens, and nothing
+    /// is allocated, for a program that never reads `screens`.
+    pub fn set_screens(&mut self, screens: Vec<ScreenInfo>) {
+        if screens == self.screens {
+            return;
+        }
+        self.screens = screens;
+        if let Some(sig) = self.screens_sig {
+            let value = screens_value(&self.screens);
+            if self.ctx.peek_signal(sig) != value {
+                self.ctx.write_signal(sig, value);
+            }
+        }
+    }
+
+    /// Whether a program has read `screens`, which is what makes its signal.
+    #[must_use]
+    pub fn has_screens_signal(&self) -> bool {
+        self.screens_sig.is_some()
+    }
+
+    /// The screens the host last said.
+    #[must_use]
+    pub fn screens(&self) -> &[ScreenInfo] {
+        &self.screens
+    }
+
+    /// The namespace of a `Panel` that writes none: the program's app id.
+    pub fn set_default_namespace(&mut self, namespace: &str) {
+        self.default_namespace = namespace.to_string();
+    }
+
+    /// What a panel's attributes ask for, read now.
+    fn panel_ask(
+        &mut self,
+        attrs: &[Attr],
+        name: Option<&Symbol>,
+        env_snapshot: &[(Symbol, Value)],
+    ) -> PanelAsk {
+        let env_base = self.env.len();
+        for (k, v) in env_snapshot {
+            self.env.push(k.clone(), v.clone());
+        }
+        let find = |n: &str| {
+            attrs.iter().find_map(|a| match &a.kind {
+                AttrKind::Prop { value } if a.name.as_str() == n => Some(value.clone()),
+                _ => None,
+            })
+        };
+        // A keyword, or the keyword a conditional of keywords picks.
+        let word = |this: &mut Self, n: &str| -> Option<String> {
+            let value = find(n)?;
+            let leaf = this.pick_gradient_leaf(&value).clone();
+            Self::enum_token(&leaf).map(str::to_string)
+        };
+        let edge = word(self, "edge");
+        let mut anchors = match edge.as_deref() {
+            Some("top") => Anchors::TOP | Anchors::LEFT | Anchors::RIGHT,
+            Some("bottom") => Anchors::BOTTOM | Anchors::LEFT | Anchors::RIGHT,
+            Some("left") => Anchors::LEFT | Anchors::TOP | Anchors::BOTTOM,
+            Some("right") => Anchors::RIGHT | Anchors::TOP | Anchors::BOTTOM,
+            _ => Anchors::NONE,
+        };
+        if edge.is_none() {
+            if let Some(a) = find("anchor") {
+                anchors = edges_of(&a);
+            }
+        }
+        let namespace = self.eval_str_prop(attrs, "namespace").unwrap_or_else(|| {
+            if self.default_namespace.is_empty() {
+                "byard".to_string()
+            } else {
+                self.default_namespace.clone()
+            }
+        });
+        let mut layer = LayerSpec::new(namespace.clone());
+        layer.anchors = anchors;
+        layer.layer = match word(self, "layer").as_deref() {
+            Some("background") => Layer::Background,
+            Some("bottom") => Layer::Bottom,
+            Some("overlay") => Layer::Overlay,
+            _ => Layer::Top,
+        };
+        layer.keyboard = match word(self, "keyboard").as_deref() {
+            Some("on_demand") => KeyboardMode::OnDemand,
+            Some("exclusive") => KeyboardMode::Exclusive,
+            _ => KeyboardMode::None,
+        };
+        layer.input = match word(self, "input").as_deref() {
+            Some("all") => InputMode::All,
+            Some("none") => InputMode::None,
+            _ => InputMode::Auto,
+        };
+        layer.exclusive = match find("exclusive") {
+            None if edge.is_some() => Exclusive::Thickness,
+            None => Exclusive::Off,
+            Some(Expr::Ident(w, _)) if w.as_str() == "ignore" => Exclusive::Ignore,
+            Some(value) => match self.eval_pure(&value) {
+                Value::Bool(true) => Exclusive::Thickness,
+                Value::Int(n) => Exclusive::Pixels(i32::try_from(n).unwrap_or(0)),
+                #[allow(clippy::cast_possible_truncation)]
+                Value::Float(f) => Exclusive::Pixels(f.round() as i32),
+                _ => Exclusive::Off,
+            },
+        };
+        layer.screen = find("screen").and_then(|v| match self.eval_pure(&v) {
+            Value::Record(fields) => fields.iter().find_map(|(k, v)| match v {
+                Value::Str(s) if k.as_str() == "name" => Some(s.clone()),
+                _ => None,
+            }),
+            _ => None,
+        });
+        #[allow(clippy::cast_possible_truncation)]
+        let px = |this: &mut Self, n: &str| this.eval_px_prop(attrs, n).map(|v| v.round() as i32);
+        let mut margin = Margin::default();
+        if let Some(m) = px(self, "m") {
+            margin = Margin::all(m);
+        }
+        if let Some(v) = px(self, "mx") {
+            (margin.left, margin.right) = (v, v);
+        }
+        if let Some(v) = px(self, "my") {
+            (margin.top, margin.bottom) = (v, v);
+        }
+        if let Some(v) = px(self, "mt") {
+            margin.top = v;
+        }
+        if let Some(v) = px(self, "mr") {
+            margin.right = v;
+        }
+        if let Some(v) = px(self, "mb") {
+            margin.bottom = v;
+        }
+        if let Some(v) = px(self, "ml") {
+            margin.left = v;
+        }
+        layer.margin = margin;
+        let size = (
+            self.eval_px_prop(attrs, "width"),
+            self.eval_px_prop(attrs, "height"),
+        );
+        self.env.truncate(env_base);
+        PanelAsk {
+            layer,
+            size,
+            name: name.map_or(namespace, |n| n.as_str().to_string()),
+        }
+    }
+
+    /// Measures what a panel's content needs along the axes that take it, tells
+    /// the host about the panel (`Create` once, `Configure` when what it asks
+    /// moved) and gives it the size it asked for (RFC-0068 §3, "Size").
+    ///
+    /// The measure is one layout of the content with the measured axis
+    /// unbounded, in an atlas of its own, so the surface's retained layout is
+    /// left as it was. It runs when the surface would be drawn anyway, never on
+    /// an idle tick.
+    // Sizes are whole logical pixels here, compared as the values that were stored.
+    #[allow(clippy::float_cmp)]
+    fn settle_panel(
+        &mut self,
+        index: usize,
+        children: &[RenderNode],
+        pools: Pools<'_>,
+        force: bool,
+    ) {
+        let Some(live) = self.surfaces.as_ref().map(|s| &s.live[index]) else {
+            return;
+        };
+        let Some(panel) = live.panel.as_ref() else {
+            return;
+        };
+        let (mw, mh) = panel.measures();
+        let want = (mw || mh) && (!panel.announced || live.needs_drawing(&self.ctx, force));
+        let known = {
+            let (sw, sh) = panel.stretched();
+            let axis = |stretched: bool, written: Option<f32>, host: f32| {
+                if stretched {
+                    (host > 0.0).then_some(host)
+                } else {
+                    written
+                }
+            };
+            (
+                axis(sw, panel.ask.size.0, live.size.0),
+                axis(sh, panel.ask.size.1, live.size.1),
+            )
+        };
+        let before = panel.measured;
+        let measured = if want {
+            let (w, h) = self.measure_content(children, pools, known);
+            (
+                if mw { w.ceil() } else { before.0 },
+                if mh { h.ceil() } else { before.1 },
+            )
+        } else {
+            before
+        };
+        let Some(s) = self.surfaces.as_mut() else {
+            return;
+        };
+        let l = &mut s.live[index];
+        let Some(p) = l.panel.as_mut() else {
+            return;
+        };
+        p.measured = measured;
+        let spec = compose_panel_spec(p);
+        let (sw, sh) = p.stretched();
+        // An axis the program sizes follows what it asks for; a stretched one is
+        // the compositor's to say.
+        if !sw && spec.size.0 != l.spec.size.0 {
+            l.size.0 = spec.size.0;
+        }
+        if !sh && spec.size.1 != l.spec.size.1 {
+            l.size.1 = spec.size.1;
+        }
+        if !p.announced {
+            p.announced = true;
+            s.changes.push(SurfaceChange::Create {
+                id: l.id,
+                spec: spec.clone(),
+            });
+            l.spec = spec;
+        } else if spec != l.spec {
+            s.changes.push(SurfaceChange::Configure {
+                id: l.id,
+                spec: spec.clone(),
+            });
+            l.spec = spec;
+        }
+    }
+
+    /// The size `children` take when laid out with each axis that is `None`
+    /// unbounded and each that is `Some` as long as that.
+    fn measure_content(
+        &mut self,
+        children: &[RenderNode],
+        pools: Pools<'_>,
+        known: (Option<f32>, Option<f32>),
+    ) -> (f32, f32) {
+        use byard_core::frame::Viewport;
+        let space = (known.0.unwrap_or(UNBOUNDED), known.1.unwrap_or(UNBOUNDED));
+        let saved = self.viewport;
+        self.viewport = space;
+        let mut scratch = byard_core::atlas::layout::LayoutAtlas::default();
+        std::mem::swap(&mut self.atlas, &mut scratch);
+        let mut flat = Vec::new();
+        let mut none = Vec::new();
+        let root =
+            self.build_layout_pass_sized(children, pools, space, known, &mut flat, &[], &mut none);
+        let mut size = (0.0, 0.0);
+        if let Some((Some(main), _)) = root {
+            {
+                let mut measurer = self.text_measurer.borrow_mut();
+                let measurer = measurer.get_or_insert_with(byard_core::text::TextMeasurer::new);
+                let _ = self
+                    .atlas
+                    .compute_with_text(Viewport::new(space.0, space.1), measurer);
+            }
+            if let Ok(Some(r)) = self.atlas.resolved_rect(main) {
+                size = (r.width, r.height);
+            }
+        }
+        std::mem::swap(&mut self.atlas, &mut scratch);
+        self.viewport = saved;
+        self.elem_uids.clear();
+        size
+    }
+
+    /// The part of the bound panel that takes the pointer, after it was drawn
+    /// (RFC-0068 §6). `None` for a window.
+    fn panel_region(&self, index: usize) -> Option<InputRegion> {
+        let mode = self
+            .surfaces
+            .as_ref()?
+            .live
+            .get(index)?
+            .panel
+            .as_ref()?
+            .ask
+            .layer
+            .input;
+        Some(match mode {
+            InputMode::All => InputRegion::All,
+            InputMode::None => InputRegion::None,
+            InputMode::Auto => {
+                let mut rects: Vec<IRect> = self
+                    .router
+                    .pointer_rects()
+                    .into_iter()
+                    .chain(self.scroll_targets.iter().map(|t| t.rect))
+                    .filter(|r| r.w > 0.0 && r.h > 0.0)
+                    .map(|r| {
+                        #[allow(clippy::cast_possible_truncation)]
+                        let (x0, y0, x1, y1) = (
+                            r.x.floor() as i32,
+                            r.y.floor() as i32,
+                            (r.x + r.w).ceil() as i32,
+                            (r.y + r.h).ceil() as i32,
+                        );
+                        IRect::new(x0, y0, x1 - x0, y1 - y0)
+                    })
+                    .collect();
+                rects.sort_by_key(|r| (r.x, r.y, r.width, r.height));
+                rects.dedup();
+                InputRegion::Rects(rects)
+            }
+        })
+    }
+}
+
+/// `screens` as the list of records a program reads.
+fn screens_value(screens: &[ScreenInfo]) -> Value {
+    let float = |v: f32| Value::Float(f64::from(v));
+    Value::List(
+        screens
+            .iter()
+            .map(|s| {
+                Value::Record(vec![
+                    (Symbol::intern("name"), Value::Str(s.name.clone())),
+                    (
+                        Symbol::intern("description"),
+                        Value::Str(s.description.clone()),
+                    ),
+                    (Symbol::intern("x"), float(s.x)),
+                    (Symbol::intern("y"), float(s.y)),
+                    (Symbol::intern("width"), float(s.width)),
+                    (Symbol::intern("height"), float(s.height)),
+                    (Symbol::intern("scale"), float(s.scale)),
+                ])
+            })
+            .collect(),
+    )
 }

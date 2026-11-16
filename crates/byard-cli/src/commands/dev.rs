@@ -65,13 +65,13 @@ pub fn run(opts: Options<'_>) -> Result<(), String> {
     // entry file.
     let (program, provider) = resolve_project(&manifest).map_err(|e| e.to_string())?;
     // Panels are layer surfaces, which the winit host cannot make: say so,
-    // rather than draw nothing (RFC-0068 step 3).
+    // rather than draw nothing (RFC-0068 step 3b).
     let shape = byard_compiler::surfaces::surface_shape(&program.views);
     if shape.has_panel {
         return Err(
-            "this program writes `Panel`, and the host that opens panels is not part of \
-             this build yet (RFC-0068 step 3); `byard shot` and `byard test` run it \
-             headlessly"
+            "this program writes `Panel`, and the Wayland shell backend that creates \
+                    layer surfaces is not part of this build yet (RFC-0068 step 3b); \
+                    `byard shot` and `byard test` run it headlessly"
                 .to_string(),
         );
     }

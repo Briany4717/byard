@@ -100,7 +100,7 @@ fn example_registry_loads_all_views() {
     let mut interp = Interpreter::new();
     let load_errors = interp.load_views(&parsed.views);
     assert!(load_errors.is_empty(), "{load_errors:?}");
-    for name in ["Badge", "StatCard", "Panel", "Main"] {
+    for name in ["Badge", "StatCard", "Pane", "Main"] {
         assert!(
             interp
                 .view_table()

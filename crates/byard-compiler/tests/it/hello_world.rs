@@ -153,3 +153,13 @@ fn demo_exercises_all_pipelines() {
     assert_eq!(frame.textures().len(), 1, "one Image → TextureSampler");
     assert_eq!(frame.textures()[0].src, "logo.png");
 }
+
+/// The demo is the first program people open, so it checks clean: it once ran
+/// in the interpreter for months while `byard check` rejected it.
+#[test]
+fn the_demo_passes_the_type_checker() {
+    let parsed = parse(HELLO_WORLD);
+    assert!(parsed.errors.is_empty(), "{:?}", parsed.errors);
+    let found = byard_compiler::infer::check_views(&parsed.views).errors;
+    assert!(found.is_empty(), "{found:?}");
+}

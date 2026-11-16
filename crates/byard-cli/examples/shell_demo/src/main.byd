@@ -45,7 +45,12 @@ View Main() {
     }
 
     when settings {
-        Window #[title: "Settings", width: 460, height: 250, close => settings = false] as settings_window {
+        Window #[
+            title: "Settings",
+            width: 460,
+            height: 250,
+            close => settings = false,
+        ] as settings_window {
             Column #[bg: t.surfaceContainer, p: 24, gap: 18, grow: 1] {
                 Text("Settings") #[typo: t.headlineSmall, color: t.onSurface]
                 Text("A window is a surface like the bar is, in the space the panels left.")
@@ -90,10 +95,7 @@ View Wallpaper(s: Screen) {
         input: none,
         namespace: "wallpaper",
     ] as wallpaper {
-        Box #[
-            grow: 1,
-            gradient: (angle: 135deg, from: 0xFF1B1530, to: 0xFF3A2556),
-        ] {}
+        Box #[grow: 1, gradient: (angle: 135deg, from: 0xFF1B1530, to: 0xFF3A2556)] {}
     }
 }
 
@@ -108,15 +110,7 @@ View Bar(
 ) {
     inject Theme as t
     Panel #[screen: s, edge: top, height: 44, mt: 8, mx: 12, namespace: "bar"] as bar {
-        Row #[
-            bg: t.surfaceContainer,
-            radius: 22,
-            pl: 6,
-            pr: 18,
-            gap: 14,
-            align: center,
-            grow: 1,
-        ] {
+        Row #[bg: t.surfaceContainer, radius: 22, pl: 6, pr: 18, gap: 14, align: center, grow: 1] {
             Box #[
                 bg: open ? t.primary : t.primaryContainer,
                 radius: 16,

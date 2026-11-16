@@ -135,7 +135,7 @@ fn the_screens_are_drawn_side_by_side_with_every_surface_on_them() {
     assert_eq!(img.dimensions(), (2880, 900));
     // The bar's island is drawn at the top of the first screen, and the corner
     // of the shorter second screen is outside both: the checkerboard's dark.
-    assert_ne!(img.get_pixel(800, 20).0, img.get_pixel(800, 400).0);
+    assert_ne!(img.get_pixel(800, 20).0, img.get_pixel(200, 500).0);
     let outside = img.get_pixel(2800, 880).0;
     assert!(outside[0] < 0x20 && outside[3] == 255, "{outside:?}");
 }

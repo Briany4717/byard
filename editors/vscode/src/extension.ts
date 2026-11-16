@@ -9,7 +9,8 @@ import {
     Executable
 } from 'vscode-languageclient/node';
 
-const GUIDE_URL = 'https://byard.dev/guide/dev-loop.html';
+// The guide is not served from byard.dev yet; its editor section on GitHub is.
+const GUIDE_URL = 'https://github.com/Briany4717/byard/blob/main/docs/guide/src/dev-loop.md#in-your-editor';
 const SERVER_NAME = process.platform === 'win32' ? 'byld-lsp.exe' : 'byld-lsp';
 
 let client: LanguageClient | undefined;
@@ -68,17 +69,30 @@ async function showMissing(context: vscode.ExtensionContext): Promise<void> {
         learn
     );
     if (choice === install) {
-        const terminal = vscode.window.createTerminal('Byld: install byld-lsp');
-        terminal.show();
-        terminal.sendText('cargo install byld-lsp');
-        const restart = 'Restart server';
-        const next = await vscode.window.showInformationMessage(
-            'Byld: restart the language server when `cargo install` has finished.',
-            restart
+        // A task, not a bare terminal: its end is an event with an exit code,
+        // so the server starts by itself once cargo has built it.
+        const task = new vscode.Task(
+            { type: 'shell', task: 'install byld-lsp' },
+            vscode.TaskScope.Global,
+            'install byld-lsp',
+            'byld',
+            new vscode.ShellExecution('cargo install byld-lsp')
         );
-        if (next === restart) {
-            await restartServer(context);
-        }
+        const execution = await vscode.tasks.executeTask(task);
+        const done = vscode.tasks.onDidEndTaskProcess(async (e) => {
+            if (e.execution !== execution) {
+                return;
+            }
+            done.dispose();
+            if (e.exitCode === 0) {
+                await restartServer(context);
+            } else {
+                void vscode.window.showErrorMessage(
+                    'Byld: `cargo install byld-lsp` failed; its output is in the terminal.'
+                );
+            }
+        });
+        context.subscriptions.push(done);
     } else if (choice === setPath) {
         await vscode.commands.executeCommand('workbench.action.openSettings', 'byld.lsp.serverPath');
     } else if (choice === learn) {

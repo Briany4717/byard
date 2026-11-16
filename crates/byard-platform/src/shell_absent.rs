@@ -42,7 +42,9 @@ mod tests {
     fn the_message_names_the_error_the_platform_and_the_feature() {
         let m = message();
         assert!(m.starts_with("PanelsUnsupported:"), "{m}");
-        assert!(m.contains(std::env::consts::OS), "{m}");
-        assert!(m.contains("wayland-shell"), "{m}");
+        assert!(
+            m.contains("wayland-shell") || m.contains(std::env::consts::OS),
+            "{m}"
+        );
     }
 }

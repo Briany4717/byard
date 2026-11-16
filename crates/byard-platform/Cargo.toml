@@ -53,10 +53,11 @@ xkbcommon-dl = { version = "0.4", optional = true }
 accesskit_unix = { version = "0.24", default-features = false, optional = true }
 
 [features]
-default = ["wayland-shell"]
+default = []
 # The Wayland shell backend: layer surfaces for `Panel`, and `Window` as an
-# `xdg_toplevel` on the same connection. On by default on Linux, and nothing
-# on any other platform, where a program with a `Panel` stops at startup.
+# `xdg_toplevel` on the same connection. Opt-in, so a program with no panel
+# does not carry it (RFC-0068 §10); `byard-cli` turns it on. Linux only, and
+# nothing on any other platform, where a program with a `Panel` stops at startup.
 wayland-shell = [
     "dep:smithay-client-toolkit",
     "dep:wayland-backend",

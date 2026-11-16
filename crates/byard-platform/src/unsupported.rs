@@ -41,11 +41,20 @@ pub(crate) fn no_layer_shell() -> String {
     allow(dead_code, reason = "only a build without the backend says it")
 )]
 pub(crate) fn not_built(platform: &str) -> String {
-    format!(
-        "{NAME}: this program writes `Panel`, which is a Wayland layer surface, and this build \
-         has no Wayland shell backend ({platform}); panels need Linux with the `wayland-shell` \
-         feature of byard-platform"
-    )
+    if platform == "linux" {
+        format!(
+            "{NAME}: this program writes `Panel`, which is a Wayland layer surface, and this build \
+             leaves out the Wayland shell backend; enable it in Cargo.toml with \
+             `byard = {{ version = \"0.1\", features = [\"wayland-shell\"] }}` (or the \
+             `wayland-shell` feature of byard-platform)"
+        )
+    } else {
+        format!(
+            "{NAME}: this program writes `Panel`, which is a Wayland layer surface, and \
+             {platform} has no layer shell; panels need Linux and a Wayland compositor that \
+             offers zwlr_layer_shell_v1"
+        )
+    }
 }
 
 #[cfg(test)]
@@ -60,11 +69,16 @@ mod tests {
         let shell = no_layer_shell();
         assert!(shell.starts_with("PanelsUnsupported:"), "{shell}");
         assert!(shell.contains("zwlr_layer_shell_v1"), "{shell}");
-        let build = not_built("macos");
-        assert!(build.starts_with("PanelsUnsupported:"), "{build}");
+        let other = not_built("macos");
         assert!(
-            build.contains("macos") && build.contains("wayland-shell"),
-            "{build}"
+            other.starts_with("PanelsUnsupported:") && other.contains("macos"),
+            "{other}"
+        );
+        let linux = not_built("linux");
+        assert!(linux.starts_with("PanelsUnsupported:"), "{linux}");
+        assert!(
+            linux.contains("features = [\"wayland-shell\"]"),
+            "the exact Cargo.toml line: {linux}"
         );
     }
 }

@@ -146,6 +146,19 @@ starts, from whether it has a `Panel` anywhere: an edit under `byard dev` that a
 panel (or takes the last away) says it needs a restart and keeps the program that is running.
 A program without panels runs as it always did, on every platform.
 
+**Which builds include the backend.** `byard dev`, `byard shot` and `byard test` from this
+repository (`byard-cli`) include it on Linux. An app of your own does not, because a program
+with no panel would carry it for nothing: add the feature in its `Cargo.toml`,
+
+```toml
+byard = { version = "0.1", features = ["wayland-shell"] }
+```
+
+and without it `App::run` on a program with a `Panel` stops with `PanelsUnsupported`, saying
+so. `byard build` only bakes assets and does not compile the app, so it prints this line
+when the program has a `Panel`. `cargo install byard --features wayland-shell` gives a
+`byard` that runs panels.
+
 It works on compositors that offer `zwlr_layer_shell_v1`: Hyprland, Sway, river, niri,
 labwc, Wayfire, KDE Plasma and the other wlroots-style ones. It does not work on GNOME,
 whose compositor has no layer shell, nor on X11, Windows or macOS. A panel never falls back

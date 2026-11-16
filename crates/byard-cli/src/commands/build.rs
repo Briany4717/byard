@@ -38,6 +38,16 @@ pub fn run(file: Option<&Path>) -> Result<(), String> {
         ));
     }
 
+    // `byard build` bakes assets and does not compile the app, so it cannot turn
+    // the shell backend on for it: it says what the app's own build needs.
+    if byard_compiler::surfaces::surface_shape(&program.views).has_panel {
+        style::fact(
+            "Panels",
+            "this program has a `Panel`: build the app with the `wayland-shell` feature of \
+             `byard` (byard = { version = \"0.1\", features = [\"wayland-shell\"] })",
+        );
+    }
+
     // Stage 1: close the icon set (tree-shake) with the RFC-0009 §4 guard.
     let (refs, errors) = collect_static_vector_refs(&program.views, &manifest.vector_includes);
     if !errors.is_empty() {

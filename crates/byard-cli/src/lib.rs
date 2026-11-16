@@ -34,6 +34,12 @@ struct Cli {
 }
 
 #[derive(Subcommand)]
+#[allow(
+    clippy::large_enum_variant,
+    reason = "parsed once from the command line and matched once; boxing `shot`'s options would \
+              cost a branch of indirection for nothing. It trips only on Windows, where a \
+              `PathBuf` is larger"
+)]
 enum Command {
     /// Scaffold a new Byard project.
     New {

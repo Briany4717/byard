@@ -1,5 +1,6 @@
-import * as path from 'path';
 import * as fs from 'fs';
+import * as os from 'os';
+import * as path from 'path';
 import * as vscode from 'vscode';
 import {
     LanguageClient,
@@ -8,30 +9,93 @@ import {
     Executable
 } from 'vscode-languageclient/node';
 
-let client: LanguageClient;
+const GUIDE_URL = 'https://byard.dev/guide/dev-loop.html';
+const SERVER_NAME = process.platform === 'win32' ? 'byld-lsp.exe' : 'byld-lsp';
 
-export function activate(context: vscode.ExtensionContext) {
-    const config = vscode.workspace.getConfiguration('byld');
-    let serverPath = config.get<string | null>('lsp.serverPath');
+let client: LanguageClient | undefined;
+// The "not found" notification is shown once per window; the restart command
+// is an explicit request, so it always shows it again.
+let notifiedMissing = false;
 
-    if (!serverPath) {
-        // Fallback paths to locate build versions of `byld-lsp`
-        const possiblePaths = [
-            path.join(context.extensionPath, '..', '..', 'target', 'release', 'byld-lsp'),
-            path.join(context.extensionPath, '..', '..', 'target', 'debug', 'byld-lsp'),
-            path.join(vscode.workspace.workspaceFolders?.[0]?.uri.fsPath || '', 'target', 'release', 'byld-lsp'),
-            path.join(vscode.workspace.workspaceFolders?.[0]?.uri.fsPath || '', 'target', 'debug', 'byld-lsp'),
-        ];
+function isFile(p: string): boolean {
+    try {
+        return fs.statSync(p).isFile();
+    } catch {
+        return false;
+    }
+}
 
-        for (const p of possiblePaths) {
-            if (fs.existsSync(p)) {
-                serverPath = p;
-                break;
-            }
-        }
+// The places `byld-lsp` can be, in order: the setting, PATH, cargo's bin
+// directory (a GUI-launched VS Code often lacks it in PATH), then the build
+// directories of a checkout of the repository.
+function findServer(context: vscode.ExtensionContext): string | undefined {
+    const configured = vscode.workspace
+        .getConfiguration('byld')
+        .get<string | null>('lsp.serverPath');
+    if (configured && configured.trim() !== '') {
+        // An explicit setting is never second-guessed by falling through.
+        return isFile(configured) ? configured : undefined;
     }
 
-    const command = serverPath || 'byld-lsp';
+    const candidates: string[] = [];
+    for (const dir of (process.env.PATH || '').split(path.delimiter)) {
+        if (dir) {
+            candidates.push(path.join(dir, SERVER_NAME));
+        }
+    }
+    const cargoHome = process.env.CARGO_HOME || path.join(os.homedir(), '.cargo');
+    candidates.push(path.join(cargoHome, 'bin', SERVER_NAME));
+    const roots: string[] = [path.join(context.extensionPath, '..', '..')];
+    for (const folder of vscode.workspace.workspaceFolders || []) {
+        roots.push(folder.uri.fsPath);
+    }
+    for (const root of roots) {
+        candidates.push(path.join(root, 'target', 'release', SERVER_NAME));
+        candidates.push(path.join(root, 'target', 'debug', SERVER_NAME));
+    }
+
+    return candidates.find(isFile);
+}
+
+async function showMissing(context: vscode.ExtensionContext): Promise<void> {
+    const install = 'Install with cargo';
+    const setPath = 'Set path';
+    const learn = 'Learn more';
+    const choice = await vscode.window.showWarningMessage(
+        'Byld: the language server `byld-lsp` was not found',
+        install,
+        setPath,
+        learn
+    );
+    if (choice === install) {
+        const terminal = vscode.window.createTerminal('Byld: install byld-lsp');
+        terminal.show();
+        terminal.sendText('cargo install byld-lsp');
+        const restart = 'Restart server';
+        const next = await vscode.window.showInformationMessage(
+            'Byld: restart the language server when `cargo install` has finished.',
+            restart
+        );
+        if (next === restart) {
+            await restartServer(context);
+        }
+    } else if (choice === setPath) {
+        await vscode.commands.executeCommand('workbench.action.openSettings', 'byld.lsp.serverPath');
+    } else if (choice === learn) {
+        await vscode.env.openExternal(vscode.Uri.parse(GUIDE_URL));
+    }
+}
+
+async function startServer(context: vscode.ExtensionContext, explicit: boolean): Promise<void> {
+    const command = findServer(context);
+    if (!command) {
+        if (explicit || !notifiedMissing) {
+            notifiedMissing = true;
+            // Not awaited: the notification waits for a click, startup must not.
+            void showMissing(context);
+        }
+        return;
+    }
 
     const run: Executable = {
         command,
@@ -42,12 +106,7 @@ export function activate(context: vscode.ExtensionContext) {
             }
         }
     };
-
-    const serverOptions: ServerOptions = {
-        run,
-        debug: run,
-    };
-
+    const serverOptions: ServerOptions = { run, debug: run };
     const clientOptions: LanguageClientOptions = {
         documentSelector: [{ scheme: 'file', language: 'byld' }],
         synchronize: {
@@ -55,17 +114,35 @@ export function activate(context: vscode.ExtensionContext) {
         }
     };
 
-    client = new LanguageClient(
-        'byldLsp',
-        'Byld Language Server',
-        serverOptions,
-        clientOptions
-    );
+    const created = new LanguageClient('byldLsp', 'Byld Language Server', serverOptions, clientOptions);
+    client = created;
+    try {
+        await created.start();
+    } catch (err) {
+        client = undefined;
+        void vscode.window.showErrorMessage(`Byld: the language server failed to start (${String(err)})`);
+    }
+}
 
-    client.start();
+async function stopServer(): Promise<void> {
+    const current = client;
+    client = undefined;
+    if (current) {
+        try {
+            await current.stop();
+        } catch {
+            // Already stopped or never started: nothing to clean up.
+        }
+    }
+}
 
-    // Register Document Color Provider for inline colors and color picker support
-    const colorProvider = vscode.languages.registerColorProvider('byld', {
+async function restartServer(context: vscode.ExtensionContext): Promise<void> {
+    await stopServer();
+    await startServer(context, true);
+}
+
+function colorProvider(): vscode.DocumentColorProvider {
+    return {
         provideDocumentColors(document) {
             const colors: vscode.ColorInformation[] = [];
             const text = document.getText();
@@ -76,7 +153,7 @@ export function activate(context: vscode.ExtensionContext) {
                 const startPos = document.positionAt(match.index);
                 const endPos = document.positionAt(match.index + match[0].length);
                 const range = new vscode.Range(startPos, endPos);
-                
+
                 let red = 0, green = 0, blue = 0, alpha = 1.0;
                 if (hex.length === 6) {
                     red = parseInt(hex.slice(0, 2), 16) / 255;
@@ -88,7 +165,7 @@ export function activate(context: vscode.ExtensionContext) {
                     green = parseInt(hex.slice(4, 6), 16) / 255;
                     blue = parseInt(hex.slice(6, 8), 16) / 255;
                 }
-                
+
                 colors.push(new vscode.ColorInformation(range, new vscode.Color(red, green, blue, alpha)));
             }
             return colors;
@@ -98,7 +175,7 @@ export function activate(context: vscode.ExtensionContext) {
             const g = Math.round(color.green * 255).toString(16).padStart(2, '0').toUpperCase();
             const b = Math.round(color.blue * 255).toString(16).padStart(2, '0').toUpperCase();
             const a = Math.round(color.alpha * 255).toString(16).padStart(2, '0').toUpperCase();
-            
+
             let label = `0x${r}${g}${b}`;
             // Preserve 8-digit format if it was written or if alpha has transparency
             if (color.alpha < 1.0 || (context.range.end.character - context.range.start.character) === 10) {
@@ -106,14 +183,29 @@ export function activate(context: vscode.ExtensionContext) {
             }
             return [new vscode.ColorPresentation(label)];
         }
-    });
+    };
+}
 
-    context.subscriptions.push(colorProvider);
+export function activate(context: vscode.ExtensionContext): void {
+    // Highlighting comes from the grammar and the colour picker from here, so
+    // both work whether or not the server is found.
+    context.subscriptions.push(vscode.languages.registerColorProvider('byld', colorProvider()));
+
+    context.subscriptions.push(
+        vscode.commands.registerCommand('byld.restartServer', () => restartServer(context))
+    );
+
+    context.subscriptions.push(
+        vscode.workspace.onDidChangeConfiguration((e) => {
+            if (e.affectsConfiguration('byld.lsp.serverPath')) {
+                void restartServer(context);
+            }
+        })
+    );
+
+    void startServer(context, false);
 }
 
 export function deactivate(): Thenable<void> | undefined {
-    if (!client) {
-        return undefined;
-    }
-    return client.stop();
+    return stopServer();
 }

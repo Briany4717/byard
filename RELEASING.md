@@ -56,3 +56,31 @@ section as its notes.
 
 `cargo install byard` on a clean machine, `byard new hello`, `cd hello`,
 `byard dev`. That is the path the README promises, so it is the one to try.
+
+## VS Code extension
+
+The extension in `editors/vscode` is published on its own tag, `vscode-v<version>`,
+to the VS Code Marketplace and to Open VSX, as the publisher `byard`. CI builds
+and packages it, so no one needs npm to release.
+
+One time, by hand:
+
+1. Create the publisher `byard` at marketplace.visualstudio.com/manage, and an
+   Azure DevOps personal access token with the scope Marketplace, Manage
+   (organization: all accessible organizations). Add it to the repository
+   secrets as `VSCE_PAT`.
+2. Sign in at open-vsx.org, create an access token and run
+   `npx ovsx create-namespace byard -p <token>`. Add the token as `OVSX_PAT`.
+
+A step whose secret is missing is skipped with a warning, so the workflow can
+be tried with one registry first.
+
+A release:
+
+1. Set `version` in `editors/vscode/package.json` (and in its
+   `package-lock.json`) and add the version to `editors/vscode/CHANGELOG.md`.
+2. Merge, then tag and push: `git tag vscode-v0.1.0 && git push origin vscode-v0.1.0`.
+
+The workflow refuses a tag that does not match `package.json`, packages one
+`.vsix`, and publishes that file to both registries. The `.vsix` is also kept as
+a workflow artifact.

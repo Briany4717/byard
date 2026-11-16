@@ -1,0 +1,169 @@
+// Str: length, slicing, methods, comparison and Unicode edges.
+
+//# case: len-counts-characters
+//# fragment
+//# text: 5 0 5
+Text("{"hello".len} {"".len} {"héllo".len}")
+
+//# case: len-counts-code-points-not-graphemes
+//# fragment
+//# text: 5
+Text("{"👨‍👩‍👧".len}")
+
+//# case: len-of-grapheme-cluster
+//# gap: `len` counts code points, so one family emoji is 5
+//# fragment
+//# text: 1
+Text("{"👨‍👩‍👧".len}")
+
+//# case: slice
+//# fragment
+//# text: ell hello [] lo
+Text("{"hello".slice(1, 4)} {"hello".slice(0, 99)} [{"hello".slice(3, 1)}] {"hello".slice(3)}")
+
+//# case: slice-is-by-character
+//# fragment
+//# text: él
+Text("{"héllo".slice(1, 3)}")
+
+//# case: slice-negative-does-not-panic
+//# fragment
+//# text: ok
+let a = "hello".slice(-2, 3)
+let b = "hello".slice(2, -1)
+let c = "".slice(0, 0)
+Text("ok")
+
+//# case: trim-and-case
+//# fragment
+//# text: [a b] abc ABC STRASSE
+Text("[{"  a b ".trim()}] {"AbC".toLower()} {"aBc".toUpper()} {"Straße".toUpper()}")
+
+//# case: contains-starts-ends
+//# fragment
+//# text: true false true true true true
+Text("{"hello".contains("ell")} {"hello".contains("xyz")} {"hello".startsWith("he")} {"hello".endsWith("lo")} {"a".contains("")} {"".startsWith("")}")
+
+//# case: replace
+//# fragment
+//# text: heLLo hello xbxb
+Text("{"hello".replace("l", "L")} {"hello".replace("", "x")} {"abab".replace("a", "x")}")
+
+//# case: split
+//# fragment
+//# text: 3 1 3 1
+Text("{"a,,b".split(",").len} {"abc".split(",").len} {"abc".split("").len} {"".split(",").len}")
+
+//# case: index-of
+//# fragment
+//# text: 2 -1 0 2
+Text("{"hello".indexOf("l")} {"hello".indexOf("z")} {"hello".indexOf("")} {"héllo".indexOf("l")}")
+
+//# case: to-int
+//# fragment
+//# text: 12 -3 0 0 0 0
+Text("{"12".toInt() ?? 0} {"-3".toInt() ?? 0} {"1.5".toInt() ?? 0} {"".toInt() ?? 0} {"abc".toInt() ?? 0} {"99999999999999999999".toInt() ?? 0}")
+
+//# case: to-int-trims-and-takes-a-sign
+//# fragment
+//# text: 12 0 7
+Text("{" 12".toInt() ?? 0} {"1 2".toInt() ?? 0} {"+7".toInt() ?? 0}")
+
+//# case: to-float
+//# fragment
+//# text: 4.5 3 0 0
+Text("{"4.5".toFloat() ?? 0.0} {"3".toFloat() ?? 0.0} {"x".toFloat() ?? 0.0} {"".toFloat() ?? 0.0}")
+
+//# case: to-float-rejects-nan-and-inf
+//# fragment
+//# text: 0 0
+Text("{"NaN".toFloat() ?? 0.0} {"inf".toFloat() ?? 0.0}")
+
+//# case: url-encoded
+//# fragment
+//# text: a%20b%26c%23d
+Text("{"a b&c#d".urlEncoded()}")
+
+//# case: format-date
+//# fragment
+//# text: 2026-11-05 14:03
+Text("{"2026-11-05T14:03:12".formatDate("YYYY-MM-DD HH:mm")}")
+
+//# case: format-date-of-nonsense-does-not-panic
+//# fragment
+//# text: ok
+let a = "not a date".formatDate("YYYY")
+let b = "".formatDate("")
+let c = "2026-99-99T99:99:99".formatDate("dddd D MMMM")
+Text("ok")
+
+//# case: concatenation
+//# fragment
+//# text: ab a1 atrue
+Text("{"a" + "b"} {"a" + 1} {"a" + true}")
+
+//# case: comparison-is-by-code-point
+//# fragment
+//# text: true true false true
+Text("{"a" < "b"} {"B" < "a"} {"a" == "A"} {"10" < "9"}")
+
+//# case: equality
+//# fragment
+//# text: true false true
+Text("{"a" == "a"} {"a" != "a"} {"" == ""}")
+
+//# case: text-compared-with-number-is-an-error
+//# fragment
+//# error: TypeMismatch
+Text("{"1" == 1}")
+
+//# case: unknown-text-method
+//# fragment
+//# error: UnknownMethod
+Text("{"a".reversed()}")
+
+//# case: method-chain
+//# fragment
+//# text: ADA
+Text("{"  ada ".trim().toUpper().slice(0, 3)}")
+
+//# case: index-into-text
+//# gap: `s[i]` on text is nothing; should be the character or an error
+//# fragment
+//# text: e
+Text("{"hello"[1]}")
+
+//# case: join-shows-each-item
+//# fragment
+//# text: 1, 2, 3 | a-b | []
+Text("{[1, 2, 3].join(", ")}")
+Text("{["a", "b"].join("-")}")
+Text("[{[].join(",")}]")
+
+//# case: list-in-text-is-nothing-today
+//# fragment
+//# text: <>
+Text("<{[1, 2] + [3]}>")
+
+//# case: list-in-text-shows-its-items
+//# gap: a list written into a text draws nothing
+//# fragment
+//# text: [1, 2, 3]
+Text("{[1, 2] + [3]}")
+
+//# case: record-in-text-is-not-debug-form
+//# fragment
+//# text: ok
+let r = { a: 1 }
+let shown = "{r}"
+Text(shown.contains("Record") ? "debug" : "ok")
+
+//# case: very-long-string-does-not-panic
+//# fragment
+//# text: 4096
+let a = "0123456789abcdef"
+let b = a + a + a + a
+let c = b + b + b + b
+let d = c + c + c + c
+let e = d + d + d + d
+Text("{e.len}")

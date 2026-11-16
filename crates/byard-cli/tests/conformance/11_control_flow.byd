@@ -1,0 +1,295 @@
+// `when`, `else when`, `for`, `key`, and the statements of an action.
+
+//# case: when-true-and-false
+//# fragment
+//# text: yes | end
+when true { Text("yes") }
+when false { Text("no") }
+Text("end")
+
+//# case: when-else
+//# fragment
+//# text: b
+var on = false
+when on { Text("a") } else { Text("b") }
+
+//# case: else-when-chain
+//# fragment
+//# text: two
+var step = 1
+when step == 0 { Text("one") } else when step == 1 { Text("two") } else { Text("three") }
+
+//# case: else-when-without-a-final-else
+//# fragment
+//# text: end
+var step = 5
+when step == 0 { Text("one") } else when step == 1 { Text("two") }
+Text("end")
+
+//# case: when-follows-state
+//# fragment
+//# text: shown
+var on = false
+on mount => { on = true }
+when on { Text("shown") }
+
+//# case: when-rebuilds-fresh-state
+//# text: 0
+View Counter() {
+    var n = 0
+    Text("{n}")
+}
+View Main() {
+    var on = true
+    on mount => { on = false on = true }
+    when on { Counter() }
+}
+
+//# case: when-condition-must-be-bool
+//# gap: `when 5 { }` is accepted
+//# fragment
+//# error: TypeMismatch
+when 5 { Text("x") }
+
+//# case: when-checks-the-arm-that-is-not-shown
+//# fragment
+//# error: UnknownName
+when false { Text("{nope}") }
+
+//# case: when-nested
+//# fragment
+//# text: inner
+when true { when true { Text("inner") } }
+
+//# case: else-without-when
+//# fragment
+//# error: UnexpectedToken
+else { Text("x") }
+
+//# case: for-nested
+//# fragment
+//# text: 1a | 1b | 2a | 2b
+for n in [1, 2] { for s in ["a", "b"] { Text("{n}{s}") } }
+
+//# case: for-over-records
+//# fragment
+//# text: Ada 3 | Bo 4
+for u in [{ name: "Ada", n: 3 }, { name: "Bo", n: 4 }] { Text("{u.name} {u.n}") }
+
+//# case: for-follows-the-list
+//# fragment
+//# text: a | b | c
+var xs = ["a"]
+on mount => { xs = xs.push("b").push("c") }
+for s in xs { Text(s) }
+
+//# case: for-variable-does-not-leak
+//# fragment
+//# error: UnknownName
+for s in ["a"] { Text(s) }
+Text(s)
+
+//# case: for-shadows-an-outer-name
+//# fragment
+//# text: a | outer
+let s = "outer"
+for s in ["a"] { Text(s) }
+Text(s)
+
+//# case: for-over-a-map-result
+//# fragment
+//# text: 2 | 4
+for n in [1, 2].map(x => x * 2) { Text("{n}") }
+
+//# case: for-key
+//# fragment
+//# text: Ada | Bo
+for name in ["Ada", "Bo"] key name { Text(name) }
+
+//# case: for-key-with-index
+//# fragment
+//# text: 0 Ada | 1 Bo
+for i, name in ["Ada", "Bo"] key name { Text("{i} {name}") }
+
+//# case: for-key-keeps-row-state
+//# wait: 50
+//# text: New 0 | Ada 1
+View Row1(name: Str) {
+    var n = 0
+    on mount => { if name == "Ada" { n = 1 } }
+    Text("{name} {n}")
+}
+View Main() {
+    var names = ["Ada"]
+    after 1ms => { names = ["New", "Ada"] }
+    for name in names key name { Row1(name) }
+}
+
+//# case: for-key-duplicate
+//# fragment
+//# error: DuplicateForKey
+for name in ["a", "a"] key name { Text(name) }
+
+//# case: for-key-of-a-list
+//# fragment
+//# error: ForKeyNotComparable
+for row in [[1], [2]] key row { Text("x") }
+
+//# case: for-key-by-record-field
+//# fragment
+//# text: a | b
+for t in [{ id: 1, s: "a" }, { id: 2, s: "b" }] key t.id { Text(t.s) }
+
+//# case: key-is-still-a-name
+//# fragment
+//# text: k
+let key = "k"
+Text(key)
+
+//# case: for-with-range
+//# gap: no range; a counted loop needs a list written out
+//# fragment
+//# text: 0 | 1 | 2
+for i in 0..3 { Text("{i}") }
+
+//# case: match-on-an-enum
+//# gap: there is no `match`
+//# text: b
+enum S { a, b }
+View Main() {
+    var s = S.b
+    Text(match s { .a => "a", .b => "b" })
+}
+
+//# case: when-chain-over-an-enum-is-not-checked-for-missing-cases
+//# gap: a chain that forgets a case draws nothing and says nothing
+//# warning: NonExhaustive
+enum S { a, b, c }
+View Main() {
+    var s = S.c
+    when s == S.a { Text("a") } else when s == S.b { Text("b") }
+}
+
+//# case: action-if-else
+//# fragment
+//# text: limit
+var count = 5
+var message = ""
+on mount => {
+    let next = count + 1
+    if next > 5 {
+        message = "limit"
+    } else {
+        count = next
+    }
+}
+Text(message)
+
+//# case: action-else-if
+//# fragment
+//# text: mid
+var n = 5
+var s = ""
+on mount => {
+    if n < 3 { s = "low" } else if n < 8 { s = "mid" } else { s = "high" }
+}
+Text(s)
+
+//# case: action-if-needs-braces
+//# fragment
+//# error: UnexpectedToken
+var n = 0
+on mount => { if n == 0 n = 1 }
+Text("{n}")
+
+//# case: action-let-holds-for-later-statements
+//# fragment
+//# text: 6
+var n = 0
+on mount => {
+    let a = 2
+    let b = a * 3
+    n = b
+}
+Text("{n}")
+
+//# case: action-let-does-not-leak
+//# fragment
+//# error: UnknownName
+var n = 0
+on mount => { let a = 2 }
+Text("{a}")
+
+//# case: action-statements-run-in-order
+//# fragment
+//# text: 3
+var n = 0
+on mount => { n = 1 n = n + 1 n = n + 1 }
+Text("{n}")
+
+//# case: action-single-statement-needs-no-braces
+//# fragment
+//# text: 1
+var n = 0
+on mount => n = 1
+Text("{n}")
+
+//# case: action-reads-the-value-it-just-wrote
+//# fragment
+//# text: 2 4
+var a = 1
+var b = 0
+on mount => { a = 2 b = a * 2 }
+Text("{a} {b}")
+
+//# case: action-for-loop
+//# gap: an action cannot loop over a list
+//# fragment
+//# text: 6
+var n = 0
+on mount => { for i in [1, 2, 3] { n += i } }
+Text("{n}")
+
+//# case: action-if-condition-must-be-bool
+//# gap: `if 5 { }` is accepted
+//# fragment
+//# error: TypeMismatch
+var n = 0
+on mount => { if 5 { n = 1 } }
+Text("{n}")
+
+//# case: action-early-return
+//# gap: an action cannot stop early
+//# fragment
+//# text: 1
+var n = 0
+on mount => {
+    n = 1
+    if n == 1 { return }
+    n = 2
+}
+Text("{n}")
+
+//# case: if-is-still-a-name
+//# fragment
+//# text: 3
+let if = 3
+Text("{if}")
+
+//# case: clock-in-an-action
+//# fragment
+//# text: true
+var t = ""
+on mount => { t = now() }
+Text("{t.len == 19}")
+
+//# case: clock-outside-an-action
+//# fragment
+//# error: ClockOutsideAction
+let t = now()
+Text(t)
+
+//# case: clock-in-a-function
+//# error: ImpureFunction
+fn stamp() -> Str => now()
+View Main() { Text(stamp()) }

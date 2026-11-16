@@ -1,0 +1,199 @@
+// Int and Float arithmetic, conversion, comparison and their edges.
+
+//# case: int-arithmetic
+//# fragment
+//# text: 5 -1 6 0 2
+Text("{2 + 3} {2 - 3} {2 * 3} {2 / 3} {2 % 3}")
+
+//# case: int-division-truncates-toward-zero
+//# fragment
+//# text: 3 -3 -3 3
+Text("{7 / 2} {-7 / 2} {7 / -2} {-7 / -2}")
+
+//# case: remainder-takes-the-sign-of-the-left
+//# fragment
+//# text: 1 -1 1 -1
+Text("{7 % 3} {-7 % 3} {7 % -3} {-7 % -3}")
+
+//# case: float-remainder
+//# fragment
+//# text: 1.5
+Text("{7.5 % 2}")
+
+//# case: remainder-without-spaces
+//# fragment
+//# text: 1
+Text("{10%3}")
+
+//# case: int-and-float-mix-widens
+//# fragment
+//# text: 3.5 3.5 1.5 6
+Text("{7 / 2.0} {7.0 / 2} {1 + 0.5} {2 * 3.0}")
+
+//# case: precedence-mul-over-add
+//# fragment
+//# text: 7 9 -5 1
+Text("{1 + 2 * 3} {(1 + 2) * 3} {-2 - 3} {7 - 2 * 3}")
+
+//# case: left-associative
+//# fragment
+//# text: 5 2 1
+Text("{10 - 3 - 2} {16 / 4 / 2} {7 % 4 % 2}")
+
+//# case: unary-minus-binds-tighter-than-binary
+//# fragment
+//# text: -6 6 -1
+let a = 2
+Text("{-a * 3} {-a * -3} {-a + 1}")
+
+//# case: division-by-zero-int
+//# gap: gives 0 with no diagnostic; should be reported while developing
+//# fragment
+//# text: 0
+//# warning: DivisionByZero
+Text("{1 / 0}")
+
+//# case: division-by-zero-is-zero-today
+//# fragment
+//# text: 0 0 0 0
+let z = 0
+Text("{1 / z} {1 % z} {1.5 / z} {0 / z}")
+
+//# case: int-overflow-add
+//# gap: wraps to the minimum; should saturate or be reported
+//# fragment
+//# text: 9223372036854775807
+Text("{9223372036854775807 + 1}")
+
+//# case: int-overflow-wraps-today
+//# fragment
+//# text: -9223372036854775808
+let big = 9223372036854775807
+Text("{big + 1}")
+
+//# case: int-overflow-mul-does-not-panic
+//# fragment
+//# text: ok
+let big = 9223372036854775807
+let x = big * big
+Text("ok")
+
+//# case: int-min-negate-and-divide-do-not-panic
+//# fragment
+//# text: ok
+let big = 9223372036854775807
+let min = 0 - big - 1
+let a = min / (0 - 1)
+let b = min % (0 - 1)
+let c = -min
+let d = min.abs()
+Text("ok")
+
+//# case: float-precision-shows-shortest-roundtrip
+//# fragment
+//# text: 0.30000000000000004 0.1 100
+Text("{0.1 + 0.2} {0.1} {100.0}")
+
+//# case: float-whole-prints-without-point
+//# fragment
+//# text: 3 -2 0
+Text("{3.0} {-2.0} {0.0}")
+
+//# case: comparison-numbers
+//# fragment
+//# text: true false true true false true
+Text("{1 < 2} {2 < 1} {2 <= 2} {3 >= 3} {1 == 2} {1 != 2}")
+
+//# case: comparison-int-with-float
+//# fragment
+//# text: true true false
+Text("{1 == 1.0} {1 < 1.5} {2 <= 1.5}")
+
+//# case: comparison-chain-is-rejected
+//# fragment
+//# error: TypeMismatch
+Text("{1 < 2 < 3}")
+
+//# case: number-methods-int
+//# fragment
+//# text: 3 3 5 2 3
+Text("{(-3).abs()} {3.abs()} {3.max(5)} {3.min(2)} {3.toFloat()}")
+
+//# case: number-methods-float
+//# fragment
+//# text: 3 2 3 -3 -2 2.5
+Text("{2.5.round()} {2.5.floor()} {2.5.ceil()} {(-2.5).round()} {(-2.5).ceil()} {(-2.5).abs()}")
+
+//# case: round-half-away-from-zero
+//# fragment
+//# text: 1 2 -1 -2
+Text("{0.5.round()} {1.5.round()} {(-0.5).round()} {(-1.5).round()}")
+
+//# case: round-of-huge-float-does-not-panic
+//# fragment
+//# text: ok
+let h = 1000000000000000000000.0
+let r = h.round()
+Text("ok")
+
+//# case: trig
+//# fragment
+//# text: 0.00 1.00 2.00 0.79
+Text("{0.sin():.2} {0.cos():.2} {4.sqrt():.2} {1.atan2(1):.2}")
+
+//# case: sqrt-of-negative-does-not-panic
+//# fragment
+//# text: ok
+let r = (-1).sqrt()
+Text("ok")
+
+//# case: unknown-number-method
+//# fragment
+//# error: UnknownMethod
+Text("{3.squared()}")
+
+//# case: plus-equals-and-minus-equals
+//# fragment
+//# text: 12
+var n = 10
+on mount => { n += 5 n -= 3 }
+Text("{n}")
+
+//# case: increment-and-decrement
+//# fragment
+//# text: 1
+var n = 0
+on mount => { n++ n++ n-- }
+Text("{n}")
+
+//# case: int-plus-text-joins
+//# fragment
+//# text: n = 5 5 = n 1.5!
+Text("{"n = " + 5} {5 + " = n"} {1.5 + "!"}")
+
+//# case: bool-in-arithmetic-is-an-error
+//# fragment
+//# error: TypeMismatch
+Text("{true + 1}")
+
+//# case: text-minus-number-is-an-error
+//# fragment
+//# error: TypeMismatch
+Text("{"a" - 1}")
+
+//# case: text-times-number-is-an-error
+//# fragment
+//# error: TypeMismatch
+Text("{"a" * 2}")
+
+//# case: colours-are-ints
+//# fragment
+//# text: 16711680 true
+let c: Color = 0xFF0000
+Text("{c} {c == 16711680}")
+
+//# case: colour-alpha
+//# fragment
+//# text: true
+let c = 0xFF0000
+Text("{c.alpha(0.5) != c}")

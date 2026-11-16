@@ -1,0 +1,264 @@
+// Bindings, contexts and optional values.
+
+//# case: bind-writes-the-callers-var
+//# text: true
+View Switch(bind on: Bool) {
+    on mount => { on = true }
+    Box {}
+}
+View Main() {
+    var wifi = false
+    Switch(bind: wifi)
+    Text("{wifi}")
+}
+
+//# case: bind-long-form-and-several
+//# text: ab true
+View Field(bind text: Str, bind valid: Bool) {
+    on mount => { text = "ab" valid = true }
+    Box {}
+}
+View Main() {
+    var name = ""
+    var ok = false
+    Field(bind text: name, bind valid: ok)
+    Text("{name} {ok}")
+}
+
+//# case: bind-with-a-default-keeps-its-own-var
+//# text: 1 | 11 | 11
+View Counter(bind n: Int = 0) {
+    on mount => { n = n + 1 }
+    Text("{n}")
+}
+View Main() {
+    var shared = 10
+    Counter()
+    Counter(bind: shared)
+    Text("{shared}")
+}
+
+//# case: bind-passed-on
+//# text: true
+View Leaf(bind on: Bool) {
+    on mount => { on = true }
+    Box {}
+}
+View Pane(bind enabled: Bool) { Leaf(bind: enabled) }
+View Main() {
+    var dark = false
+    Pane(bind: dark)
+    Text("{dark}")
+}
+
+//# case: bind-a-let
+//# error: BindNotAVar
+View Switch(bind on: Bool) { Toggle #[bind: on] }
+View Main() {
+    var wifi = true
+    let off = !wifi
+    Switch(bind: off)
+}
+
+//# case: bind-a-literal
+//# error: BindNotAVar
+View Switch(bind on: Bool) { Toggle #[bind: on] }
+View Main() { Switch(bind: true) }
+
+//# case: bind-a-loop-variable
+//# error: BindNotAVar
+View Switch(bind on: Bool) { Toggle #[bind: on] }
+View Main() {
+    var flags = [true, false]
+    for f in flags { Switch(bind: f) }
+}
+
+//# case: bind-given-as-a-value
+//# error: BindArgMismatch
+View Switch(bind on: Bool) { Toggle #[bind: on] }
+View Main() {
+    var wifi = true
+    Switch(on: wifi)
+}
+
+//# case: bind-of-the-wrong-type
+//# error: ArgumentTypeMismatch
+View Level(bind v: Float) { Slider #[bind: v] }
+View Main() {
+    var n = 1
+    Level(bind: n)
+}
+
+//# case: bind-required-and-missing
+//# error: MissingParam
+View Switch(bind on: Bool) { Toggle #[bind: on] }
+View Main() { Switch() }
+
+//# case: bind-on-a-control
+//# fragment
+//# text: ok
+var name = ""
+var on = false
+var level = 0.5
+TextField #[bind: name]
+Toggle #[bind: on]
+Slider #[bind: level]
+Text("ok")
+
+//# case: bind-a-parameter-to-a-control
+//# error: BindNotAVar
+View Field(label: Str) { TextField #[bind: label] }
+View Main() { Field("a") }
+
+//# case: context-defaults-without-a-provider
+//# text: 0
+context Tabs { current: Int = 0 }
+View Tab() {
+    inject Tabs as s
+    Text("{s.current}")
+}
+View Main() { Tab() }
+
+//# case: context-provided-to-a-slot
+//# text: 3
+context Tabs { current: Int = 0 }
+View Bar(content) {
+    provide Tabs(current: 3)
+    Row { content }
+}
+View Tab() {
+    inject Tabs as s
+    Text("{s.current}")
+}
+View Main() { Bar { Tab() } }
+
+//# case: context-nearest-provider-wins
+//# text: 2
+context Depth { n: Int = 0 }
+View Outer(content) {
+    provide Depth(n: 1)
+    Column { content }
+}
+View Inner(content) {
+    provide Depth(n: 2)
+    Column { content }
+}
+View Leaf() {
+    inject Depth as d
+    Text("{d.n}")
+}
+View Main() { Outer { Inner { Leaf() } } }
+
+//# case: context-is-live
+//# text: 5
+context Tabs { current: Int = 0 }
+View Bar(content) {
+    var cur = 1
+    provide Tabs(current: cur)
+    on mount => { cur = 5 }
+    Row { content }
+}
+View Tab() {
+    inject Tabs as s
+    Text("{s.current}")
+}
+View Main() { Bar { Tab() } }
+
+//# case: context-callback-field
+//# text: 4
+context Tabs { current: Int = 0, select: Fn(Int) = none }
+View Bar(content) {
+    var cur = 0
+    provide Tabs(current: cur, select: {|i| cur = i })
+    Row { content }
+}
+View Tab() {
+    inject Tabs as s
+    on mount => s.select(4)
+    Text("{s.current}")
+}
+View Main() { Bar { Tab() } }
+
+//# case: context-provided-twice
+//# error: DuplicateProvide
+context Tabs { current: Int = 0 }
+View Main() {
+    provide Tabs(current: 1)
+    provide Tabs(current: 2)
+    Text("x")
+}
+
+//# case: context-unknown
+//# error: UnknownContext
+View Main() {
+    provide Nope(current: 1)
+    Text("x")
+}
+
+//# case: context-unknown-field
+//# error: UnknownField
+context Tabs { current: Int = 0 }
+View Main() {
+    provide Tabs(curent: 1)
+    Text("x")
+}
+
+//# case: context-field-without-a-default
+//# error: ContextFieldNeedsDefault
+context Tabs { current: Int }
+View Main() { Text("x") }
+
+//# case: context-provide-of-the-wrong-type
+//# error: ArgumentTypeMismatch
+context Tabs { current: Int = 0 }
+View Main() {
+    provide Tabs(current: "one")
+    Text("x")
+}
+
+//# case: inject-of-something-nobody-provides
+//# warning: UncheckableInject
+View Main() {
+    inject Greeter as greeter
+    Text("x")
+}
+
+//# case: optional-value-read-with-otherwise
+//# text: 7 | 3
+View Pill(n: Int? = none) { Text("{n ?? 7}") }
+View Main() {
+    Pill()
+    Pill(n: 3)
+}
+
+//# case: optional-value-inside-when
+//# text: none | 3
+View Pill(n: Int? = none) {
+    when n != none { Text("{n}") } else { Text("none") }
+}
+View Main() {
+    Pill()
+    Pill(n: 3)
+}
+
+//# case: optional-value-read-bare
+//# error: NoneNotHandled
+View Pill(n: Int? = none) { Text("{n}") }
+View Main() { Pill() }
+
+//# case: optional-value-passed-none
+//# text: 7
+View Pill(n: Int? = none) { Text("{n ?? 7}") }
+View Main() { Pill(n: none) }
+
+//# case: optional-value-with-a-default-that-is-not-none
+//# error: BadOptionalDefault
+View Pill(n: Int? = 3) { Text("{n ?? 7}") }
+View Main() { Pill() }
+
+//# case: optional-var
+//# gap: `none` is only for parameters; a `var` cannot start with nothing
+//# fragment
+//# text: none
+var picked: Int? = none
+Text("{picked ?? "none"}")

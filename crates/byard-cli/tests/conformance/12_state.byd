@@ -1,0 +1,345 @@
+// `var`, `let`, inference, annotations, reactivity and scope.
+
+//# case: var-infers-from-its-first-value
+//# fragment
+//# text: 1 4.5 hi true 2
+var a = 0
+var b = 4.5
+var c = "hi"
+var d = true
+var e = [1, 2]
+on mount => { a = 1 }
+Text("{a} {b} {c} {d} {e.len}")
+
+//# case: var-with-annotation
+//# fragment
+//# text: 4.5 0
+var price: Float = 4.5
+var names: List<Str> = []
+Text("{price} {names.len}")
+
+//# case: var-int-literal-annotated-float-divides-as-a-float
+//# gap: `var w: Float = 3` holds an `Int`, so `w / 2` truncates
+//# fragment
+//# text: 1.5
+var w: Float = 3
+Text("{w / 2}")
+
+//# case: var-annotation-of-the-wrong-type
+//# gap: an initializer is not checked against the annotation
+//# fragment
+//# error: TypeMismatch
+var n: Int = "a"
+Text("{n}")
+
+//# case: var-list-annotation-of-the-wrong-type
+//# gap: an initializer is not checked against the annotation
+//# fragment
+//# error: TypeMismatch
+var xs: List<Int> = ["a"]
+Text("{xs.len}")
+
+//# case: var-annotation-that-is-no-type
+//# gap: a type name nobody declared is accepted
+//# fragment
+//# error: UnknownType
+var q: Qux = 1
+Text("{q}")
+
+//# case: var-map-type-does-not-exist
+//# gap: `Map<Str, Int>` is no type and is accepted
+//# fragment
+//# error: UnknownType
+var m: Map<Str, Int> = {}
+Text("x")
+
+//# case: var-assigned-another-type
+//# gap: an assignment is not checked against the variable's type
+//# fragment
+//# error: TypeMismatch
+var n = 0
+on mount => { n = "text" }
+Text("{n}")
+
+//# case: var-plus-equals-another-type
+//# gap: `n += "a"` on an `Int` is accepted
+//# fragment
+//# error: TypeMismatch
+var n = 0
+on mount => { n += "a" }
+Text("{n}")
+
+//# case: var-increment-on-text
+//# gap: `s++` on a `Str` is accepted
+//# fragment
+//# error: TypeMismatch
+var s = "a"
+on mount => { s++ }
+Text(s)
+
+//# case: var-declared-twice
+//# gap: two `var`s of one name in a view are accepted; the second wins
+//# fragment
+//# error: NameCollision
+var x = 1
+var x = 2
+Text("{x}")
+
+//# case: var-and-let-of-one-name
+//# gap: a `let` over a `var` of the same name is accepted
+//# fragment
+//# error: NameCollision
+var x = 1
+let x = 2
+Text("{x}")
+
+//# case: var-named-like-a-parameter
+//# gap: a `var` over a parameter of the same name is accepted
+//# error: NameCollision
+View Card(n: Int) {
+    var n = 2
+    Text("{n}")
+}
+View Main() { Card(1) }
+
+//# case: var-unused
+//# gap: nothing says a `var` is never read
+//# fragment
+//# warning: UnusedVariable
+var unused = 0
+Text("x")
+
+//# case: var-used-before-its-line
+//# fragment
+//# text: 5
+Text("{n}")
+var n = 5
+
+//# case: var-inside-an-element-body
+//# gap: a `var` in an element's braces checks clean and reads as its own name, `n`
+//# fragment
+//# error: LetInElementBody
+Column {
+    var n = 3
+    Text("{n}")
+}
+
+//# case: var-inside-an-element-body-does-not-leak
+//# fragment
+//# error: UnknownName
+Column { var n = 3 }
+Text("{n}")
+
+//# case: var-initializer-reads-another-var
+//# fragment
+//# text: 2
+var a = 1
+var b = a + 1
+Text("{b}")
+
+//# case: var-initializer-is-read-once
+//# fragment
+//# text: 2
+var a = 1
+var b = a + 1
+on mount => { a = 10 }
+Text("{b}")
+
+//# case: let-is-derived
+//# fragment
+//# text: 20
+var a = 1
+let b = a * 2
+on mount => { a = 10 }
+Text("{b}")
+
+//# case: let-of-let
+//# fragment
+//# text: 22
+var a = 1
+let b = a * 2
+let c = b + 2
+on mount => { a = 10 }
+Text("{c}")
+
+//# case: let-with-annotation
+//# fragment
+//# text: 3
+let n: Int = 3
+Text("{n}")
+
+//# case: let-annotation-of-the-wrong-type
+//# gap: a `let` in a view is not checked against its annotation, though a constant is
+//# fragment
+//# error: TypeMismatch
+let z: Str = 5
+Text(z)
+
+//# case: let-cycle
+//# gap: two `let`s in a view that read each other are accepted
+//# fragment
+//# error: ConstantCycle
+let a = b + 1
+let b = a + 1
+Text("{a}")
+
+//# case: let-cycle-does-not-hang
+//# fragment
+//# text: ok
+let a = b + 1
+let b = a + 1
+Text("ok")
+
+//# case: unknown-name
+//# fragment
+//# error: UnknownName
+Text("{nope}")
+
+//# case: unknown-name-in-an-attribute
+//# fragment
+//# error: UnknownName
+Text("a") #[size: nope]
+
+//# case: unknown-name-in-an-action
+//# fragment
+//# error: UnknownName
+on mount => { nope = 1 }
+Text("a")
+
+//# case: built-in-names
+//# fragment
+//# text: true true
+Text("{window.width > 0} {window.height > 0}")
+
+//# case: text-interpolation-follows-state
+//# fragment
+//# text: 2 taps
+var count = 0
+on mount => { count = 2 }
+Text("{count} taps")
+
+//# case: attribute-follows-state
+//# fragment
+//# text: ok
+var big = false
+on mount => { big = true }
+Text("ok") #[size: big ? 30 : 12]
+
+//# case: write-of-the-same-value-is-not-a-change
+//# fragment
+//# text: 0
+var a = 1
+var seen = 0
+on change(a) => { seen++ }
+on mount => { a = 1 }
+Text("{seen}")
+
+//# case: on-change-runs-when-the-value-changes
+//# fragment
+//# wait: 50
+//# text: 1
+var a = 1
+var seen = 0
+on change(a) => { seen++ }
+after 10ms => { a = 2 }
+Text("{seen}")
+
+//# case: on-change-of-several
+//# fragment
+//# wait: 50
+//# text: true
+var a = 1
+var b = 1
+var seen = 0
+on change(a, b) => { seen++ }
+after 10ms => { a = 2 b = 2 }
+Text("{seen >= 1}")
+
+//# case: on-change-that-writes-what-it-watches-settles
+//# fragment
+//# text: ok
+var a = 0
+on change(a) => { if a < 3 { a = a + 1 } }
+on mount => { a = 1 }
+Text("ok")
+
+//# case: on-mount-runs-once
+//# fragment
+//# text: 1
+var n = 0
+on mount => { n++ }
+Text("{n}")
+
+//# case: on-unmount-is-accepted
+//# fragment
+//# text: a
+var n = 0
+on unmount => { n++ }
+Text("a")
+
+//# case: timers-are-accepted
+//# fragment
+//# text: a
+var n = 0
+every 1s => { n++ }
+after 300ms => { n++ }
+Text("a")
+
+//# case: timer-with-an-expression
+//# fragment
+//# text: a
+var wait = 5
+var n = 0
+after wait * 1ms => { n++ }
+Text("a")
+
+//# case: timer-of-zero
+//# gap: `every 0ms` is refused only when it runs
+//# fragment
+//# error: InvalidAnimation
+var n = 0
+every 0ms => { n++ }
+Text("a")
+
+//# case: on-change-does-not-see-what-mount-wrote
+//# fragment
+//# text: 0
+var a = 1
+var seen = 0
+on change(a) => { seen++ }
+on mount => { a = 2 }
+Text("{seen}")
+
+//# case: after-runs-once
+//# fragment
+//# wait: 400
+//# text: 1
+var n = 0
+after 100ms => { n++ }
+Text("{n}")
+
+//# case: every-repeats
+//# fragment
+//# wait: 350
+//# text: 3
+var n = 0
+every 100ms => { n++ }
+Text("{n}")
+
+//# case: every-first-fires-after-its-interval
+//# fragment
+//# wait: 50
+//# text: 0
+var n = 0
+every 100ms => { n++ }
+Text("{n}")
+
+//# case: timer-inside-a-when-stops-with-it
+//# fragment
+//# wait: 500
+//# text: 1
+var n = 0
+var live = true
+after 150ms => { live = false }
+when live { every 100ms => { n++ } }
+Text("{n}")

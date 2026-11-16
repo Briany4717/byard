@@ -1,0 +1,231 @@
+// Logic, comparison, `??`, `?:` and how the operators group.
+
+//# case: and-or-not
+//# fragment
+//# text: true false true false true
+Text("{true && true} {true && false} {false || true} {false || false} {!false}")
+
+//# case: and-binds-tighter-than-or
+//# fragment
+//# text: true true
+Text("{true || false && false} {false && false || true}")
+
+//# case: not-binds-tighter-than-and
+//# fragment
+//# text: false true
+Text("{!true && false} {!(true && false)}")
+
+//# case: comparison-binds-tighter-than-and
+//# fragment
+//# text: true
+Text("{1 < 2 && 2 < 3}")
+
+//# case: short-circuit-and
+//# fragment
+//# text: false
+let xs: List<Int> = []
+Text("{xs.len > 0 && xs[0] > 5}")
+
+//# case: short-circuit-or
+//# fragment
+//# text: true
+let xs: List<Int> = []
+Text("{xs.len == 0 || xs[0] > 5}")
+
+//# case: logic-on-a-number-is-an-error
+//# gap: `1 && true` is accepted, though `!5` is not
+//# fragment
+//# error: TypeMismatch
+Text("{1 && true}")
+
+//# case: not-on-a-number-is-an-error
+//# fragment
+//# error: TypeMismatch
+Text("{!5}")
+
+//# case: ternary
+//# fragment
+//# text: a b
+Text("{true ? "a" : "b"} {false ? "a" : "b"}")
+
+//# case: ternary-is-right-associative
+//# fragment
+//# text: C B A
+fn grade(p: Int) -> Str => p >= 90 ? "A" : p >= 70 ? "B" : "C"
+Text("{grade(10)} {grade(75)} {grade(95)}")
+
+//# case: ternary-evaluates-one-arm
+//# fragment
+//# text: 0
+let xs: List<Int> = []
+Text("{xs.len > 0 ? xs[0] : 0}")
+
+//# case: ternary-binds-tighter-than-or
+//# fragment
+//# warning: MixedTernaryPrecedence
+var a = false
+var b = true
+Text(a || b ? "on" : "off")
+
+//# case: ternary-after-or-means-or-of-a-ternary
+//# gap: `a || b ? x : y` is `a || (b ? x : y)`; every other language reads `(a || b) ? x : y`
+//# fragment
+//# text: on
+var a = true
+var b = false
+Text((a || b ? "on" : "off") == "on" ? "on" : "off")
+
+//# case: ternary-with-parentheses-has-no-warning
+//# fragment
+//# text: on
+var a = false
+var b = true
+Text((a || b) ? "on" : "off")
+
+//# case: ternary-condition-must-be-bool
+//# gap: a condition that is text or a number is accepted
+//# fragment
+//# error: TypeMismatch
+Text("{"a" ? 1 : 2}")
+
+//# case: ternary-arms-of-different-types
+//# gap: arms of two types are accepted, and the value has no one type
+//# fragment
+//# error: TypeMismatch
+let x: Int = true ? 1 : "a"
+Text("{x}")
+
+//# case: otherwise-on-a-missing-field
+//# fragment
+//# text: none Ada
+let u = { name: "Ada" }
+Text("{u.email ?? "none"} {u.name ?? "none"}")
+
+//# case: otherwise-chain
+//# fragment
+//# text: c
+let u = { name: "Ada" }
+Text("{u.a ?? u.b ?? "c"}")
+
+//# case: otherwise-right-side-is-lazy
+//# fragment
+//# text: 1
+let xs = [1]
+let none: List<Int> = []
+Text("{xs[0] ?? none[0]}")
+
+//# case: otherwise-is-looser-than-arithmetic
+//# fragment
+//# text: 1 2
+let u = { a: 1 }
+Text("{u.b ?? 0 + 1} {(u.b ?? 0) + 2}")
+
+//# case: otherwise-is-tighter-than-comparison
+//# fragment
+//# text: true
+let u = { a: 1 }
+Text("{u.age ?? 0 == 0}")
+
+//# case: otherwise-does-not-replace-zero-or-empty
+//# fragment
+//# text: 0 [] false
+let u = { n: 0, s: "", b: false }
+Text("{u.n ?? 9} [{u.s ?? "x"}] {u.b ?? true}")
+
+//# case: otherwise-default-of-the-wrong-type
+//# error: TypeMismatch
+type P = { name: Str? }
+View Main() {
+    var p: P = { }
+    Text("{p.name ?? 5}")
+}
+
+//# case: optional-chaining
+//# gap: `a?.b` does not parse; the `?` is read as a ternary
+//# fragment
+//# text: none
+let u = { a: 1 }
+Text("{u.x?.y ?? "none"}")
+
+//# case: equality-across-types-is-an-error
+//# fragment
+//# error: TypeMismatch
+Text("{true == 1}")
+
+//# case: equality-of-bools
+//# fragment
+//# text: true false
+Text("{true == true} {true != true}")
+
+//# case: parentheses
+//# fragment
+//# text: 9 true
+Text("{((1 + 2)) * 3} {(1 < 2)}")
+
+//# case: unbalanced-parentheses
+//# fragment
+//# error: UnexpectedToken
+Text("{(1 + 2}")
+
+//# case: assignment-is-not-an-expression-in-a-text
+//# gap: an assignment inside a text is accepted
+//# fragment
+//# error: EffectInPureContext
+var n = 0
+Text("{n = 1}")
+
+//# case: increment-in-a-let-is-an-error
+//# gap: `n++` in a `let` is accepted
+//# fragment
+//# error: EffectInPureContext
+var n = 0
+let m = n++
+Text("{m}")
+
+//# case: assign-to-a-let
+//# gap: writing a `let` in an action is accepted
+//# fragment
+//# error: NotAssignable
+let n = 0
+on mount => { n = 1 }
+Text("{n}")
+
+//# case: assign-to-a-parameter
+//# gap: writing a parameter that is not a binding is accepted
+//# error: NotAssignable
+View Card(n: Int) {
+    on mount => { n = 1 }
+    Text("{n}")
+}
+View Main() { Card(0) }
+
+//# case: assign-to-a-literal
+//# gap: `5 = 1` is accepted
+//# fragment
+//# error: NotAssignable
+on mount => { 5 = 1 }
+Text("x")
+
+//# case: assign-to-a-loop-variable
+//# gap: writing a `for` variable is accepted
+//# fragment
+//# error: NotAssignable
+for x in [1, 2] {
+    Button("a") => x = 3
+}
+
+//# case: with-is-looser-than-ternary
+//# fragment
+//# text: ok
+var on = false
+Box #[opacity: on ? 1.0 : 0.5 with anim.spring()] { Text("ok") }
+
+//# case: deeply-nested-expression-does-not-panic
+//# fragment
+//# text: 33
+Text("{((((((((((((((((((((((((((((((((1))))))))))))))))))))))))))))))))+((((((((((((((((((((((((((((((((32))))))))))))))))))))))))))))))))}")
+
+//# case: long-chain-does-not-panic
+//# fragment
+//# text: 64
+Text("{1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1}")

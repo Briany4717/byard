@@ -1,0 +1,200 @@
+// `fn`, lambdas, named actions, and what is and is not checked about calls.
+
+//# case: view-function
+//# fragment
+//# text: 72 is a B
+var score = 72
+fn grade(points: Int) -> Str => points >= 90 ? "A" : points >= 70 ? "B" : "C"
+Text("{score} is a {grade(score)}")
+
+//# case: view-function-reads-state
+//# fragment
+//# text: 10
+var n = 5
+fn doubled() -> Int => n * 2
+Text("{doubled()}")
+
+//# case: view-function-follows-state
+//# fragment
+//# text: 20
+var n = 5
+fn doubled() -> Int => n * 2
+on mount => { n = 10 }
+Text("{doubled()}")
+
+//# case: function-calls-function
+//# text: 12
+fn twice(x: Int) -> Int => x * 2
+fn thrice_twice(x: Int) -> Int => twice(x) * 3
+View Main() { Text("{thrice_twice(2)}") }
+
+//# case: function-argument-is-evaluated-once-per-use
+//# fragment
+//# text: 9
+fn sq(x: Int) -> Int => x * x
+Text("{sq(1 + 2)}")
+
+//# case: function-parameter-shadows-a-var
+//# fragment
+//# text: 7 1
+var x = 1
+fn id(x: Int) -> Int => x
+Text("{id(7)} {x}")
+
+//# case: function-too-few-arguments
+//# gap: a missing argument reads as its own name
+//# error: ArityMismatch
+fn add(a: Int, b: Int) -> Int => a + b
+View Main() { Text("{add(1)}") }
+
+//# case: function-too-many-arguments
+//# gap: extra arguments are dropped without a word
+//# error: ArityMismatch
+fn add(a: Int, b: Int) -> Int => a + b
+View Main() { Text("{add(1, 2, 3)}") }
+
+//# case: function-argument-of-the-wrong-type
+//# gap: an argument is not checked against its parameter
+//# error: ArgumentTypeMismatch
+fn add(a: Int, b: Int) -> Int => a + b
+View Main() { Text("{add(1, "x")}") }
+
+//# case: function-body-of-the-wrong-type
+//# gap: a body is not checked against the return type
+//# error: TypeMismatch
+fn name(a: Int) -> Str => a + 1
+View Main() { Text(name(1)) }
+
+//# case: function-named-arguments
+//# gap: arguments by name are not supported for `fn`
+//# text: 1
+fn sub(a: Int, b: Int) -> Int => a - b
+View Main() { Text("{sub(b: 1, a: 2)}") }
+
+//# case: function-unknown
+//# fragment
+//# error: UnknownName
+Text("{dobule(1)}")
+
+//# case: function-int-where-float-is-wanted
+//# gap: an `Int` given to a `Float` parameter stays an `Int`, so `x / 2` truncates
+//# text: 1.5
+fn half(x: Float) -> Float => x / 2
+View Main() { Text("{half(3)}") }
+
+//# case: function-with-a-block-body
+//# gap: a `fn` body is one expression; it cannot name intermediate values
+//# text: 6
+fn area(w: Int, h: Int) -> Int => {
+    let a = w * h
+    a
+}
+View Main() { Text("{area(2, 3)}") }
+
+//# case: generic-function
+//# gap: no type parameters
+//# text: 1
+fn first<T>(xs: List<T>) -> T => xs[0]
+View Main() { Text("{first([1, 2])}") }
+
+//# case: named-action
+//# fragment
+//# text: 11 2
+var count = 0
+var steps = 0
+let add = (by: Int) => {
+    count += by
+    steps++
+}
+on mount => { add(1) add(10) }
+Text("{count} {steps}")
+
+//# case: named-action-without-parameters
+//# fragment
+//# text: 1
+var n = 0
+let bump = () => { n++ }
+on mount => bump()
+Text("{n}")
+
+//# case: named-action-calls-another
+//# fragment
+//# text: 2
+var n = 0
+let one = () => { n++ }
+let two = () => { one() one() }
+on mount => two()
+Text("{n}")
+
+//# case: named-action-wrong-arity
+//# gap: an action called with too few arguments is accepted
+//# fragment
+//# error: ArityMismatch
+var n = 0
+let add = (by: Int) => { n += by }
+on mount => add()
+Text("{n}")
+
+//# case: named-action-wrong-type
+//# gap: an action's argument is not checked against its declared type
+//# fragment
+//# error: ArgumentTypeMismatch
+var n = 0
+let add = (by: Int) => { n += by }
+on mount => add("x")
+Text("{n}")
+
+//# case: lambda-value-in-a-let
+//# fragment
+//# text: 6
+let twice = (x: Int) => x * 2
+Text("{twice(3)}")
+
+//# case: lambda-two-forms-are-the-same
+//# fragment
+//# text: 2,4 2,4
+let xs = [1, 2]
+Text("{xs.map(x => x * 2).join(",")} {xs.map(|x| x * 2).join(",")}")
+
+//# case: lambda-reads-outer-state
+//# fragment
+//# text: 11,12
+var base = 10
+Text("{[1, 2].map(x => x + base).join(",")}")
+
+//# case: lambda-parameter-shadows
+//# fragment
+//# text: 1,2 9
+let x = 9
+Text("{[1, 2].map(x => x).join(",")} {x}")
+
+//# case: lambda-field-typo-on-a-typed-list
+//# gap: a lambda parameter does not take the item type of a typed list
+//# error: UnknownField
+type P = { name: Str }
+View Main() {
+    var ps: List<P> = []
+    Text("{ps.map(p => p.nmae).len}")
+}
+
+//# case: lambda-field-typo-on-an-inferred-list
+//# gap: the item type of a literal list of records is not carried into the lambda
+//# fragment
+//# error: UnknownField
+let ps = [{ name: "a" }]
+Text("{ps.map(p => p.nmae).len}")
+
+//# case: untrack
+//# gap: `untrack(expr)` does not parse (#358)
+//# fragment
+//# text: 1
+var a = 1
+let b = untrack(a)
+Text("{b}")
+
+//# case: calling-a-number
+//# gap: calling something that is not a function is accepted
+//# fragment
+//# error: TypeMismatch
+let n = 5
+Text("{n(1)}")

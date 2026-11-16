@@ -1,0 +1,159 @@
+// Records and record types: fields, spread, optional fields, equality.
+
+//# case: literal-and-field
+//# fragment
+//# text: Ada 3
+let u = { name: "Ada", score: 3 }
+Text("{u.name} {u.score}")
+
+//# case: spread-then-override
+//# fragment
+//# text: Ada 10 true
+let u = { name: "Ada", score: 3 }
+let v = { ..u, score: 10, on: true }
+Text("{v.name} {v.score} {v.on}")
+
+//# case: spread-does-not-change-the-source
+//# fragment
+//# text: 3
+let u = { name: "Ada", score: 3 }
+let v = { ..u, score: 10 }
+Text("{u.score}")
+
+//# case: nested-records
+//# fragment
+//# text: 1
+let u = { a: { b: { c: 1 } } }
+Text("{u.a.b.c}")
+
+//# case: missing-field-on-an-untyped-record-is-nothing-today
+//# fragment
+//# text: [] none
+let u = { name: "Ada" }
+Text("[{u.email}] {u.email ?? "none"}")
+
+//# case: missing-field-on-a-literal-is-an-error
+//# gap: a field the literal plainly does not have reads as nothing
+//# fragment
+//# error: UnknownField
+let u = { name: "Ada" }
+Text("{u.nmae}")
+
+//# case: field-of-nothing-is-nothing-today
+//# fragment
+//# text: []
+let u = { a: 1 }
+Text("[{u.x.y.z}]")
+
+//# case: declared-type-checks-fields
+//# error: UnknownField
+type Place = { name: Str, country: Str? }
+View Main() {
+    var places: List<Place> = []
+    for hit in places { Text(hit.nmae) }
+}
+
+//# case: declared-type-optional-field
+//# text: at sea NO
+type Place = { name: Str, country: Str? }
+View Main() {
+    var places: List<Place> = [{ name: "Mid" }, { name: "Oslo", country: "NO" }]
+    Text("{places[0].country ?? "at sea"} {places[1].country ?? "at sea"}")
+}
+
+//# case: declared-type-literal-with-a-wrong-field-type
+//# gap: a literal is not checked against its declared type
+//# error: TypeMismatch
+type P = { name: Str, age: Int }
+View Main() {
+    var p: P = { name: 1, age: "x" }
+    Text(p.name)
+}
+
+//# case: declared-type-literal-with-an-extra-field
+//# gap: a literal is not checked against its declared type
+//# error: UnknownField
+type P = { name: Str }
+View Main() {
+    var p: P = { name: "a", extra: true }
+    Text(p.name)
+}
+
+//# case: declared-type-literal-missing-a-required-field
+//# gap: a literal is not checked against its declared type
+//# error: TypeMismatch
+type P = { name: Str, age: Int }
+View Main() {
+    var p: P = { name: "a" }
+    Text(p.name)
+}
+
+//# case: duplicate-record-type
+//# error: DuplicateRecordType
+type P = { a: Int }
+type P = { b: Int }
+View Main() { Text("x") }
+
+//# case: record-type-with-unknown-field-type
+//# gap: a type name nobody declared is accepted in a record type
+//# error: UnknownType
+type P = { a: Nope }
+View Main() { Text("x") }
+
+//# case: equality-is-structural
+//# fragment
+//# text: true false
+Text("{ { a: 1, b: 2 } == { a: 1, b: 2 } } { { a: 1 } == { a: 2 } }")
+
+//# case: equality-ignores-field-order
+//# gap: two records with the same fields in another order are not equal
+//# fragment
+//# text: true
+Text("{ { a: 1, b: 2 } == { b: 2, a: 1 } }")
+
+//# case: duplicate-field-in-a-literal
+//# gap: the same field twice is accepted; the last wins silently
+//# fragment
+//# error: DuplicateField
+let u = { a: 1, a: 2 }
+Text("{u.a}")
+
+//# case: field-write-rebuilds-the-record
+//# fragment
+//# text: 10
+var u = { name: "Ada", score: 3 }
+on mount => { u = { ..u, score: 10 } }
+Text("{u.score}")
+
+//# case: field-assignment
+//# gap: `u.score = 10` checks clean and changes nothing
+//# fragment
+//# text: 10
+var u = { name: "Ada", score: 3 }
+on mount => { u.score = 10 }
+Text("{u.score}")
+
+//# case: nested-field-assignment
+//# gap: `u.a.b = 2` checks clean and changes nothing
+//# fragment
+//# text: 2
+var u = { a: { b: 1 } }
+on mount => { u.a.b = 2 }
+Text("{u.a.b}")
+
+//# case: tuple-named-and-positional
+//# fragment
+//# text: ok
+Box #[p: (8, 16), m: (top: 4, horizontal: 8)] { Text("ok") }
+
+//# case: record-of-lists
+//# fragment
+//# text: 2 b
+let r = { xs: [1, 2], names: ["a", "b"] }
+Text("{r.xs.len} {r.names[1]}")
+
+//# case: empty-braces-are-an-action-not-a-record
+//# fragment
+//# text: ok
+let nothing = {}
+Text("ok")

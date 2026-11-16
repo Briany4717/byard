@@ -1,0 +1,11 @@
+# Everything is excluded except what the extension ships.
+**
+!dist/**
+!syntaxes/**
+!language-configuration.json
+!images/**
+!README.md
+!CHANGELOG.md
+!LICENSE-MIT
+!LICENSE-APACHE
+!package.json

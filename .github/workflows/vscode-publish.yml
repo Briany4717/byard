@@ -1,0 +1,71 @@
+name: VS Code extension publish
+
+# A tag `vscode-v0.1.0` publishes editors/vscode at that version to the VS Code
+# Marketplace and to Open VSX. See RELEASING.md for the one-time setup.
+on:
+  push:
+    tags: ["vscode-v*"]
+
+permissions:
+  contents: read
+
+jobs:
+  publish:
+    name: Publish
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: editors/vscode
+    env:
+      VSCE_PAT: ${{ secrets.VSCE_PAT }}
+      OVSX_PAT: ${{ secrets.OVSX_PAT }}
+
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: actions/setup-node@v5
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: editors/vscode/package-lock.json
+
+      - name: The tag matches package.json
+        env:
+          TAG: ${{ github.ref_name }}
+        run: |
+          version="$(node -p "require('./package.json').version")"
+          if [ "$TAG" != "vscode-v$version" ]; then
+            echo "::error::Tag $TAG does not match package.json version $version (expected vscode-v$version)."
+            exit 1
+          fi
+
+      - run: npm ci
+
+      - name: Type check
+        run: npm run compile
+
+      # Packaged once: both registries get this exact file.
+      - name: Package
+        run: npx --yes @vscode/vsce package --no-dependencies --out byld.vsix
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: byld-vsix
+          path: editors/vscode/byld.vsix
+          if-no-files-found: error
+
+      - name: Publish to the VS Code Marketplace
+        run: |
+          if [ -z "$VSCE_PAT" ]; then
+            echo "::warning::VSCE_PAT is not set, so nothing was published to the VS Code Marketplace."
+            exit 0
+          fi
+          npx --yes @vscode/vsce publish --packagePath byld.vsix --pat "$VSCE_PAT"
+
+      - name: Publish to Open VSX
+        run: |
+          if [ -z "$OVSX_PAT" ]; then
+            echo "::warning::OVSX_PAT is not set, so nothing was published to Open VSX."
+            exit 0
+          fi
+          npx --yes ovsx publish byld.vsix --pat "$OVSX_PAT"

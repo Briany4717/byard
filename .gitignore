@@ -23,3 +23,5 @@ editors/vscode/dist/
 # Gradle (JetBrains plugin) caches & build output
 .gradle/
 editors/jetbrains/build/
+# VS Code extension packages
+editors/vscode/*.vsix

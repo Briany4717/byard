@@ -1,15 +1,40 @@
 {
-  "name": "byld-vscode",
-  "displayName": "Byld Language Support",
-  "description": "Syntax highlighting and LSP integration for the Byld (.byd) UI layout language",
+  "name": "byld",
+  "displayName": "Byld",
+  "description": "Byld (.byd) language support: syntax highlighting, diagnostics, completion, formatting and rename through the byld-lsp language server.",
   "version": "0.1.0",
-  "publisher": "byld",
+  "publisher": "byard",
+  "license": "MIT OR Apache-2.0",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/Briany4717/byard.git",
+    "directory": "editors/vscode"
+  },
+  "homepage": "https://byard.dev",
+  "bugs": {
+    "url": "https://github.com/Briany4717/byard/issues"
+  },
+  "categories": [
+    "Programming Languages",
+    "Linters",
+    "Formatters"
+  ],
+  "keywords": [
+    "byld",
+    "byard",
+    "byd",
+    "ui",
+    "language server",
+    "lsp"
+  ],
+  "icon": "images/icon.png",
+  "galleryBanner": {
+    "color": "#101114",
+    "theme": "dark"
+  },
   "engines": {
     "vscode": "^1.75.0"
   },
-  "categories": [
-    "Programming Languages"
-  ],
   "activationEvents": [
     "onLanguage:byld"
   ],
@@ -25,7 +50,11 @@
         "extensions": [
           ".byd"
         ],
-        "configuration": "./language-configuration.json"
+        "configuration": "./language-configuration.json",
+        "icon": {
+          "light": "./images/file-light.svg",
+          "dark": "./images/file-dark.svg"
+        }
       }
     ],
     "grammars": [
@@ -51,7 +80,7 @@
             "null"
           ],
           "default": null,
-          "markdownDescription": "Path to the `byld-lsp` server executable. If not specified, the extension will search for `byld-lsp` in `PATH` or the workspace build directory."
+          "markdownDescription": "Path to the `byld-lsp` executable. When empty, the extension looks for `byld-lsp` on `PATH`, then in `~/.cargo/bin`, then in a `target/` folder of the workspace. Install it with `cargo install byld-lsp`."
         },
         "byld.lsp.trace.server": {
           "type": "string",
@@ -64,14 +93,21 @@
           "description": "Traces the communication between VS Code and the Byld language server."
         }
       }
-    }
+    },
+    "commands": [
+      {
+        "command": "byld.restartServer",
+        "title": "Restart Language Server",
+        "category": "Byld"
+      }
+    ]
   },
   "scripts": {
     "test": "vscode-test",
-    "vscode:prepublish": "npm run compile",
-    "compile": "tsc -b",
-    "watch": "tsc -b -w",
-    "build": "esbuild src/extension.ts --bundle --outfile=dist/extension.js --external:vscode --format=cjs --platform=node"
+    "vscode:prepublish": "npm run build",
+    "compile": "tsc --noEmit -p .",
+    "watch": "tsc --noEmit -w -p .",
+    "build": "esbuild src/extension.ts --bundle --outfile=dist/extension.js --external:vscode --format=cjs --platform=node --minify"
   },
   "dependencies": {
     "vscode-languageclient": "^9.0.1"

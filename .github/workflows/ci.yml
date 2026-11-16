@@ -249,3 +249,40 @@ jobs:
             echo '```'
           } >> "$GITHUB_STEP_SUMMARY"
 
+
+  # The editor extension is built, type-checked and packaged on every change,
+  # so a broken package is found in the pull request, not on release day. It
+  # cannot be skipped by a path filter for the reason `budgets` explains, so it
+  # is cheap instead: a few seconds of npm.
+  #
+  # `--no-dependencies`: the extension is one esbuild bundle that already holds
+  # vscode-languageclient, so vsce must not also pack node_modules.
+  vscode:
+    name: VS Code extension
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: editors/vscode
+
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: actions/setup-node@v5
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: editors/vscode/package-lock.json
+
+      - run: npm ci
+
+      - name: Type check
+        run: npm run compile
+
+      - name: Package
+        run: npx --yes @vscode/vsce package --no-dependencies --out byld.vsix
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: byld-vsix
+          path: editors/vscode/byld.vsix
+          if-no-files-found: error

@@ -1486,6 +1486,16 @@ pub enum CompileError {
         /// The closest context the program declares, if any.
         hint: Option<String>,
     },
+    /// A type was written that is not built in and that nothing in the
+    /// program declares: `Qux`, or `Map<Str, Int>`.
+    UnknownType {
+        /// Source range of the type's name.
+        span: Span,
+        /// The name as written.
+        name: String,
+        /// The closest type there is, if any.
+        hint: Option<String>,
+    },
     /// A context field with no default: every field has one, so an `inject`
     /// with no provider above has something to read (RFC-0065 §1).
     ContextFieldNeedsDefault {
@@ -1675,6 +1685,7 @@ impl CompileError {
             | Self::NoneNotHandled { span, .. }
             | Self::DuplicateProvide { span, .. }
             | Self::UnknownContext { span, .. }
+            | Self::UnknownType { span, .. }
             | Self::ContextFieldNeedsDefault { span, .. }
             | Self::MisplacedProvide { span, .. }
             | Self::BadOptionalDefault { span, .. }
@@ -1828,6 +1839,7 @@ impl CompileError {
             | Self::NoneNotHandled { span, .. }
             | Self::DuplicateProvide { span, .. }
             | Self::UnknownContext { span, .. }
+            | Self::UnknownType { span, .. }
             | Self::ContextFieldNeedsDefault { span, .. }
             | Self::MisplacedProvide { span, .. }
             | Self::BadOptionalDefault { span, .. }
@@ -1983,6 +1995,7 @@ impl CompileError {
             Self::NoneNotHandled { .. } => "NoneNotHandled",
             Self::DuplicateProvide { .. } => "DuplicateProvide",
             Self::UnknownContext { .. } => "UnknownContext",
+            Self::UnknownType { .. } => "UnknownType",
             Self::ContextFieldNeedsDefault { .. } => "ContextFieldNeedsDefault",
             Self::MisplacedProvide { .. } => "MisplacedProvide",
             Self::BadOptionalDefault { .. } => "BadOptionalDefault",
@@ -2748,6 +2761,13 @@ impl CompileError {
                 format!(
                     "`{name}` is not a context: declare it with `context {name} {{ … }}`, or \
                      name a capability, a controller or `Theme`"
+                ),
+                hint.as_deref(),
+            ),
+            Self::UnknownType { name, hint, .. } => with_hint(
+                format!(
+                    "`{name}` is not a type: the types are `Int`, `Float`, `Str`, `Bool`, `List<T>`, \
+                     `Fn(…)`, and the `type`s and `enum`s the program declares"
                 ),
                 hint.as_deref(),
             ),

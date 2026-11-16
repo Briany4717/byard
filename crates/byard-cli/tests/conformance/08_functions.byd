@@ -198,3 +198,15 @@ Text("{b}")
 //# error: TypeMismatch
 let n = 5
 Text("{n(1)}")
+
+//# case: function-with-an-unknown-parameter-type
+//# error: UnknownType
+//# diagnostics: 1
+fn double(n: Numbr) -> Int => 2
+View Main() { Text("{double(1)}") }
+
+//# case: function-with-an-unknown-result-type
+//# error: UnknownType
+//# diagnostics: 1
+fn double(n: Int) -> Nmber => n * 2
+View Main() { Text("x") }

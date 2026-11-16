@@ -15,7 +15,7 @@ So every step below ends the same way: **its cases lose their `gap:` line, the r
 loses its note, and this file loses the step.** When this file is empty and the suite has no
 gap, the language is where this document wanted it.
 
-As written, the suite has 543 cases: 447 hold and 96 are gaps.
+As written, the suite has 550 cases: 457 hold and 93 are gaps.
 
 ```sh
 cargo test -p byard-cli --test it conformance -- --nocapture
@@ -86,15 +86,6 @@ manifest. The two editions differ by nothing yet. What is left is the first rewr
 `Edition::migrations` in `byard-compiler/src/edition.rs`, and the case that proves `byard fix`
 keeps a program's meaning. Until then `byard new` writes no edition, and a project without one
 stays on `2026`.
-
-### 4. Type names
-
-*Cases:* `var-annotation-that-is-no-type`, `var-map-type-does-not-exist`,
-`record-type-with-unknown-field-type`.
-
-A type name that is not built in, not a declared record, enum or context, and not
-`package.Name`, is `UnknownType`, with the nearest name. Today `Map<Str, Int>` and `Qux`
-are accepted anywhere a type is written.
 
 ### 5. Calls to functions and actions
 

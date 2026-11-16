@@ -312,3 +312,9 @@ View Main() {
     var n = 0
     when n != none { Text("x") }
 }
+
+//# case: view-parameter-of-an-unknown-type
+//# error: UnknownType
+//# diagnostics: 1
+View Card(title: Strng) { Text("x") }
+View Main() { Text("x") }

@@ -37,14 +37,12 @@ var xs: List<Int> = ["a"]
 Text("{xs.len}")
 
 //# case: var-annotation-that-is-no-type
-//# gap: a type name nobody declared is accepted
 //# fragment
 //# error: UnknownType
 var q: Qux = 1
 Text("{q}")
 
 //# case: var-map-type-does-not-exist
-//# gap: `Map<Str, Int>` is no type and is accepted
 //# fragment
 //# error: UnknownType
 var m: Map<Str, Int> = {}
@@ -412,3 +410,38 @@ on mount => {
 }
 Text("{n}")
 Text("{f}")
+
+//# case: misspelt-type-suggests-the-nearest
+//# error: UnknownType
+//# diagnostics: 1
+type Place = { name: Str }
+View Main() {
+    var p: Plac = { name: "Oslo" }
+    Text("x")
+}
+
+//# case: unknown-type-inside-a-list-type
+//# fragment
+//# error: UnknownType
+//# diagnostics: 1
+var xs: List<Nope> = []
+Text("{xs.len}")
+
+//# case: unknown-type-of-a-lambda-parameter
+//# fragment
+//# error: UnknownType
+//# diagnostics: 1
+let xs = [1, 2]
+Text("{xs.map((x: Nope) => x).len}")
+
+//# case: declared-types-and-the-built-in-ones-are-types
+//# text: Oslo small 3 1
+type Place = { name: Str }
+enum Size { small, large }
+View Main() {
+    var p: Place = { name: "Oslo" }
+    var s: Size = Size.small
+    var n: Color = 3
+    var xs: List<Place> = [p]
+    Text("{p.name} {s} {n} {xs.len}")
+}

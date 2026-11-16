@@ -175,6 +175,10 @@ another, and the only thing that changes is which value a `var` holds.
 - the two sides of an operator can be combined (`"a" - 1`, `true + 1` and `1 < 2 < 3` are
   `TypeMismatch`), and that two values compared with `==` are of one type;
 - a constant with a written type has a value of that type (`ConstantTypeMismatch`);
+- every type written is one: built in (`Int`, `Float`, `Str`, `Bool`, `Color`, `List<T>`,
+  `Fn(…)`, `Slot`, and the `Screen` and `Window` the language provides) or declared by the
+  program as a `type`, an `enum` or a `context`, or another package's as `package.Name`. Any
+  other name, `Qux` or `Map<Str, Int>`, is `UnknownType` and suggests the nearest;
 - the first value of a `var` or `let` has the type written for it, each item of a list on its
   own (`var n: Int = "a"` and `var xs: List<Int> = [1, "a"]` are `TypeMismatch`);
 - what is written to a `var` is a value it can hold: `n = e` a value of its type, `n += e` and
@@ -192,7 +196,6 @@ else converts.
 > `07_operators.byd`). The types judged so far are the scalars and lists of them; a record,
 > an enum or an optional is let through until its own step:
 >
-> - a type name nobody declared: `var m: Map<Str, Int>`;
 > - the arguments of a function, in number and in type, and its body against its result;
 > - a record literal against its declared type;
 > - the condition of `when`, `if` and `? :`, which should be a `Bool`;

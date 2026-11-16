@@ -251,7 +251,10 @@ fn a_call_on_an_anim_curve_is_not_checked() {
 
 #[test]
 fn a_view_parameter_with_an_unmodelled_type_is_not_checked() {
-    let source = "View Card(item: Item) {\n Text(\"{item.title.upper()}\")\n}\nView Main() {}";
+    // `Item` has to be declared, as every type does; what the test is about is
+    // that a type the checker does not look inside is let through.
+    let source = "type Title = { text: Str }\ntype Item = { title: Title }\n\
+                  View Card(item: Item) {\n Text(\"{item.title.upper()}\")\n}\nView Main() {}";
     let program = resolve_program(
         vec![SourceFile {
             name: "main.byd".to_string(),

@@ -1,0 +1,57 @@
+// RFC-0068: a program to check the Wayland shell backend by hand, on the desktop.
+//
+//   cargo run -p byard-cli -- dev crates/byard-cli/examples/shell_check
+//
+// Four things, each a surface of its own:
+//   - `check-bar`, against the top edge, reserving its height (windows start below it),
+//     with one button that counts and one that shows the launcher. Nothing else on it
+//     takes the pointer, so a click anywhere else on the bar goes through.
+//   - `check-island`, in the bottom-right corner, as large as its text: it grows when
+//     the count passes three.
+//   - `check-screen`, one small label for each screen, in the bottom-left corner: plug
+//     a screen in (`hyprctl output create headless`) and one appears on it.
+//   - `check-launcher`, centred, in the overlay layer, with `keyboard: on_demand`: click
+//     the text field and type; the keys go to it, and to nothing else.
+// Nothing moves on its own, so while you are not pressing anything the program draws
+// and commits nothing.
+
+View Main() {
+    var presses = 0
+    var launcher = false
+    var typed = ""
+
+    Panel #[edge: top, namespace: "check-bar"] as bar {
+        Row #[p: 8, gap: 12, align: center] {
+            Text("check: a bar")
+            Button("Presses: {presses}") => presses += 1
+            Button("Launcher") => launcher = !launcher
+            Spacer
+            Text("empty here, clicks go through")
+        }
+    }
+
+    Panel #[anchor: (bottom, right), m: 16, namespace: "check-island"] as island {
+        Box #[p: 12, radius: 12, bg: 0xE01C1B22] {
+            Text("{presses < 3 ? "press the button" : "pressed {presses} times"}") #[
+                color: 0xFFFFFFFF,
+            ]
+        }
+    }
+
+    for s in screens key s.name {
+        Panel #[screen: s, anchor: (bottom, left), m: 16, namespace: "check-screen"] {
+            Box #[p: 8, radius: 8, bg: 0xE01C1B22] {
+                Text("{s.name} {s.width}x{s.height} @{s.scale}") #[color: 0xFFFFFFFF]
+            }
+        }
+    }
+
+    when launcher {
+        Panel #[layer: overlay, keyboard: on_demand, namespace: "check-launcher"] as launch {
+            Column #[p: 12, gap: 8, radius: 12, bg: 0xF01C1B22] {
+                TextField #[bind: typed, placeholder: "type here", width: 280, height: 36]
+                Text("typed: {typed}") #[color: 0xFFFFFFFF]
+            }
+        }
+    }
+}

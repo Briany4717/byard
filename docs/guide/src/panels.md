@@ -131,7 +131,47 @@ where nothing was drawn. `byard test` sees a panel like a window: its dump has a
 `Panel "namespace" @ screen-1` line with the tree indented below, and a step that names
 an element finds it on whichever surface it is on.
 
-Running panels on the desktop needs the Wayland shell backend, which comes after the
-language and the interpreter (RFC-0068 step 3b). `byard dev` and a built app say so and
-stop for now. A program that has a view called `Panel` must call it something else, as
-`Panel` is the element.
+A program that has a view called `Panel` must call it something else, as `Panel` is the
+element.
+
+## Running a panel
+
+```sh
+byard dev crates/byard-cli/examples/simple_bar
+```
+
+A program with a `Panel` runs on the Wayland shell backend, in `byard dev` with hot reload
+and in a built app (`byard::App::run`) the same way. The backend is chosen when the program
+starts, from whether it has a `Panel` anywhere: an edit under `byard dev` that adds the first
+panel (or takes the last away) says it needs a restart and keeps the program that is running.
+A program without panels runs as it always did, on every platform.
+
+It works on compositors that offer `zwlr_layer_shell_v1`: Hyprland, Sway, river, niri,
+labwc, Wayfire, KDE Plasma and the other wlroots-style ones. It does not work on GNOME,
+whose compositor has no layer shell, nor on X11, Windows or macOS. A panel never falls back
+to an ordinary window, since a bar that opens as a window is broken in a confusing way, so
+there the program stops at startup with `PanelsUnsupported` and says what is missing: the
+Wayland session, or the `zwlr_layer_shell_v1` the compositor does not offer.
+
+What it does for you:
+
+- Each panel draws only when its own frame callback fires and it has something new, so a bar
+  on a screen that is off, or behind a full-screen window, costs nothing, and a still bar
+  commits nothing: with `WAYLAND_DEBUG=1` the terminal stays quiet while nothing changes.
+- Each screen is read from `wl_output` (its connector name, and `xdg_output`'s position and
+  size) and a fractional scale is used where the compositor offers it, an integer one where
+  not. `screens` follows a screen being connected, unplugged or re-scaled while the program
+  runs, and a panel of a screen that goes is taken away by the compositor.
+- A panel's input region is sent only when it changed. The pointer, the scroll wheel and
+  touch reach the panel under them in its own coordinates.
+- A `Window` in a program with panels is an ordinary window on the same connection, so a
+  settings window opens next to the bar.
+- With the `a11y` feature, each panel and window is a window under the program's AT-SPI
+  root.
+
+What it does not do yet: **a text field in a panel takes the keys the keymap gives it, but not
+an input method** (no IME, no dead-key composition), so typing Japanese or an accent by
+compose key does not work there; a text field in a `Window` of the same program has the same
+limit on this backend. Popups from a panel are a later step: an anchored `Overlay` is drawn
+inside the panel for now. The app's appearance does not follow the desktop's light or dark
+setting on this backend; it opens in the theme's own.

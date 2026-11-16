@@ -610,6 +610,12 @@ impl Interpreter {
                 CoreKind::CloseRequest => self.close_requested(ev.surface),
                 // The platform gave a window its size (or the user changed it).
                 CoreKind::SurfaceResized => self.set_surface_size(ev.surface, ev.pos),
+                // The host's list of screens (RFC-0068 §4).
+                CoreKind::Screens => {
+                    if let Some(InputPayload::Screens(list)) = &ev.payload {
+                        self.set_screens(list.clone());
+                    }
+                }
                 _ => match groups.iter_mut().find(|(id, _)| *id == ev.surface) {
                     Some((_, group)) => group.push(ev.clone()),
                     None => groups.push((ev.surface, vec![ev.clone()])),

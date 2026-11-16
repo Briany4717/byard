@@ -427,13 +427,8 @@ impl App {
         #[allow(clippy::cast_precision_loss)]
         let (w0, h0) = (width as f32, height as f32);
         let window_id = window_id(bundle_id.as_deref(), executable_name().as_deref());
-        let mut window = byard_platform::WinitHost::new(self.title.clone(), width, height)
-            .with_app_id(window_id);
-        if let Some((rgba, w, h)) = icon {
-            window = window.with_icon(rgba, w, h);
-        }
-        let views_shape = views.clone();
-        window.run(Host {
+        let shape = byard_compiler::surfaces::surface_shape(&views);
+        let host = Host {
             engine: None,
             views,
             theme: Some(theme),
@@ -443,9 +438,21 @@ impl App {
             reloads,
             trace,
             mods: byard_core::KeyModifiers::default(),
-            multi: byard_compiler::surfaces::surface_shape(&views_shape).is_multi(),
+            multi: shape.is_multi(),
             title: self.title.clone(),
-        })
+            app_id: window_id.clone(),
+        };
+        if shape.has_panel {
+            // Panels are layer surfaces, which only the Wayland shell backend
+            // makes (RFC-0068 §8): the program says it can't where it can't.
+            return byard_platform::ShellHost::new(self.title.clone(), window_id).run(host);
+        }
+        let mut window = byard_platform::WinitHost::new(self.title.clone(), width, height)
+            .with_app_id(window_id);
+        if let Some((rgba, w, h)) = icon {
+            window = window.with_icon(rgba, w, h);
+        }
+        window.run(host)
     }
 
     /// Starts watching the project, and returns where its re-read program
@@ -558,7 +565,6 @@ pub(crate) fn load_program(entry: &Path) -> Result<Program, ByardError> {
     if program.views.is_empty() {
         return Err(ByardError::compile(declares_no_view(program.source_map)));
     }
-    refuse_panels(&program.views, &program.source_map)?;
     let manifest_path = manifest.project_root.join("byard.toml");
     check_declared_views(&manifest.native_views, &manifest_path)?;
     let icon = match &manifest.icon {
@@ -588,29 +594,6 @@ pub(crate) fn load_program(entry: &Path) -> Result<Program, ByardError> {
         bundle_id: manifest.bundle.id,
         source_map: program.source_map,
     })
-}
-
-/// Stops a program that writes `Panel`, with a diagnostic: panels are layer
-/// surfaces, which the winit host cannot make (RFC-0068 §3, §8), and drawing
-/// nothing would say nothing. A program of `Window`s is not refused: the host
-/// opens each of them.
-pub(crate) fn refuse_panels(
-    views: &[ViewDecl],
-    source_map: &byard_compiler::resolve::SourceMap,
-) -> Result<(), ByardError> {
-    if !byard_compiler::surfaces::surface_shape(views).has_panel {
-        return Ok(());
-    }
-    Err(announced(ByardError::compile(CompileReport::new(
-        vec![byard_compiler::CompileError::Project {
-            span: byard_compiler::Span::new(0, 0),
-            message: "this program writes `Panel`, and the Wayland shell backend that creates \
-                      layer surfaces is not part of this build yet (RFC-0068 step 3b); \
-                      `byard shot` and `byard test` run it headlessly"
-                .to_string(),
-        }],
-        source_map.clone(),
-    ))))
 }
 
 /// A program with nothing to run, as a diagnostic: it is anchored to the start
@@ -649,6 +632,9 @@ struct Host {
     multi: bool,
     /// The title a window with no `title` has: the app's.
     title: String,
+    /// The id the app's windows carry, which is also the namespace of a panel
+    /// that names none (RFC-0068 §3).
+    app_id: String,
 }
 
 impl PlatformHost for Host {
@@ -707,6 +693,20 @@ impl PlatformHost for Host {
             Some(engine) => engine.render_surfaces(surfaces),
             None => Ok(()),
         }
+    }
+
+    fn on_screens(&mut self, screens: Vec<byard_core::ScreenInfo>) {
+        self.push_on(
+            byard_core::SurfaceId::MAIN,
+            byard_core::EventKind::Screens,
+            (0.0, 0.0),
+            (0.0, 0.0),
+            Some(byard_core::InputPayload::Screens(screens)),
+        );
+    }
+
+    fn take_presented(&mut self) -> Option<Vec<byard_core::SurfaceId>> {
+        self.engine.as_mut().map(Engine::take_presented)
     }
 
     fn take_surface_changes(&mut self) -> Vec<byard_core::SurfaceChange> {
@@ -950,6 +950,7 @@ impl Host {
         let height_bits = Arc::clone(&self.height_bits);
         let reloads = self.reloads.clone();
         let title = self.title.clone();
+        let app_id = self.app_id.clone();
 
         engine.start_logic_from_view(move |_arena| {
             let mut interp = Interpreter::new();
@@ -966,6 +967,7 @@ impl Host {
             if byard_compiler::surfaces::surface_shape(&views).is_multi() {
                 interp.enable_surfaces();
                 interp.set_default_window_title(&title);
+                interp.set_default_namespace(&app_id);
             }
             let known: Vec<&str> = views.iter().map(|v| v.name.as_str()).collect();
             let root = byard_compiler::parser::ast::root_view(&views)
@@ -978,6 +980,7 @@ impl Host {
                 eprintln!("  {}", error.headline());
             }
             let errors_told = interp.errors().len();
+            let has_panel = byard_compiler::surfaces::surface_shape(&views).has_panel;
             interp.tick();
             Box::new(AppRuntime {
                 interp,
@@ -989,6 +992,7 @@ impl Host {
                 reloads,
                 reloaded: std::cell::Cell::new(false),
                 errors_told,
+                has_panel,
             })
         })?;
 
@@ -1083,6 +1087,8 @@ struct AppRuntime {
     reloaded: std::cell::Cell<bool>,
     /// How many of the interpreter's errors have been printed.
     errors_told: usize,
+    /// Whether the program has a `Panel`, which decided the backend it runs on.
+    has_panel: bool,
 }
 
 impl AppRuntime {
@@ -1111,9 +1117,17 @@ impl AppRuntime {
             }
             return;
         }
-        if byard_compiler::surfaces::surface_shape(&parsed.views).is_multi()
-            != self.interp.has_surfaces()
-        {
+        let shape = byard_compiler::surfaces::surface_shape(&parsed.views);
+        if shape.has_panel != self.has_panel {
+            // The backend that runs a program with panels is chosen when it
+            // starts (RFC-0068 §8, Q5).
+            eprintln!(
+                "  the edit adds or removes the program's `Panel`s, which needs a restart; \
+                 the app keeps running the last program"
+            );
+            return;
+        }
+        if shape.is_multi() != self.interp.has_surfaces() {
             // The windows a program opens are decided when it starts.
             eprintln!(
                 "  the edit adds or removes the program's `Window`s, which needs a restart; \
@@ -1371,6 +1385,7 @@ mod tests {
             reloads: Some(Arc::clone(reloads)),
             reloaded: std::cell::Cell::new(false),
             errors_told: 0,
+            has_panel: false,
         }
     }
 
@@ -1406,6 +1421,38 @@ mod tests {
         std::fs::write(dir.join("src/main.byd"), "View Main() { Text(\"good\" }").unwrap();
         reloads.publish(byard_project::live::reresolve(Some(&dir)));
         assert_eq!(texts(&mut app), ["good"]);
+    }
+
+    /// The backend that runs a program with panels is chosen when it starts
+    /// (RFC-0068 Q5): an edit that adds the first `Panel` to a program of
+    /// windows says it needs a restart, and the app keeps the program it is
+    /// running.
+    #[test]
+    fn an_edit_that_adds_the_first_panel_keeps_the_running_program() {
+        let dir = hot_project(
+            "first-panel",
+            "View Main() { Window #[title: \"a\"] { Text(\"plain\") } }",
+        );
+        let reloads: Reloads = Arc::default();
+        let mut app = runtime(&dir, &reloads);
+        app.interp.enable_surfaces();
+        assert!(!app.has_panel);
+        std::fs::write(
+            dir.join("src/main.byd"),
+            "View Main() { Window #[title: \"a\"] { Text(\"plain\") }\n\
+             Panel #[edge: top] { Text(\"bar\") } }",
+        )
+        .unwrap();
+        reloads.publish(byard_project::live::reresolve(Some(&dir)));
+        app.follow();
+        assert!(
+            !byard_compiler::surfaces::surface_shape(&app.views).has_panel,
+            "the running program is kept"
+        );
+        assert!(
+            app.reloads.as_ref().unwrap().take().is_none(),
+            "the edit was taken and refused"
+        );
     }
 
     /// State survives a reload that only changes how it is shown.

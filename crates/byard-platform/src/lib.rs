@@ -18,9 +18,19 @@
 //! connected. See `access`.
 
 mod clipboard;
+mod unsupported;
 mod windows;
 
 pub use clipboard::SystemClipboard;
+
+#[cfg(all(target_os = "linux", feature = "wayland-shell"))]
+mod shell;
+#[cfg(all(target_os = "linux", feature = "wayland-shell"))]
+pub use shell::ShellHost;
+#[cfg(not(all(target_os = "linux", feature = "wayland-shell")))]
+mod shell_absent;
+#[cfg(not(all(target_os = "linux", feature = "wayland-shell")))]
+pub use shell_absent::ShellHost;
 
 use std::sync::Arc;
 

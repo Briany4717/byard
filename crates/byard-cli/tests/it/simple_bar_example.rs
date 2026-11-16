@@ -1,8 +1,8 @@
 //! Guards the RFC-0068 `Panel` example through the real `byard` binary: the
 //! `simple_bar` project checks clean, `byard shot --surface` draws a panel at
 //! the size the placement solver gives it with a transparent background,
-//! `byard test` sees panels like windows, and `byard dev` says the shell backend
-//! is not there yet.
+//! `byard test` sees panels like windows, and `byard dev` stops with
+//! `PanelsUnsupported` where there is no Wayland session to put them on.
 
 use std::path::PathBuf;
 use std::process::{Command, Output};
@@ -36,6 +36,20 @@ fn the_simple_bar_example_checks_clean() {
     let (out, text) = run(&["check", example_dir().to_str().unwrap()]);
     assert!(out.status.success(), "{text}");
     assert!(text.contains("0 errors"), "{text}");
+}
+
+/// The program the hand checklist of the shell backend runs: it has to check
+/// clean, and it has to be a program of panels, or it would not exercise it.
+#[test]
+fn the_program_the_desktop_checklist_runs_is_a_pair_of_panels() {
+    let dir = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("examples/shell_check");
+    let (out, text) = run(&["check", dir.to_str().unwrap()]);
+    assert!(out.status.success(), "{text}");
+    let source = std::fs::read_to_string(dir.join("src/main.byd")).unwrap();
+    let parsed = byard_compiler::parser::parse(&source);
+    let shape = byard_compiler::surfaces::surface_shape(&parsed.views);
+    assert!(shape.has_panel && !shape.has_window);
+    assert!(!source.contains("every "), "it must not move on its own");
 }
 
 #[test]
@@ -139,9 +153,30 @@ fn the_scenarios_see_the_panels() {
     assert!(text.contains("1 passed; 0 failed"), "{text}");
 }
 
+/// A session with no compositor: the socket named does not exist, and the
+/// runtime directory is empty. Nothing is ever opened, wherever the test runs.
+fn no_wayland(args: &[&str]) -> (Output, String) {
+    let runtime = scratch("no-wayland");
+    let out = Command::new(env!("CARGO_BIN_EXE_byard-cli"))
+        .args(args)
+        .env("XDG_RUNTIME_DIR", &runtime)
+        .env("WAYLAND_DISPLAY", "byard-test-no-such-socket")
+        .env_remove("WAYLAND_SOCKET")
+        .output()
+        .expect("run byard");
+    let text = format!(
+        "{}{}",
+        String::from_utf8_lossy(&out.stdout),
+        String::from_utf8_lossy(&out.stderr)
+    );
+    (out, text)
+}
+
 #[test]
-fn a_program_with_panels_does_not_start_in_the_shell_backend_yet() {
-    let (out, text) = run(&["dev", example_dir().to_str().unwrap()]);
+fn a_program_with_panels_stops_where_there_is_no_wayland_session() {
+    let (out, text) = no_wayland(&["dev", example_dir().to_str().unwrap()]);
     assert!(!out.status.success(), "{text}");
-    assert!(text.contains("Wayland shell backend"), "{text}");
+    assert!(text.contains("PanelsUnsupported"), "{text}");
+    assert!(text.contains("no Wayland session"), "{text}");
+    assert!(text.contains("zwlr_layer_shell_v1"), "{text}");
 }

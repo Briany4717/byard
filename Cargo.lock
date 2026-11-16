@@ -703,6 +703,7 @@ name = "byard-platform"
 version = "0.1.0"
 dependencies = [
  "accesskit",
+ "accesskit_unix",
  "accesskit_winit",
  "arboard",
  "byard-compiler",
@@ -710,8 +711,12 @@ dependencies = [
  "byard-test-gpu",
  "image",
  "pollster",
+ "raw-window-handle",
+ "smithay-client-toolkit",
+ "wayland-backend",
  "wgpu",
  "winit",
+ "xkbcommon-dl",
 ]
 
 [[package]]

@@ -358,6 +358,10 @@ pub struct Engine {
     image_reload_rx: crossbeam_channel::Receiver<std::path::PathBuf>,
     /// Handle to the logic thread, taken and joined in `Drop`.
     logic_handle: Option<JoinHandle<()>>,
+    /// The surfaces whose frame reached the platform in the last round
+    /// ([`take_presented`](Engine::take_presented)): replaced each round, so
+    /// it never grows past the number of surfaces.
+    presented: Vec<SurfaceId>,
 }
 
 /// Backing state for [`Engine`]'s one Signal-driven text label.
@@ -662,7 +666,17 @@ impl Engine {
             label_tx,
             label_rx: Some(label_rx),
             logic_handle: None,
+            presented: Vec::new(),
         })
+    }
+
+    /// The surfaces whose latest frame was presented (committed to the
+    /// platform) by the last round. A round can draw nothing
+    /// for a surface that has no frame yet or whose swapchain was lost and
+    /// reconfigured; a host that paces its frames on the compositor's own
+    /// callbacks (RFC-0068 §5) has to know which ones did commit.
+    pub fn take_presented(&mut self) -> Vec<SurfaceId> {
+        std::mem::take(&mut self.presented)
     }
 
     /// Whether the engine has a surface to draw into yet.
@@ -1277,6 +1291,7 @@ impl Engine {
             return Ok(());
         };
         r.gpu.begin_round();
+        self.presented.clear();
         let mut first_error = None;
         for &id in ids {
             let result = self.render_one(id);
@@ -1295,6 +1310,7 @@ impl Engine {
             render,
             relay,
             image_reload_rx,
+            presented,
             ..
         } = self;
         let Some(Render {
@@ -1394,6 +1410,7 @@ impl Engine {
             crate::profile_scope!("present.submit");
             frame.present();
         }
+        presented.push(id);
         Ok(())
     }
 

@@ -738,6 +738,38 @@ View Main() {
 }
 "#;
 
+/// The list the Wayland host tells the program arrives as an event, since the
+/// interpreter lives on the logic thread and the host does not.
+#[test]
+fn the_hosts_list_of_screens_arrives_as_an_event_and_makes_the_panels() {
+    let mut s = Shell::with_screens(PER_SCREEN, Vec::new());
+    assert!(s.interp.surface_ids().is_empty(), "no screens, no panels");
+    let list = vec![
+        ScreenInfo::new("DP-1", 2560.0, 1440.0),
+        ScreenInfo {
+            x: 2560.0,
+            ..ScreenInfo::new("HDMI-1", 1280.0, 800.0)
+        },
+    ];
+    let event = |screens| InputEvent {
+        surface: SurfaceId::MAIN,
+        kind: EventKind::Screens,
+        pos: (0.0, 0.0),
+        delta: (0.0, 0.0),
+        payload: Some(byard_core::InputPayload::Screens(screens)),
+        time_ms: 0,
+        mods: KeyModifiers::default(),
+    };
+    s.step(&[event(list.clone())]);
+    s.settle();
+    assert_eq!(s.interp.screens(), list.as_slice());
+    assert_eq!(s.interp.surface_ids().len(), 2);
+    // One unplugged: the event with the shorter list takes its panel away.
+    s.step(&[event(list[..1].to_vec())]);
+    s.settle();
+    assert_eq!(s.interp.surface_ids().len(), 1);
+}
+
 #[test]
 fn a_screen_added_before_keeps_the_panel_of_the_one_after() {
     let mut s = Shell::with_screens(

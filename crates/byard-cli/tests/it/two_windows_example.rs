@@ -68,23 +68,27 @@ fn each_window_is_drawn_at_its_own_size() {
 }
 
 #[test]
-fn a_shot_of_several_windows_says_which_to_name() {
+fn a_shot_of_several_windows_is_the_screen_and_a_wrong_name_lists_them() {
     let dir = scratch("names");
     let png = dir.join("x.png");
+    // With no name the windows are drawn together, on the screen.
     let (out, text) = run(&[
         "shot",
         example_dir().to_str().unwrap(),
+        "--at",
+        "0",
         "-o",
         png.to_str().unwrap(),
     ]);
-    assert!(!out.status.success(), "{text}");
-    assert!(
-        text.contains("`counter`") && text.contains("`inspector`"),
-        "{text}"
+    if text.contains("no GPU adapter") {
+        eprintln!("no GPU adapter, skipping byard shot");
+        return;
+    }
+    assert!(out.status.success(), "{text}");
+    assert_eq!(
+        image::open(&png).unwrap().to_rgba8().dimensions(),
+        (880, 1760)
     );
-    assert!(text.contains("--surface"), "{text}");
-    assert!(text.contains("step 5"), "{text}");
-    assert!(!png.exists());
 
     let (out, text) = run(&[
         "shot",
@@ -95,7 +99,11 @@ fn a_shot_of_several_windows_says_which_to_name() {
         png.to_str().unwrap(),
     ]);
     assert!(!out.status.success(), "{text}");
-    assert!(text.contains("no window named `nope`"), "{text}");
+    assert!(text.contains("no surface named `nope`"), "{text}");
+    assert!(
+        text.contains("`counter`") && text.contains("`inspector`"),
+        "{text}"
+    );
 }
 
 #[test]

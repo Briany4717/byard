@@ -1,0 +1,210 @@
+// RFC-0068: a shell, drawn with no compositor. A bar and a dock on every screen,
+// a menu that hangs from the bar, and a window, all one program with one state.
+//
+// From the repo root, none of this opens a window:
+//
+//   the two screens, every surface on them over a checkerboard:
+//     cargo run -p byard-cli -- shot crates/byard-cli/examples/shell_demo \
+//         --screens "DP-1:1600x900, HDMI-A-1:1280x720" --scale 1 -o screens.png
+//   one surface alone, the bar of the second screen:
+//     cargo run -p byard-cli -- shot crates/byard-cli/examples/shell_demo \
+//         --screens "DP-1:1600x900, HDMI-A-1:1280x720" --surface bar --screen HDMI-A-1 -o bar.png
+//   the menu open: a tap on the Apps pill of the first screen is a tap at its
+//   place in the picture
+//     cargo run -p byard-cli -- shot crates/byard-cli/examples/shell_demo \
+//         --screens "DP-1:1600x900, HDMI-A-1:1280x720" --scale 1 --tap 40,30 -o menu.png
+//   the scenarios in tests/:
+//     cargo run -p byard-cli -- test crates/byard-cli/examples/shell_demo
+//
+// What to look for: the bar is an island 8 pixels in from the edges and the
+// window sits in the space the bar and the dock left. The menu is a surface of
+// its own, so it hangs below a 44 pixel bar, and on the second screen's dock
+// there is nothing to flip it against; the checkerboard shows where the panels
+// are transparent. A tap anywhere outside the menu closes it.
+
+View Main() {
+    inject Theme as t
+    // The screen whose menu is open, and whether the settings window is.
+    var menu_on = ""
+    var settings = true
+    var notifications = true
+
+    for s in screens key s.name {
+        Wallpaper(s: s)
+        Bar(
+            s: s,
+            open: menu_on == s.name,
+            toggle: { menu_on = menu_on == s.name ? "" : s.name },
+            dismiss: { menu_on = "" },
+            open_settings: {
+                settings = true
+                menu_on = ""
+            },
+        )
+        Dock(s: s)
+    }
+
+    when settings {
+        Window #[
+            title: "Settings",
+            width: 460,
+            height: 250,
+            close => settings = false,
+        ] as settings_window {
+            Column #[bg: t.surfaceContainer, p: 24, gap: 18, grow: 1] {
+                Text("Settings") #[typo: t.headlineSmall, color: t.onSurface]
+                Text("A window is a surface like the bar is, in the space the panels left.")
+                    #[typo: t.bodyMedium, color: t.onSurfaceVariant]
+                Row #[gap: 12, align: center] {
+                    Text("Notifications") #[typo: t.titleMedium, color: t.onSurface]
+                    Spacer
+                    Toggle #[bind: notifications, bg: t.primary, width: 52, height: 32]
+                }
+                Box #[bg: t.outlineVariant, height: 1] {}
+                Row #[gap: 12, align: center] {
+                    Text(notifications ? "You will hear about everything." : "Quiet.")
+                        #[typo: t.bodyMedium, color: t.onSurfaceVariant]
+                    Spacer
+                    Box #[
+                        bg: t.primary,
+                        radius: 20,
+                        height: 40,
+                        p: (0, 20),
+                        align: center,
+                        justify: center,
+                        a11y_role: button,
+                        tap => settings = false,
+                    ] {
+                        on hover { overlay: t.onPrimary.alpha(0.08) }
+                        Text("Done") #[typo: t.labelLarge, color: t.onPrimary]
+                    }
+                }
+            }
+        }
+    }
+}
+
+// The wallpaper: the background layer, the whole screen whatever the bars reserve.
+View Wallpaper(s: Screen) {
+    inject Theme as t
+    Panel #[
+        screen: s,
+        layer: background,
+        anchor: (top, bottom, left, right),
+        exclusive: ignore,
+        input: none,
+        namespace: "wallpaper",
+    ] as wallpaper {
+        Box #[grow: 1, gradient: (angle: 135deg, from: 0xFF1B1530, to: 0xFF3A2556)] {}
+    }
+}
+
+// The bar: an island along the top edge, with the menu button on its left. The
+// menu is an `Overlay` anchored to that button, so in a panel it is a popup.
+View Bar(
+    s: Screen,
+    open: Bool,
+    toggle: Fn() = {},
+    dismiss: Fn() = {},
+    open_settings: Fn() = {},
+) {
+    inject Theme as t
+    Panel #[screen: s, edge: top, height: 44, mt: 8, mx: 12, namespace: "bar"] as bar {
+        Row #[bg: t.surfaceContainer, radius: 22, pl: 6, pr: 18, gap: 14, align: center, grow: 1] {
+            Box #[
+                bg: open ? t.primary : t.primaryContainer,
+                radius: 16,
+                height: 32,
+                p: (0, 16),
+                align: center,
+                justify: center,
+                a11y_role: button,
+                a11y_label: "Apps on {s.name}",
+                tap => toggle(),
+            ] as apps {
+                on hover { overlay: t.onPrimaryContainer.alpha(0.08) }
+                Text("Apps") #[typo: t.labelLarge, color: open ? t.onPrimary : t.onPrimaryContainer]
+            }
+            Text(s.name) #[typo: t.titleMedium, color: t.onSurface]
+            Spacer
+            Text("{s.width}x{s.height}") #[typo: t.labelMedium, color: t.onSurfaceVariant]
+        }
+
+        when open {
+            Overlay #[modal: false] {
+                Column #[
+                    anchor_to: apps,
+                    anchor_edge: below,
+                    anchor_gap: 8,
+                    width: 232,
+                    bg: t.surfaceContainerHigh,
+                    radius: 20,
+                    p: 8,
+                    gap: 2,
+                    a11y_role: menu,
+                    dismiss => dismiss(),
+                ] as menu {
+                    MenuItem(label: "Settings", hint: "Open the window", run: open_settings)
+                    MenuItem(label: "Files", hint: "Browse", run: dismiss)
+                    MenuItem(label: "Terminal", hint: "Run something", run: dismiss)
+                    Box #[bg: t.outlineVariant, height: 1, mx: 8, my: 4] {}
+                    MenuItem(label: "Lock screen", hint: "", run: dismiss)
+                }
+            }
+        }
+    }
+}
+
+View MenuItem(label: Str, hint: Str, run: Fn() = {}) {
+    inject Theme as t
+    Row #[
+        height: 44,
+        radius: 14,
+        p: (0, 14),
+        gap: 8,
+        align: center,
+        a11y_role: menu_item,
+        tap => run(),
+    ] {
+        on hover { overlay: t.onSurface.alpha(0.08) with t.springEffectsFast }
+        on pressed { overlay: t.onSurface.alpha(0.12) }
+        Text(label) #[typo: t.bodyMedium, color: t.onSurface]
+        Spacer
+        Text(hint) #[typo: t.labelMedium, color: t.onSurfaceVariant]
+    }
+}
+
+// The dock: a panel along the bottom edge as wide as the screen, with an island
+// in the middle. Only the island takes the pointer: the rest lets it through.
+View Dock(s: Screen) {
+    inject Theme as t
+    Panel #[screen: s, edge: bottom, height: 72, mb: 8, namespace: "dock"] as dock {
+        Row #[justify: center, align: center, grow: 1] {
+            Row #[bg: t.surfaceContainer, radius: 28, p: 8, gap: 10, align: center] {
+                DockIcon(letter: "F", fill: t.primaryContainer, ink: t.onPrimaryContainer)
+                DockIcon(letter: "W", fill: t.secondaryContainer, ink: t.onSecondaryContainer)
+                DockIcon(letter: "T", fill: t.tertiaryContainer, ink: t.onTertiaryContainer)
+                DockIcon(letter: "S", fill: t.surfaceContainerHighest, ink: t.onSurface)
+            }
+        }
+    }
+}
+
+View DockIcon(letter: Str, fill: Color, ink: Color) {
+    inject Theme as t
+    Box #[
+        bg: fill,
+        radius: 20,
+        width: 48,
+        height: 48,
+        align: center,
+        justify: center,
+        a11y_role: button,
+        a11y_label: "Launch {letter}",
+        tap => (),
+    ] {
+        on hover { overlay: ink.alpha(0.10) with t.springEffectsFast }
+        on pressed { overlay: ink.alpha(0.16) }
+        Text(letter) #[typo: t.titleMedium, color: ink]
+    }
+}

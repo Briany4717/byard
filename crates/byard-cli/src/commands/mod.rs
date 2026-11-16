@@ -8,5 +8,6 @@ pub mod fmt;
 pub mod get;
 pub mod new;
 pub mod publish;
+pub mod screens;
 pub mod shot;
 pub mod test;

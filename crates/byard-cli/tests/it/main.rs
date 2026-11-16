@@ -59,6 +59,7 @@ mod seed_image_example;
 mod seed_scheme_example;
 mod self_measurement_example;
 mod shape_morph_example;
+mod shell_demo_example;
 mod shot;
 mod shot_idle;
 mod shot_timers;

@@ -298,6 +298,11 @@ pub enum EventKind {
     /// to an element; the program of several windows draws the surface again
     /// at it and its `window.width` and `window.height` follow.
     SurfaceResized,
+    /// The compositor dismissed a popup (`xdg_popup.popup_done`, RFC-0068 §7):
+    /// the user clicked outside a popup that had the grab. Not routed to an
+    /// element: the popup's overlay runs its `dismiss`, as a press outside runs
+    /// it in a window.
+    PopupDone,
 }
 
 impl EventKind {
@@ -340,7 +345,8 @@ impl EventKind {
             | Self::AccessScrollIntoView
             | Self::WindowFocus
             | Self::CloseRequest
-            | Self::SurfaceResized => false,
+            | Self::SurfaceResized
+            | Self::PopupDone => false,
         }
     }
 }

@@ -38,7 +38,7 @@ crossbeam-channel.workspace = true
 image = { workspace = true, features = ["png"] }
 # The `byard` command (`cli` feature). Never linked into an app: only the
 # binary above uses it.
-byard-cli = { workspace = true, optional = true, default-features = false }
+byard-cli = { workspace = true, optional = true }
 
 [features]
 # On by default so that `cargo install byard` gives the `byard` command. An app

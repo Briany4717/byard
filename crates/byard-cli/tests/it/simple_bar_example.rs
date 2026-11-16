@@ -177,6 +177,12 @@ fn a_program_with_panels_stops_where_there_is_no_wayland_session() {
     let (out, text) = no_wayland(&["dev", example_dir().to_str().unwrap()]);
     assert!(!out.status.success(), "{text}");
     assert!(text.contains("PanelsUnsupported"), "{text}");
-    assert!(text.contains("no Wayland session"), "{text}");
     assert!(text.contains("zwlr_layer_shell_v1"), "{text}");
+    // On Linux the backend is there and finds no compositor; elsewhere there
+    // is no backend at all, and the message names the platform instead.
+    if cfg!(target_os = "linux") {
+        assert!(text.contains("no Wayland session"), "{text}");
+    } else {
+        assert!(text.contains(std::env::consts::OS), "{text}");
+    }
 }

@@ -445,7 +445,17 @@ impl App {
         if shape.has_panel {
             // Panels are layer surfaces, which only the Wayland shell backend
             // makes (RFC-0068 §8): the program says it can't where it can't.
+            // Only `byard`'s own feature reaches the backend. `byard-platform`'s
+            // may be on in the same build because the `byard` command (`cli`)
+            // asked for it, and an app that never enabled panels must not
+            // link it for that (RFC-0068 §10).
+            #[cfg(feature = "wayland-shell")]
             return byard_platform::ShellHost::new(self.title.clone(), window_id).run(host);
+            #[cfg(not(feature = "wayland-shell"))]
+            {
+                drop(host);
+                return Err(ByardError::Platform(byard_platform::panels_not_built()));
+            }
         }
         let mut window = byard_platform::WinitHost::new(self.title.clone(), width, height)
             .with_app_id(window_id);

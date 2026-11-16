@@ -23,6 +23,18 @@ mod windows;
 
 pub use clipboard::SystemClipboard;
 
+/// What a program with a `Panel` is told when the build that runs it has no
+/// Wayland shell backend (RFC-0068 §3): `PanelsUnsupported`, the platform,
+/// and on Linux the `Cargo.toml` line that turns the backend on.
+///
+/// Public so that `byard::App` can say it without referring to the backend at
+/// all, which keeps the backend out of an app that never enabled it even when
+/// another crate in the same build (the `byard` command) did.
+#[must_use]
+pub fn panels_not_built() -> String {
+    unsupported::not_built(std::env::consts::OS)
+}
+
 #[cfg(all(target_os = "linux", feature = "wayland-shell"))]
 mod shell;
 #[cfg(all(target_os = "linux", feature = "wayland-shell"))]

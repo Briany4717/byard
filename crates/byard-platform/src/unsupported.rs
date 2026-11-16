@@ -36,10 +36,6 @@ pub(crate) fn no_layer_shell() -> String {
 
 /// The build has no shell backend: another platform, or the `wayland-shell`
 /// feature turned off.
-#[cfg_attr(
-    all(target_os = "linux", feature = "wayland-shell"),
-    allow(dead_code, reason = "only a build without the backend says it")
-)]
 pub(crate) fn not_built(platform: &str) -> String {
     if platform == "linux" {
         format!(

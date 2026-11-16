@@ -156,8 +156,8 @@ byard = { version = "0.1", features = ["wayland-shell"] }
 
 and without it `App::run` on a program with a `Panel` stops with `PanelsUnsupported`, saying
 so. `byard build` only bakes assets and does not compile the app, so it prints this line
-when the program has a `Panel`. `cargo install byard --features wayland-shell` gives a
-`byard` that runs panels.
+when the program has a `Panel`. The `byard` command itself, from `cargo install byard`,
+runs panels as it is.
 
 It works on compositors that offer `zwlr_layer_shell_v1`: Hyprland, Sway, river, niri,
 labwc, Wayfire, KDE Plasma and the other wlroots-style ones. It does not work on GNOME,

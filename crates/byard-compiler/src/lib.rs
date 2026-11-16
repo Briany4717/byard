@@ -19,6 +19,7 @@
 
 pub mod consts;
 pub mod diagnostics;
+pub mod edition;
 pub mod fmt;
 pub mod icons;
 pub mod infer;

@@ -549,4 +549,67 @@ mod tests {
         assert!((fractional_scale(180) - 1.5).abs() < f64::EPSILON);
         assert!((fractional_scale(150) - 1.25).abs() < f64::EPSILON);
     }
+
+    /// The spec a panel of `source` is created with, as the interpreter makes it
+    /// once the content is measured.
+    fn created_spec(source: &str) -> byard_core::SurfaceSpec {
+        use byard_compiler::interp::eval::Interpreter;
+        use byard_core::frame::RenderFrame;
+        let parsed = byard_compiler::parser::parse(source);
+        assert!(parsed.errors.is_empty(), "{:?}", parsed.errors);
+        let mut interp = Interpreter::new();
+        interp.enable_surfaces();
+        interp.set_screens(vec![byard_core::ScreenInfo::new("screen-1", 1280.0, 800.0)]);
+        interp.load_views(&parsed.views);
+        let known: Vec<&str> = parsed.views.iter().map(|v| v.name.as_str()).collect();
+        let main = parsed.views.iter().find(|v| v.name.as_str() == "Main");
+        let tree = interp.lower_view(main.unwrap(), &known);
+        let mut spec = None;
+        for _ in 0..4 {
+            interp.set_now_ms(16);
+            interp.tick();
+            let mut out = Vec::new();
+            interp.render_surfaces(
+                &tree,
+                &mut || {
+                    let mut f = RenderFrame::new();
+                    f.request_full_redraw();
+                    f
+                },
+                &mut out,
+            );
+            for change in interp.take_surface_changes() {
+                if let byard_core::SurfaceChange::Create { id, spec: s } = change {
+                    interp.set_surface_size(id, (1280.0, s.size.1));
+                    spec = Some(s);
+                }
+            }
+        }
+        spec.expect("the panel was created")
+    }
+
+    /// The exclusive zone sent is the bar's thickness, for a bar whose height
+    /// is its content's and for one with an explicit `height`, and it follows
+    /// the thickness when the content grows.
+    #[test]
+    fn a_bars_zone_is_its_measured_or_written_height() {
+        let content =
+            created_spec("View Main() { Panel #[edge: top] { Text(\"Hello\") #[p: 8] } }");
+        let layer_spec = content.layer.as_ref().unwrap();
+        let wire = Wire::of(layer_spec, content.size, 4, false);
+        assert!(wire.size.1 > 0, "measured height {:?}", content.size);
+        assert_eq!(
+            wire.zone,
+            i32::try_from(wire.size.1).unwrap(),
+            "{content:?}"
+        );
+        let written =
+            created_spec("View Main() { Panel #[edge: top, height: 40] { Text(\"Hello\") } }");
+        let wire = Wire::of(written.layer.as_ref().unwrap(), written.size, 4, false);
+        assert_eq!((wire.size, wire.zone), ((0, 40), 40));
+        // A bottom bar and a side bar reserve their own thickness.
+        let left = created_spec("View Main() { Panel #[edge: left, width: 64] { Text(\"x\") } }");
+        let wire = Wire::of(left.layer.as_ref().unwrap(), left.size, 4, false);
+        assert_eq!((wire.size, wire.zone), ((64, 0), 64));
+    }
 }

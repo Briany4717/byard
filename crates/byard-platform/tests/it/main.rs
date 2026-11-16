@@ -34,4 +34,5 @@ mod text_colour_readback;
 mod text_editing_readback;
 mod text_transform_readback;
 mod text_weight_readback;
+mod transparent_alpha_readback;
 mod z_order_readback;

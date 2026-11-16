@@ -645,6 +645,15 @@ impl EventRouter {
         }
     }
 
+    /// Closes the scope opened with `key`, when other scopes opened and closed
+    /// inside it since: its focusables are everything registered up to now.
+    pub fn close_scope(&mut self, key: u32) {
+        let end = self.focusables.len();
+        if let Some(scope) = self.scopes.iter_mut().find(|s| s.key == key) {
+            scope.end = end;
+        }
+    }
+
     /// The focus scopes mounted this frame, outermost first.
     #[must_use]
     pub fn scopes(&self) -> &[Scope] {

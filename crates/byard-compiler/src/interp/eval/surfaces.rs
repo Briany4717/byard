@@ -244,6 +244,9 @@ struct PanelAsk {
     name: String,
 }
 
+/// What the scope of a panel is called, apart from the identities of overlays.
+const PANEL_SCOPE_BASE: u32 = 0xF000_0000;
+
 /// The state of a panel that a window has no use for.
 struct PanelLive {
     ask: PanelAsk,
@@ -747,6 +750,15 @@ impl Interpreter {
             }
             self.ctx.watch_reads();
             self.ctx.push_scope_tracker();
+            // A panel that takes every key while it is shown is a focus scope
+            // (RFC-0068 §3): focus goes into it when it appears, to its
+            // `autofocus` or the first element Tab reaches.
+            self.panel_scope = self
+                .surfaces
+                .as_ref()
+                .and_then(|s| s.live[index].panel.as_ref())
+                .filter(|p| p.ask.layer.keyboard == KeyboardMode::Exclusive)
+                .map(|_| PANEL_SCOPE_BASE | id.index());
             self.render_frame(
                 children,
                 &mut frame,
@@ -757,6 +769,7 @@ impl Interpreter {
                     structure_changed: structure_moved,
                 }),
             );
+            self.panel_scope = None;
             self.frame_scopes = self.ctx.pop_scope_tracker();
             let reads = self.ctx.take_reads();
             let wants = self.any_active

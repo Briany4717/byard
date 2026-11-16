@@ -340,7 +340,11 @@ the surprise nobody wants on the first run, and `false` for anything else.
 fields cannot be typed in, so the checker warns (`PanelTakesNoKeys`) at a
 `TextField` or `key_down` handler inside a `keyboard: none` panel, with the hint
 to write `keyboard: on_demand`. `exclusive` is what a launcher wants: the keys go
-to it from the moment it appears until it goes. `on_demand` needs layer shell version 4. A compositor at
+to it from the moment it appears until it goes. A panel with `keyboard: exclusive` is also a
+focus scope, as a modal overlay is (RFC-0066 §1): when it appears, focus moves to its
+`autofocus: true` element, else to the first element Tab reaches, and when it goes (or stops
+being `exclusive`) focus is given up as a scope gives it up. `on_demand` and `none` do not move
+focus. `on_demand` needs layer shell version 4. A compositor at
 version 3 gets `exclusive` while the panel has a focused element and `none`
 otherwise, which behaves the same from the user's side.
 

@@ -840,6 +840,9 @@ pub struct Interpreter {
     /// The elements marked `autofocus` that have already been drawn (and so
     /// been given focus, or not, once), by identity.
     autofocused: std::collections::HashSet<u32>,
+    /// The identity of the surface being drawn when it is a focus scope of its
+    /// own: a `Panel` with `keyboard: exclusive` (RFC-0068 §3).
+    panel_scope: Option<u32>,
     /// The layout indices of the focused element and its ancestors, for this
     /// frame, once something asked.
     focus_chain: Option<Vec<u32>>,
@@ -1973,6 +1976,9 @@ impl Interpreter {
         // gesture state (a pending `down`, the focused element) so a tap that
         // spans this re-render is still recognized (RFC-0003 E4).
         self.router.clear_handlers();
+        if let Some(key) = self.panel_scope {
+            self.router.begin_scope(key, false);
+        }
         // RFC-0021, over the previous frame's scroll targets (before they are
         // dropped, so the offset writes below are what *this* frame paints):
         //   • reverse `page:`, honour an app-driven `page` change (edge-triggered,
@@ -2266,6 +2272,9 @@ impl Interpreter {
             self.emit_overlay(ol, frame, width, height, pools);
         }
         self.anim_slot = AnimSlot::default();
+        if let Some(key) = self.panel_scope {
+            self.router.close_scope(key);
+        }
         // RFC-0066 §1: focus goes into the scopes that opened, back out of the
         // ones that closed, and where a bound `focused:` asks.
         self.settle_focus();

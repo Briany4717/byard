@@ -72,7 +72,10 @@ nothing, which is `ExclusiveNeedsEdge`.
 keys from the window being typed in. A `TextField` or a `key_down` handler in such a panel
 could never be used, and the checker warns (`PanelTakesNoKeys`): write
 `keyboard: on_demand` for a panel that takes the keys when clicked, or `exclusive` for a
-launcher, which has every key while it is shown.
+launcher, which has every key while it is shown. A panel with `keyboard: exclusive` is also a
+focus scope, like a modal overlay: when it appears, focus goes to its element marked
+`autofocus: true`, else to the first element Tab reaches, so a launcher's field can be typed
+into at once. `on_demand` and `none` do not move focus.
 
 **`namespace` and `screen`** are fixed when the surface is made, so changing them destroys
 the panel and makes it again, with its state. The checker warns when they read a `var`
@@ -181,6 +184,11 @@ What it does for you:
   settings window opens next to the bar.
 - With the `a11y` feature, each panel and window is a window under the program's AT-SPI
   root.
+
+One known limit: text edges. The text renderer (glyphon) blends glyphs with a fixed
+blend whose alpha dips at anti-aliased edges, so on a panel over an opaque background the
+edge pixels of letters can be up to 25% see-through (alpha 0.75 at half coverage). Boxes,
+shapes, images and everything else Byard draws keep full alpha there.
 
 What it does not do yet: **a text field in a panel takes the keys the keymap gives it, but not
 an input method** (no IME, no dead-key composition), so typing Japanese or an accent by

@@ -693,7 +693,7 @@ impl EncoderSubsystem {
             &bind_group_layout,
             quad_layout,
             surface_format,
-            Some(wgpu::BlendState::ALPHA_BLENDING),
+            Some(STRAIGHT_ALPHA_OVER),
             draw_depth_stencil(),
             "fs_main",
             "ByardCore - SolidBox Render Pipeline",
@@ -3683,6 +3683,22 @@ fn build_viewport_bind_group(
 ///
 /// [`clip_buffer`]: EncoderSubsystem::clip_buffer
 pub(crate) const CLIP_STRIDE: u64 = 256;
+
+/// "Over" for straight-alpha colour: the colour is `src.rgb * src.a + dst.rgb *
+/// (1 - src.a)` as `ALPHA_BLENDING` has it, and the alpha is `src.a + dst.a *
+/// (1 - src.a)`. `ALPHA_BLENDING` multiplies the source alpha by itself, so an
+/// antialiased edge over an opaque pixel leaves alpha below 1: invisible in an
+/// opaque window, and a see-through hairline on a transparent surface (a
+/// `Panel`, RFC-0068 §3). The colour channels are the same as before, byte for
+/// byte.
+pub(crate) const STRAIGHT_ALPHA_OVER: wgpu::BlendState = wgpu::BlendState {
+    color: wgpu::BlendState::ALPHA_BLENDING.color,
+    alpha: wgpu::BlendComponent {
+        src_factor: wgpu::BlendFactor::One,
+        dst_factor: wgpu::BlendFactor::OneMinusSrcAlpha,
+        operation: wgpu::BlendOperation::Add,
+    },
+};
 
 /// Bytes bound for one clip entry.
 ///

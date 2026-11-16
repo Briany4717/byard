@@ -10,8 +10,9 @@
 //     the count passes three.
 //   - `check-screen`, one small label for each screen, in the bottom-left corner: plug
 //     a screen in (`hyprctl output create headless`) and one appears on it.
-//   - `check-launcher`, centred, in the overlay layer, with `keyboard: on_demand`: click
-//     the text field and type; the keys go to it, and to nothing else.
+//   - `check-launcher`, centred, in the overlay layer, with `keyboard: exclusive`: it is a
+//     focus scope, so the text field has focus the moment it appears: type at once, and
+//     the keys go to it and to nothing else.
 // Nothing moves on its own, so while you are not pressing anything the program draws
 // and commits nothing.
 
@@ -47,7 +48,7 @@ View Main() {
     }
 
     when launcher {
-        Panel #[layer: overlay, keyboard: on_demand, namespace: "check-launcher"] as launch {
+        Panel #[layer: overlay, keyboard: exclusive, namespace: "check-launcher"] as launch {
             Column #[p: 12, gap: 8, radius: 12, bg: 0xF01C1B22] {
                 TextField #[bind: typed, placeholder: "type here", width: 280, height: 36]
                 Text("typed: {typed}") #[color: 0xFFFFFFFF]

@@ -929,3 +929,84 @@ fn a_reload_that_changes_a_panels_namespace_makes_it_again() {
     );
     assert_eq!(s.interp.surface_ids(), vec![new]);
 }
+
+/// RFC-0068 §3: a panel with `keyboard: exclusive` is a focus scope, as a modal
+/// overlay is (RFC-0066 §1): focus goes into it when it appears.
+fn launcher(keyboard: &str, field: &str) -> String {
+    format!(
+        r#"
+View Main() {{
+    var text = ""
+    Panel #[anchor: top, keyboard: {keyboard}, namespace: "launcher", width: 300, height: 120] as launcher {{
+        Column #[gap: 8] {{
+            Button("first") => text = "first"
+            {field}
+        }}
+    }}
+}}
+"#
+    )
+}
+
+#[test]
+fn an_exclusive_panel_takes_focus_in_the_first_element_tab_reaches() {
+    let s = Shell::new(&launcher("exclusive", "TextField #[bind: text]"));
+    let id = s.panel("launcher");
+    assert!(
+        s.interp.focused_element_of(id).is_some(),
+        "the first thing Tab reaches has focus"
+    );
+}
+
+#[test]
+fn an_exclusive_panels_autofocus_wins_over_the_first_element() {
+    let first = Shell::new(&launcher("exclusive", "TextField #[bind: text]"));
+    let marked = Shell::new(&launcher(
+        "exclusive",
+        "TextField #[bind: text, autofocus: true]",
+    ));
+    let a = first.interp.focused_element_of(first.panel("launcher"));
+    let b = marked.interp.focused_element_of(marked.panel("launcher"));
+    assert!(a.is_some() && b.is_some());
+    assert_ne!(a, b, "the field is not the first stop, the button is");
+}
+
+#[test]
+fn on_demand_and_none_panels_do_not_move_focus() {
+    for mode in ["on_demand", "none"] {
+        let s = Shell::new(&launcher(mode, "TextField #[bind: text]"));
+        assert_eq!(
+            s.interp.focused_element_of(s.panel("launcher")),
+            None,
+            "keyboard: {mode}"
+        );
+    }
+}
+
+#[test]
+fn a_panel_that_stops_being_exclusive_gives_focus_up() {
+    let mut s = Shell::new(
+        r#"
+View Main() {
+    var exclusive = true
+    Panel #[anchor: top, keyboard: exclusive, namespace: "p", width: 200, height: 80] as p {
+        Button("x") => exclusive = false
+    }
+}
+"#,
+    );
+    let id = s.panel("p");
+    assert!(s.interp.focused_element_of(id).is_some());
+    s.reload(
+        r#"
+View Main() {
+    var exclusive = true
+    Panel #[anchor: top, keyboard: on_demand, namespace: "p", width: 200, height: 80] as p {
+        Button("x") => exclusive = false
+    }
+}
+"#,
+    );
+    let id = s.panel("p");
+    assert_eq!(s.interp.focused_element_of(id), None, "the scope went");
+}

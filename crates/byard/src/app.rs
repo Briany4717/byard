@@ -663,79 +663,24 @@ impl PlatformHost for Host {
         size: WindowSize,
         waker: byard_core::relay::FrameWaker,
     ) -> Result<(), ByardError> {
-        let mut engine = pollster::block_on(Engine::init(
+        let engine = pollster::block_on(Engine::init(
             instance,
             surface,
             size.width,
             size.height,
             size.scale_factor,
         ))?;
-        engine.set_frame_waker(waker);
-
         #[allow(clippy::cast_precision_loss, clippy::cast_possible_truncation)]
         let logical = (
             size.width as f32 / size.scale_factor as f32,
             size.height as f32 / size.scale_factor as f32,
         );
-        self.width_bits
-            .store(logical.0.to_bits(), Ordering::Relaxed);
-        self.height_bits
-            .store(logical.1.to_bits(), Ordering::Relaxed);
+        self.begin(engine, waker, logical)
+    }
 
-        // Built before the logic thread starts, because `inject` resolves at
-        // lower time: a handle provided after the view was lowered would be
-        // invisible to the view that asked for it (RFC-0028 §3).
-        let dispatcher = engine.dispatcher(std::mem::take(&mut self.registry));
-        let views = std::mem::take(&mut self.views);
-        let theme = self.theme.take();
-        let width_bits = Arc::clone(&self.width_bits);
-        let height_bits = Arc::clone(&self.height_bits);
-        let reloads = self.reloads.clone();
-        let title = self.title.clone();
-
-        engine.start_logic_from_view(move |_arena| {
-            let mut interp = Interpreter::new();
-            interp.set_dispatcher(dispatcher);
-            // Copy, cut and paste in a `TextField` (RFC-0041 §3). Opens
-            // nothing until the first of them is used.
-            interp.set_clipboard(Box::new(byard_platform::SystemClipboard::new()));
-            // Before lowering, as `byard dev` does: `inject Theme` resolves
-            // against the ambient chain at lower time.
-            if let Some(theme) = theme {
-                interp.set_theme(theme);
-            }
-            interp.load_views(&views);
-            if byard_compiler::surfaces::surface_shape(&views).is_multi() {
-                interp.enable_surfaces();
-                interp.set_default_window_title(&title);
-            }
-            let known: Vec<&str> = views.iter().map(|v| v.name.as_str()).collect();
-            let root = byard_compiler::parser::ast::root_view(&views)
-                .expect("a program with no views is rejected before this");
-            let tree = interp.lower_view(root, &known);
-            // The program resolved, and lowering can still refuse part of it
-            // (an attribute an element does not take). A shipped app has no
-            // overlay to show that in, so it says it where it will be read.
-            for error in interp.errors() {
-                eprintln!("  {}", error.headline());
-            }
-            let errors_told = interp.errors().len();
-            interp.tick();
-            Box::new(AppRuntime {
-                interp,
-                tree,
-                start: std::time::Instant::now(),
-                width_bits,
-                height_bits,
-                views,
-                reloads,
-                reloaded: std::cell::Cell::new(false),
-                errors_told,
-            })
-        })?;
-
-        self.engine = Some(engine);
-        Ok(())
+    fn on_start(&mut self, waker: byard_core::relay::FrameWaker) -> Result<(), ByardError> {
+        let engine = Engine::without_surface()?;
+        self.begin(engine, waker, (0.0, 0.0))
     }
 
     fn on_resize(&mut self, surface: byard_core::SurfaceId, size: WindowSize) {
@@ -773,20 +718,34 @@ impl PlatformHost for Host {
 
     fn on_surface_created(
         &mut self,
+        instance: &wgpu::Instance,
         surface: byard_core::SurfaceId,
         wgpu_surface: wgpu::Surface<'static>,
         size: WindowSize,
+        transparent: bool,
     ) -> Result<(), ByardError> {
         let Some(engine) = self.engine.as_mut() else {
             return Ok(());
         };
-        engine.add_surface(
-            surface,
-            wgpu_surface,
-            size.width,
-            size.height,
-            size.scale_factor,
-        )?;
+        if engine.has_surface() {
+            engine.add_surface(
+                surface,
+                wgpu_surface,
+                size.width,
+                size.height,
+                size.scale_factor,
+                transparent,
+            )?;
+        } else {
+            // The first window of the program is the engine's first surface.
+            pollster::block_on(engine.attach_first_surface(
+                instance,
+                surface,
+                wgpu_surface,
+                (size.width, size.height, size.scale_factor),
+                transparent,
+            ))?;
+        }
         // The size the platform gave it, which the program draws it at.
         self.push_resized(surface, size);
         Ok(())
@@ -966,6 +925,77 @@ impl PlatformHost for Host {
 }
 
 impl Host {
+    /// Everything that follows making the engine: the waker, the controllers,
+    /// the logic thread. The same for a program of one window, which has its
+    /// surface already, and for one of several, which has none yet.
+    fn begin(
+        &mut self,
+        mut engine: Engine,
+        waker: byard_core::relay::FrameWaker,
+        logical: (f32, f32),
+    ) -> Result<(), ByardError> {
+        engine.set_frame_waker(waker);
+        self.width_bits
+            .store(logical.0.to_bits(), Ordering::Relaxed);
+        self.height_bits
+            .store(logical.1.to_bits(), Ordering::Relaxed);
+
+        // Built before the logic thread starts, because `inject` resolves at
+        // lower time: a handle provided after the view was lowered would be
+        // invisible to the view that asked for it (RFC-0028 §3).
+        let dispatcher = engine.dispatcher(std::mem::take(&mut self.registry));
+        let views = std::mem::take(&mut self.views);
+        let theme = self.theme.take();
+        let width_bits = Arc::clone(&self.width_bits);
+        let height_bits = Arc::clone(&self.height_bits);
+        let reloads = self.reloads.clone();
+        let title = self.title.clone();
+
+        engine.start_logic_from_view(move |_arena| {
+            let mut interp = Interpreter::new();
+            interp.set_dispatcher(dispatcher);
+            // Copy, cut and paste in a `TextField` (RFC-0041 §3). Opens
+            // nothing until the first of them is used.
+            interp.set_clipboard(Box::new(byard_platform::SystemClipboard::new()));
+            // Before lowering, as `byard dev` does: `inject Theme` resolves
+            // against the ambient chain at lower time.
+            if let Some(theme) = theme {
+                interp.set_theme(theme);
+            }
+            interp.load_views(&views);
+            if byard_compiler::surfaces::surface_shape(&views).is_multi() {
+                interp.enable_surfaces();
+                interp.set_default_window_title(&title);
+            }
+            let known: Vec<&str> = views.iter().map(|v| v.name.as_str()).collect();
+            let root = byard_compiler::parser::ast::root_view(&views)
+                .expect("a program with no views is rejected before this");
+            let tree = interp.lower_view(root, &known);
+            // The program resolved, and lowering can still refuse part of it
+            // (an attribute an element does not take). A shipped app has no
+            // overlay to show that in, so it says it where it will be read.
+            for error in interp.errors() {
+                eprintln!("  {}", error.headline());
+            }
+            let errors_told = interp.errors().len();
+            interp.tick();
+            Box::new(AppRuntime {
+                interp,
+                tree,
+                start: std::time::Instant::now(),
+                width_bits,
+                height_bits,
+                views,
+                reloads,
+                reloaded: std::cell::Cell::new(false),
+                errors_told,
+            })
+        })?;
+
+        self.engine = Some(engine);
+        Ok(())
+    }
+
     /// Forwards one OS event of the main surface to the logic thread's queue.
     fn push(
         &self,

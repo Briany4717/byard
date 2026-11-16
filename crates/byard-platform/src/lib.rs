@@ -211,7 +211,6 @@ impl WinitHost {
             host,
             started: false,
             instance: None,
-            anchor: None,
             slots: byard_core::PerSurface::new(),
             wins: windows::Windows::default(),
             redraws: Vec::new(),
@@ -302,9 +301,9 @@ fn window_attributes(
 ///
 /// A program of one window keeps it in `slots` as [`SurfaceId::MAIN`] and
 /// runs the code it always did. A program of several (RFC-0068 §2, §8) opens
-/// a hidden anchor window first, which gives the device a surface to be
-/// chosen against and is never drawn or shown, then a window for each
-/// [`byard_core::SurfaceChange::Create`] the logic thread asks for.
+/// no window at first: the logic thread is started, and a window is made for
+/// each [`byard_core::SurfaceChange::Create`] it asks for, the first of which
+/// is the engine's first surface.
 struct WinitApp<H: PlatformHost> {
     host: H,
     /// Whether the program has several windows, asked of the host once.
@@ -312,8 +311,6 @@ struct WinitApp<H: PlatformHost> {
     started: bool,
     /// Used to make the surface of each window after the first.
     instance: Option<wgpu::Instance>,
-    /// The hidden window of a program of several windows.
-    anchor: Option<Arc<Window>>,
     /// The open windows, by surface.
     slots: byard_core::PerSurface<Slot>,
     /// What decides which windows are open (a program of several).
@@ -368,7 +365,7 @@ impl<H: PlatformHost> windows::Backend for Real<'_, H> {
             .map(Arc::new)
             .map_err(|e| e.to_string())?;
         app.attach_access(self.event_loop, &window, id);
-        let Some(instance) = app.instance.as_ref() else {
+        let Some(instance) = app.instance.take() else {
             return Err("the program has no graphics instance".to_string());
         };
         let surface = instance
@@ -378,9 +375,19 @@ impl<H: PlatformHost> windows::Backend for Real<'_, H> {
         size.refresh_rate_mhz = window
             .current_monitor()
             .and_then(|m| m.refresh_rate_millihertz());
-        app.host
-            .on_surface_created(id, surface, size)
-            .map_err(|e| e.to_string())?;
+        let made = app
+            .host
+            .on_surface_created(&instance, id, surface, size, spec.transparent)
+            .map_err(|e| e.to_string());
+        app.instance = Some(instance);
+        made?;
+        // The appearance the program opens in, from its first window.
+        if app.slots.is_empty() {
+            if let Some(theme) = window.theme() {
+                app.host
+                    .on_system_scheme(theme == winit::window::Theme::Dark);
+            }
+        }
         app.slots.insert(id, Slot::new(window));
         Ok(())
     }
@@ -560,45 +567,6 @@ impl<H: PlatformHost> WinitApp<H> {
             }
         }
     }
-
-    /// The anchor of a program of several windows, and the device's surface.
-    fn resume_anchor(&mut self, event_loop: &ActiveEventLoop, instance: wgpu::Instance) {
-        let attributes = with_app_id(
-            Window::default_attributes()
-                .with_title(&self.title)
-                .with_inner_size(LogicalSize::new(1.0, 1.0))
-                .with_decorations(false)
-                .with_resizable(false)
-                .with_visible(false),
-            &self.app_id,
-        );
-        let window = match event_loop.create_window(attributes) {
-            Ok(w) => Arc::new(w),
-            Err(e) => return self.fail(event_loop, ByardError::Platform(e.to_string())),
-        };
-        let surface = match instance.create_surface(window.clone()) {
-            Ok(s) => s,
-            Err(e) => return self.fail(event_loop, ByardError::Platform(e.to_string())),
-        };
-        let mut size = to_window_size(window.inner_size(), window.scale_factor());
-        size.width = size.width.max(1);
-        size.height = size.height.max(1);
-        size.refresh_rate_mhz = window
-            .current_monitor()
-            .and_then(|m| m.refresh_rate_millihertz());
-        if let Err(e) = self
-            .host
-            .on_resume(&instance, surface, size, self.waker.clone())
-        {
-            return self.fail(event_loop, e);
-        }
-        if let Some(theme) = window.theme() {
-            self.host
-                .on_system_scheme(theme == winit::window::Theme::Dark);
-        }
-        self.instance = Some(instance);
-        self.anchor = Some(window);
-    }
 }
 
 impl<H: PlatformHost> ApplicationHandler<UserEvent> for WinitApp<H> {
@@ -615,7 +583,10 @@ impl<H: PlatformHost> ApplicationHandler<UserEvent> for WinitApp<H> {
         let instance =
             wgpu::Instance::new(wgpu::InstanceDescriptor::new_without_display_handle_from_env());
         if self.multi {
-            self.resume_anchor(event_loop, instance);
+            if let Err(e) = self.host.on_start(self.waker.clone()) {
+                self.fail(event_loop, e);
+            }
+            self.instance = Some(instance);
             return;
         }
 

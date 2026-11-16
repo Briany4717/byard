@@ -493,12 +493,28 @@ pub trait PlatformHost {
 
     /// Whether the program draws several surfaces (RFC-0068): it writes a
     /// `Window`. Asked before the host opens anything, because it decides what
-    /// the first window is: a program of one window opens it as it always did,
-    /// and a program of several opens none until the program says which
-    /// (a hidden anchor window stands in for the device's sake, see
-    /// `byard-platform`). Defaults to `false`.
+    /// happens first: a program of one window opens it and calls
+    /// [`on_resume`](Self::on_resume) as it always did; a program of several
+    /// opens no window until the logic thread says which, so it calls
+    /// [`on_start`](Self::on_start) instead, and the first window the program
+    /// asks for becomes the engine's first surface through
+    /// [`on_surface_created`](Self::on_surface_created). Defaults to `false`.
     fn is_multi_surface(&self) -> bool {
         false
+    }
+
+    /// For a program of several windows, in place of
+    /// [`on_resume`](Self::on_resume): there is no window yet, so the host
+    /// makes its engine without a surface
+    /// ([`Engine::without_surface`](crate::engine::Engine::without_surface))
+    /// and starts the logic thread, which will ask for the windows. `waker`
+    /// is as for `on_resume`.
+    ///
+    /// # Errors
+    ///
+    /// As `on_resume`.
+    fn on_start(&mut self, _waker: crate::relay::FrameWaker) -> Result<(), ByardError> {
+        Ok(())
     }
 
     /// Called whenever a window is resized or the OS DPI scale changes. In a
@@ -734,8 +750,12 @@ pub trait PlatformHost {
     }
 
     /// Called when the host made a window for `surface`, with the `wgpu`
-    /// surface of it (`size` is the window's own size, physical). A host
-    /// usually passes it to [`Engine::add_surface`](crate::engine::Engine::add_surface).
+    /// surface of it (`size` is the window's own size, physical, and
+    /// `transparent` whether it is to blend with what is behind it). The first
+    /// one of a program is the engine's first surface
+    /// ([`Engine::attach_first_surface`](crate::engine::Engine::attach_first_surface),
+    /// which is why the `instance` is here); the rest go to
+    /// [`Engine::add_surface`](crate::engine::Engine::add_surface).
     ///
     /// # Errors
     ///
@@ -743,9 +763,11 @@ pub trait PlatformHost {
     /// treats it as fatal.
     fn on_surface_created(
         &mut self,
+        _instance: &wgpu::Instance,
         _surface: crate::SurfaceId,
         _wgpu_surface: wgpu::Surface<'static>,
         _size: WindowSize,
+        _transparent: bool,
     ) -> Result<(), ByardError> {
         Ok(())
     }

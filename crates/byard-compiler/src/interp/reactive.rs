@@ -147,6 +147,9 @@ struct Scope {
     last_epoch: u32,
     eval_count: u32,
     live: bool,
+    /// The [`ReactiveCtx::seq`] at which a memo was last evaluated or a value
+    /// binding last projected a different value (see [`ReadSet`]).
+    changed: u64,
     /// Bumped each time the slot is retired, so a [`ScopeId`] minted for an
     /// earlier occupant no longer matches.
     generation: u32,
@@ -156,6 +159,43 @@ struct Scope {
 struct SignalCell {
     value: Value,
     subscribers: SmallVec<[ScopeId; 4]>,
+    /// The [`ReactiveCtx::seq`] of the last write (RFC-0068 §5: what a surface
+    /// asks to know whether something it read has changed since it drew).
+    written: u64,
+}
+
+/// What a surface read while it was drawn: one bit per signal and one per scope
+/// (a memo or a value binding), by slot. Kept per surface, so that a tick can
+/// ask whether anything the surface showed has changed, without walking it
+/// (RFC-0068 §5).
+#[derive(Clone, Debug, Default)]
+pub struct ReadSet {
+    signals: Vec<u64>,
+    scopes: Vec<u64>,
+}
+
+impl ReadSet {
+    fn set(words: &mut Vec<u64>, bit: usize) {
+        let (w, b) = (bit / 64, bit % 64);
+        if words.len() <= w {
+            words.resize(w + 1, 0);
+        }
+        words[w] |= 1 << b;
+    }
+
+    fn bits(words: &[u64]) -> impl Iterator<Item = usize> + '_ {
+        words.iter().enumerate().flat_map(|(w, &word)| {
+            (0..64)
+                .filter(move |b| word >> b & 1 == 1)
+                .map(move |b| w * 64 + b)
+        })
+    }
+
+    /// Whether nothing was read.
+    #[must_use]
+    pub fn is_empty(&self) -> bool {
+        self.signals.iter().chain(&self.scopes).all(|w| *w == 0)
+    }
 }
 
 /// The reactive context: owns the scope arena, the signal store, the per-tick
@@ -194,6 +234,16 @@ pub struct ReactiveCtx {
     /// What was read since [`start_read_log`](Self::start_read_log), `None`
     /// when nobody is listening.
     read_log: Option<(Vec<SignalId>, Vec<ScopeId>)>,
+    /// A counter that moves on every signal write, every memo evaluation and
+    /// every value binding that projects something new (RFC-0068 §5). A surface
+    /// remembers it when it is drawn, and what it read has changed since if a
+    /// read signal or scope carries a larger number.
+    seq: u64,
+    /// Whether reads are being recorded into `reads`. Off, and one flag test per
+    /// read, unless a multi-surface program is drawing a surface.
+    watching: Cell<bool>,
+    /// What the surface being drawn has read.
+    reads: std::cell::RefCell<ReadSet>,
 }
 
 impl ReactiveCtx {
@@ -211,6 +261,7 @@ impl ReactiveCtx {
         self.signals.push(SignalCell {
             value: initial,
             subscribers: SmallVec::new(),
+            written: 0,
         });
         id
     }
@@ -229,6 +280,7 @@ impl ReactiveCtx {
             scope.last_epoch = 0;
             scope.eval_count = 0;
             scope.live = true;
+            scope.changed = self.seq;
             self.computes[slot] = compute;
             self.mounts[slot] = mount;
             ScopeId {
@@ -244,6 +296,7 @@ impl ReactiveCtx {
                 last_epoch: 0,
                 eval_count: 0,
                 live: true,
+                changed: self.seq,
                 generation: 0,
             });
             self.computes.push(compute);
@@ -400,6 +453,9 @@ impl ReactiveCtx {
         if let Some((signals, _)) = &mut self.read_log {
             signals.push(sig);
         }
+        if self.watching.get() {
+            ReadSet::set(&mut self.reads.get_mut().signals, sig.0 as usize);
+        }
         if let Some(s) = CURRENT_SCOPE.with(Cell::get) {
             self.subscribe_signal(sig, s);
             self.record_dep(s, Dep::Signal(sig));
@@ -412,6 +468,9 @@ impl ReactiveCtx {
     pub fn read_memo(&mut self, m: ScopeId) -> Value {
         if let Some((_, memos)) = &mut self.read_log {
             memos.push(m);
+        }
+        if self.watching.get() {
+            ReadSet::set(&mut self.reads.get_mut().scopes, m.index());
         }
         // A memo whose screen has been popped reads as nothing, never as the
         // scope that has since taken its slot (see [`ScopeId`]).
@@ -430,6 +489,8 @@ impl ReactiveCtx {
             self.set_memo_evaluating(m, true);
             let v = self.evaluate_scope(m);
             self.set_memo_cache(m, v);
+            self.seq += 1;
+            self.scopes[m.index()].changed = self.seq;
             self.scopes[m.index()].dirty = false;
             self.set_memo_evaluating(m, false);
         }
@@ -455,7 +516,10 @@ impl ReactiveCtx {
         if let Some(log) = &mut self.write_log {
             log.push(sig);
         }
-        self.signals[sig.0 as usize].value = value;
+        self.seq += 1;
+        let cell = &mut self.signals[sig.0 as usize];
+        cell.value = value;
+        cell.written = self.seq;
         self.mark(sig);
     }
 
@@ -613,6 +677,8 @@ impl ReactiveCtx {
             if let ScopeKind::ValueBinding { last_written, .. } = &mut self.scopes[s.index()].kind {
                 *last_written = Some(v.clone());
             }
+            self.seq += 1;
+            self.scopes[s.index()].changed = self.seq;
             self.frame_writes.push((target, v));
         }
     }
@@ -841,9 +907,55 @@ impl ReactiveCtx {
         self.signals[sig.0 as usize].subscribers.len()
     }
 
+    /// The counter every write, memo evaluation and new projection moves
+    /// (see [`ReadSet`]).
+    #[must_use]
+    pub fn seq(&self) -> u64 {
+        self.seq
+    }
+
+    /// Starts recording what is read into a fresh [`ReadSet`], until
+    /// [`take_reads`](Self::take_reads). A multi-surface program does this
+    /// around the drawing of each surface (RFC-0068 §5).
+    pub fn watch_reads(&mut self) {
+        *self.reads.get_mut() = ReadSet::default();
+        self.watching.set(true);
+    }
+
+    /// Stops recording and returns what was read.
+    pub fn take_reads(&mut self) -> ReadSet {
+        self.watching.set(false);
+        std::mem::take(self.reads.get_mut())
+    }
+
+    /// Records that the value binding or memo `s` was read, for a reader that
+    /// cannot take `&mut self` (a binding's projected value is read through
+    /// `&self`).
+    pub fn note_scope_read(&self, s: ScopeId) {
+        if self.watching.get() {
+            ReadSet::set(&mut self.reads.borrow_mut().scopes, s.index());
+        }
+    }
+
+    /// Whether anything in `set` has changed since `since` (a [`seq`](Self::seq)
+    /// taken when it was read): a signal written, a memo evaluated or waiting to
+    /// be, a binding that now projects something else.
+    #[must_use]
+    pub fn reads_changed_since(&self, set: &ReadSet, since: u64) -> bool {
+        ReadSet::bits(&set.signals).any(|i| self.signals.get(i).is_some_and(|c| c.written > since))
+            || ReadSet::bits(&set.scopes).any(|i| {
+                self.scopes.get(i).is_some_and(|sc| {
+                    sc.live
+                        && (sc.changed > since
+                            || (sc.dirty && matches!(sc.kind, ScopeKind::Memo { .. })))
+                })
+            })
+    }
+
     /// The most recently projected value of a value binding (its `last_written`).
     #[must_use]
     pub fn binding_value(&self, s: ScopeId) -> Option<Value> {
+        self.note_scope_read(s);
         match &self.scope(s)?.kind {
             ScopeKind::ValueBinding { last_written, .. } => last_written.clone(),
             _ => None,

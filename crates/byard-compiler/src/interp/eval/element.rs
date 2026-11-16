@@ -248,6 +248,12 @@ impl Interpreter {
                     inst: self.cur_inst,
                 }
             }
+            // RFC-0068 §2: a `Window`, a surface of its own. Its content is
+            // lowered with its own `window` in scope; what it is, and when it
+            // is open, is the surface level's to say (`render_surfaces`).
+            super::surfaces::WINDOW | super::surfaces::PANEL => {
+                self.lower_window(el, attrs, uid, el_children, known_views)
+            }
             // RFC-0017: the `Overlay` escape-hatch. Its children are lowered
             // normally, but the node itself carries them out of the parent flow
             //, the render walk defers them to the overlay layer.

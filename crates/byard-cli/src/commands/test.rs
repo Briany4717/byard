@@ -472,70 +472,87 @@ struct Failure {
     tree: String,
 }
 
-/// The centre of the one node whose line contains `sel`.
-fn resolve(scene: &Scene, sel: &str) -> Result<(f32, f32), Vec<String>> {
-    let tree = scene
-        .access()
-        .ok_or_else(|| vec!["no accessibility tree".to_string()])?;
-    let text = tree.to_text();
-    let hits: Vec<usize> = lines_of(&text)
+/// The centre of the one node whose line contains `sel`, and the window it is
+/// on: a step that names an element finds it on whichever window it is
+/// (RFC-0068 §9), and a tap on it goes to that window.
+fn resolve(scene: &Scene, sel: &str) -> Result<(byard_core::SurfaceId, f32, f32), Vec<String>> {
+    if scene.access().is_none() && !scene.has_windows() {
+        return Err(vec!["no accessibility tree".to_string()]);
+    }
+    let lines = scene.access_lines();
+    let hits: Vec<usize> = lines
         .iter()
         .enumerate()
-        .filter(|(_, l)| l.contains(sel))
+        .filter(|(_, l)| l.text.trim_start().contains(sel))
         .map(|(i, _)| i)
         .collect();
     match hits.as_slice() {
         [] => Err(vec![format!("no line of the tree contains\n    {sel}")]),
         [i] => {
-            let b = tree.nodes[*i].bounds;
-            Ok((b.x + b.width / 2.0, b.y + b.height / 2.0))
+            let line = &lines[*i];
+            // A window's own line is not an element to press.
+            let b = line.bounds.ok_or_else(|| {
+                vec![format!(
+                    "`{}` is a window, not an element: name something inside it",
+                    line.text.trim_start()
+                )]
+            })?;
+            Ok((line.surface, b.x + b.width / 2.0, b.y + b.height / 2.0))
         }
         many => {
-            let lines = lines_of(&text);
             let mut m = vec![format!(
                 "{} lines of the tree contain `{sel}`; say which:",
                 many.len()
             )];
-            m.extend(many.iter().map(|&i| format!("    {}", lines[i])));
+            m.extend(
+                many.iter()
+                    .map(|&i| format!("    {}", lines[i].text.trim_start())),
+            );
             Err(m)
         }
     }
 }
 
-fn shot_step(scene: &Scene, act: &Act) -> Result<Step, Vec<String>> {
+/// A step ready to apply, and the window it is for (`None` is the one that has
+/// the keyboard).
+fn shot_step(
+    scene: &Scene,
+    act: &Act,
+) -> Result<(Option<byard_core::SurfaceId>, Step), Vec<String>> {
     let point = |t: &Target| match t {
-        Target::Point(x, y) => Ok((*x, *y)),
-        Target::Line(l) => resolve(scene, l),
+        Target::Point(x, y) => Ok((None, *x, *y)),
+        Target::Line(l) => resolve(scene, l).map(|(s, x, y)| (Some(s), x, y)),
     };
     Ok(match act {
         Act::Tap(t) => {
-            let (x, y) = point(t)?;
-            Step::Tap(x, y)
+            let (s, x, y) = point(t)?;
+            (s, Step::Tap(x, y))
         }
         Act::Hold(t) => {
-            let (x, y) = point(t)?;
-            Step::Hold(x, y)
+            let (s, x, y) = point(t)?;
+            (s, Step::Hold(x, y))
         }
         Act::Release(t) => {
-            let (x, y) = point(t)?;
-            Step::Release(x, y)
+            let (s, x, y) = point(t)?;
+            (s, Step::Release(x, y))
         }
         Act::Hover(t) => {
-            let (x, y) = point(t)?;
-            Step::Hover(x, y)
+            let (s, x, y) = point(t)?;
+            (s, Step::Hover(x, y))
         }
-        Act::Drag(a, b) => Step::Drag(point(a)?, point(b)?),
-        Act::Key(k, _) => Step::Key(k.clone()),
-        Act::Type(s) => Step::Type(s.clone()),
-        Act::Wait(ms) => Step::Wait(*ms),
+        Act::Drag(a, b) => {
+            let (s, x0, y0) = point(a)?;
+            let (_, x1, y1) = point(b)?;
+            (s, Step::Drag((x0, y0), (x1, y1)))
+        }
+        Act::Key(k, _) => (None, Step::Key(k.clone())),
+        Act::Type(s) => (None, Step::Type(s.clone())),
+        Act::Wait(ms) => (None, Step::Wait(*ms)),
     })
 }
 
 fn tree_text(scene: &Scene) -> String {
-    scene
-        .access()
-        .map(byard_core::access::AccessTree::to_text)
-        .unwrap_or_default()
+    scene.access_text()
 }
 
 /// Runs one test. `Ok` carries the scene, for its picture.
@@ -573,8 +590,8 @@ fn run_test(project: &Project, test: &Test) -> (Option<Failure>, Option<Scene>) 
             TestStep::Act(act) => {
                 let desc = describe(act);
                 let failed = match shot_step(&scene, act) {
-                    Ok(s) => {
-                        scene.apply(&s);
+                    Ok((surface, s)) => {
+                        scene.apply_on(surface, &s);
                         None
                     }
                     Err(reasons) => {
@@ -774,7 +791,30 @@ pub fn run(args: &TestArgs<'_>) -> Result<(), String> {
 
 fn write_picture(gpu: &Gpu, scene: &Scene, size: (u32, u32), out: &Path) -> Result<(), String> {
     let scale = 2.0;
-    let pixels = gpu.paint(scene.frame(), size, scale)?;
+    // A program with windows has a picture of each, at the size it opens at
+    // (RFC-0068 §9): `name-window.png` beside the one a plain program makes.
+    if scene.has_windows() {
+        let stem = out.with_extension("");
+        for s in scene.surfaces() {
+            let path = PathBuf::from(format!("{}-{}.png", stem.display(), slug(s.name)));
+            #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
+            let size = (s.size.0.round() as u32, s.size.1.round() as u32);
+            save_png(gpu, s.frame, size, scale, s.is_panel, &path)?;
+        }
+        return Ok(());
+    }
+    save_png(gpu, scene.frame(), size, scale, false, out)
+}
+
+fn save_png(
+    gpu: &Gpu,
+    frame: &byard_core::frame::RenderFrame,
+    size: (u32, u32),
+    scale: f32,
+    transparent: bool,
+    out: &Path,
+) -> Result<(), String> {
+    let pixels = gpu.paint(frame, size, scale, transparent)?;
     #[allow(
         clippy::cast_precision_loss,
         clippy::cast_possible_truncation,

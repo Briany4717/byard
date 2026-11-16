@@ -289,6 +289,33 @@ impl SurfaceTarget {
     }
 }
 
+/// The drawing half of an [`Engine`]: the shared GPU state and the surfaces.
+/// Made when the first surface exists, because the adapter is chosen to be
+/// compatible with it and its format decides the pipelines'.
+struct Render {
+    gpu: Gpu,
+    /// The adapter, kept to configure the surfaces added later.
+    adapter: wgpu::Adapter,
+    /// The first surface, inline: a single-surface program has this and
+    /// nothing else (RFC-0068 §10). [`SurfaceId::MAIN`] in one; the id of the
+    /// first window in a program of several. Another surface takes its place
+    /// when it is dropped and others remain.
+    main: SurfaceTarget,
+    /// Every other surface. Empty, and unallocated, for a single-surface
+    /// program.
+    others: Vec<SurfaceTarget>,
+}
+
+impl Render {
+    fn target(&self, id: SurfaceId) -> Option<&SurfaceTarget> {
+        if self.main.id == id {
+            Some(&self.main)
+        } else {
+            self.others.iter().find(|t| t.id == id)
+        }
+    }
+}
+
 /// The Byard rendering engine.
 ///
 /// Owns the [`Gpu`] every surface shares, the surfaces themselves
@@ -311,15 +338,11 @@ impl SurfaceTarget {
 /// Dropping `Engine` signals the logic thread to shut down and joins it
 /// before returning, no orphan threads after the window closes.
 pub struct Engine {
-    gpu: Gpu,
-    /// The adapter, kept to configure the surfaces added later.
-    adapter: wgpu::Adapter,
-    /// [`SurfaceId::MAIN`], inline: a single-surface program has this and
-    /// nothing else (RFC-0068 §10).
-    main: SurfaceTarget,
-    /// Every other surface. Empty, and unallocated, for a single-surface
-    /// program.
-    others: Vec<SurfaceTarget>,
+    /// What drawing needs, once there is a first surface to build it against.
+    render: Option<Render>,
+    /// The vector-upload acknowledgement channel, held until the GPU state
+    /// exists to be given it.
+    pending_ack: Option<crossbeam_channel::Sender<u64>>,
     /// Lock-free frame swap connecting the logic and render threads.
     relay: Arc<Relay>,
     /// Sender half of the label-text channel. `set_label_text` sends here;
@@ -488,12 +511,44 @@ fn negotiate_formats(
 /// `width` by `height` physical pixels. Returns the configuration; its
 /// `view_formats` holds the format the engine draws in when that is not the
 /// surface's own (RFC-0060), and is empty when they are the same.
+/// The composite alpha mode of a surface: opaque unless the surface is meant
+/// to be see-through (`transparent: true`), then a mode that blends it with
+/// what is behind it, premultiplied first because that is what the output
+/// shader writes (RFC-0060). A surface that offers neither is drawn opaque,
+/// and says so, once.
+fn alpha_mode_for(
+    offered: &[wgpu::CompositeAlphaMode],
+    transparent: bool,
+) -> wgpu::CompositeAlphaMode {
+    use wgpu::CompositeAlphaMode as Mode;
+    static TOLD: std::sync::Once = std::sync::Once::new();
+    if transparent {
+        for mode in [Mode::PreMultiplied, Mode::PostMultiplied] {
+            if offered.contains(&mode) {
+                return mode;
+            }
+        }
+        TOLD.call_once(|| {
+            eprintln!(
+                "  a window asked for `transparent: true`, but this surface offers only {offered:?}; \
+                 it is drawn opaque"
+            );
+        });
+    }
+    if offered.contains(&Mode::Opaque) {
+        Mode::Opaque
+    } else {
+        offered.first().copied().unwrap_or(Mode::Auto)
+    }
+}
+
 fn configure_surface(
     surface: &wgpu::Surface<'static>,
     adapter: &wgpu::Adapter,
     device: &wgpu::Device,
     width: u32,
     height: u32,
+    transparent: bool,
 ) -> wgpu::SurfaceConfiguration {
     // --- Surface format negotiation ---
     let caps = surface.get_capabilities(adapter);
@@ -518,11 +573,7 @@ fn configure_surface(
     // `Opaque` explicitly whenever the surface offers it, so the alpha
     // channel is ignored at composite time and the cleared background reads
     // as solid on every platform.
-    let alpha_mode = if caps.alpha_modes.contains(&wgpu::CompositeAlphaMode::Opaque) {
-        wgpu::CompositeAlphaMode::Opaque
-    } else {
-        caps.alpha_modes[0]
-    };
+    let alpha_mode = alpha_mode_for(&caps.alpha_modes, transparent);
 
     // --- Surface configuration (physical pixels, wgpu requirement) ---
     //
@@ -577,6 +628,74 @@ impl Engine {
         height: u32,
         scale_factor: f64,
     ) -> Result<Self, ByardError> {
+        let mut engine = Self::without_surface()?;
+        engine
+            .attach_first_surface(
+                instance,
+                SurfaceId::MAIN,
+                surface,
+                (width, height, scale_factor),
+                false,
+            )
+            .await?;
+        Ok(engine)
+    }
+
+    /// An engine with no surface yet: the relay, the channels, everything the
+    /// logic thread needs, so it can be started (and say which windows the
+    /// program opens) before any window exists. Nothing can be drawn until
+    /// [`attach_first_surface`](Self::attach_first_surface).
+    ///
+    /// # Errors
+    ///
+    /// [`ByardError::ThreadSpawn`] if the relay's I/O pool cannot start.
+    pub fn without_surface() -> Result<Self, ByardError> {
+        let relay = Arc::new(Relay::new()?);
+        let (label_tx, label_rx) = crossbeam_channel::unbounded::<String>();
+        let (image_reload_tx, image_reload_rx) = crossbeam_channel::unbounded();
+        Ok(Self {
+            image_reload_tx,
+            image_reload_rx,
+            render: None,
+            pending_ack: None,
+            relay,
+            label_tx,
+            label_rx: Some(label_rx),
+            logic_handle: None,
+        })
+    }
+
+    /// Whether the engine has a surface to draw into yet.
+    #[must_use]
+    pub const fn has_surface(&self) -> bool {
+        self.render.is_some()
+    }
+
+    /// Selects the adapter, creates the device and compiles the pipelines for
+    /// `surface`, the first surface of the program, which is `id`
+    /// ([`SurfaceId::MAIN`] in a program of one window, the first window's
+    /// id otherwise). `size` is `(width, height, scale_factor)`, physical
+    /// pixels. `transparent` asks for a composite alpha mode that blends the
+    /// surface with what is behind it.
+    ///
+    /// # Errors
+    ///
+    /// As [`init`](Self::init); [`ByardError::RenderSurface`] if the engine
+    /// already has a surface.
+    #[allow(clippy::too_many_lines)]
+    pub async fn attach_first_surface(
+        &mut self,
+        instance: &wgpu::Instance,
+        id: SurfaceId,
+        surface: wgpu::Surface<'static>,
+        (width, height, scale_factor): (u32, u32, f64),
+        transparent: bool,
+    ) -> Result<(), ByardError> {
+        if self.render.is_some() {
+            return Err(ByardError::RenderSurface(
+                "the engine already has its first surface".to_string(),
+            ));
+        }
         // --- Adapter selection ---
         // wgpu 29: request_adapter returns Result<Adapter, RequestAdapterError>
         // instead of Option<Adapter>; use map_err instead of ok_or.
@@ -626,7 +745,7 @@ impl Engine {
         // --- Surface format negotiation and configuration ---
         let device = Arc::new(device);
         let queue = Arc::new(queue);
-        let config = configure_surface(&surface, &adapter, &device, width, height);
+        let config = configure_surface(&surface, &adapter, &device, width, height, transparent);
         let target_format = config
             .view_formats
             .first()
@@ -654,7 +773,6 @@ impl Engine {
         .await?;
         let key = gpu.first_target();
 
-        let relay = Arc::new(Relay::new()?);
         // Wire async image decode: the encoder spawns decodes on the relay's
         // I/O pool and reports results back through the **render** thread's
         // half of the split result channel (RFC-0028 §7), which
@@ -662,51 +780,48 @@ impl Engine {
         // are never seen here.
         let mut gpu = gpu;
         gpu.encoder.set_io_context(
-            relay.io_handle(),
+            self.relay.io_handle(),
             crate::encoder::texture_sampler::DecodeResultSender::new(
-                relay.decode_result_sender(),
-                relay.renderer_wake(),
+                self.relay.decode_result_sender(),
+                self.relay.renderer_wake(),
             ),
         );
-        let (label_tx, label_rx) = crossbeam_channel::unbounded::<String>();
-        let (image_reload_tx, image_reload_rx) = crossbeam_channel::unbounded();
-
-        Ok(Self {
-            image_reload_tx,
-            image_reload_rx,
+        if let Some(tx) = self.pending_ack.take() {
+            gpu.encoder.set_vector_ack_sender(tx);
+        }
+        self.render = Some(Render {
             gpu,
             adapter,
             main: SurfaceTarget {
-                id: SurfaceId::MAIN,
+                id,
                 surface,
                 config,
                 scale_factor,
                 key,
             },
             others: Vec::new(),
-            relay,
-            label_tx,
-            label_rx: Some(label_rx),
-            logic_handle: None,
-        })
+        });
+        Ok(())
     }
 
-    /// The GPU state every surface shares.
+    /// The GPU state every surface shares, once there is a first surface.
     #[must_use]
-    pub const fn gpu(&self) -> &Gpu {
-        &self.gpu
+    pub fn gpu(&self) -> Option<&Gpu> {
+        self.render.as_ref().map(|r| &r.gpu)
     }
 
     /// Adds a surface to the program: a second window, a panel (RFC-0068).
     /// `width` and `height` are physical pixels. It draws through the same
     /// [`Gpu`] as every other, so it shares the pipelines and the glyph atlas.
+    /// `transparent` asks for a composite alpha mode that blends it with what
+    /// is behind it.
     ///
     /// # Errors
     ///
-    /// - [`ByardError::RenderSurface`] if `id` is [`SurfaceId::MAIN`] or
-    ///   already has a surface, or if `surface` negotiates a different format
-    ///   from the one the pipelines were built for (every surface of a program
-    ///   shares them).
+    /// - [`ByardError::RenderSurface`] if `id` already has a surface, if the
+    ///   engine has no first surface yet, or if `surface` negotiates a
+    ///   different format from the one the pipelines were built for (every
+    ///   surface of a program shares them).
     pub fn add_surface(
         &mut self,
         id: SurfaceId,
@@ -714,8 +829,14 @@ impl Engine {
         width: u32,
         height: u32,
         scale_factor: f64,
+        transparent: bool,
     ) -> Result<(), ByardError> {
-        if id.is_main() || self.target(id).is_some() {
+        let Some(r) = self.render.as_mut() else {
+            return Err(ByardError::RenderSurface(
+                "the engine has no first surface yet".to_string(),
+            ));
+        };
+        if r.target(id).is_some() {
             return Err(ByardError::RenderSurface(format!(
                 "surface {} already exists",
                 id.index()
@@ -723,26 +844,27 @@ impl Engine {
         }
         let config = configure_surface(
             &surface,
-            &self.adapter,
-            self.gpu.encoder.device(),
+            &r.adapter,
+            r.gpu.encoder.device(),
             width,
             height,
+            transparent,
         );
         let format = config
             .view_formats
             .first()
             .copied()
             .unwrap_or(config.format);
-        if format != self.gpu.encoder.target_format() {
+        if format != r.gpu.encoder.target_format() {
             // Undo nothing: the surface was only configured, and drops here.
             return Err(ByardError::RenderSurface(format!(
                 "surface {} draws in {format:?} but the program's pipelines are built for {:?}",
                 id.index(),
-                self.gpu.encoder.target_format()
+                r.gpu.encoder.target_format()
             )));
         }
-        let key = self.gpu.add_target(width, height, scale_factor);
-        self.others.push(SurfaceTarget {
+        let key = r.gpu.add_target(width, height, scale_factor);
+        r.others.push(SurfaceTarget {
             id,
             surface,
             config,
@@ -752,29 +874,45 @@ impl Engine {
         Ok(())
     }
 
-    /// Drops a surface added with [`add_surface`](Self::add_surface), and its
-    /// frame slot in the relay. The others keep drawing. `false` if it is not
-    /// there, and for [`SurfaceId::MAIN`], which lives as long as the engine.
+    /// Drops a surface, and its frame slot in the relay. The others keep
+    /// drawing. The first surface can be dropped too while another remains:
+    /// that one takes its place. `false` if it is not there, or it is the only
+    /// surface left (the program ends then).
     pub fn drop_surface(&mut self, id: SurfaceId) -> bool {
-        let Some(index) = self.others.iter().position(|t| t.id == id) else {
+        let Some(r) = self.render.as_mut() else {
             return false;
         };
-        let target = self.others.swap_remove(index);
-        self.gpu.drop_target(target.key);
+        if r.main.id == id {
+            if r.others.is_empty() {
+                return false;
+            }
+            let next = r.others.swap_remove(0);
+            let old = std::mem::replace(&mut r.main, next);
+            r.gpu.drop_target(old.key);
+        } else {
+            let Some(index) = r.others.iter().position(|t| t.id == id) else {
+                return false;
+            };
+            let target = r.others.swap_remove(index);
+            r.gpu.drop_target(target.key);
+        }
         self.relay.remove_surface(id);
         true
     }
 
-    /// The surfaces the engine draws, [`SurfaceId::MAIN`] first.
+    /// The surfaces the engine draws, the first one first.
     pub fn surface_ids(&self) -> impl Iterator<Item = SurfaceId> + '_ {
-        std::iter::once(self.main.id).chain(self.others.iter().map(|t| t.id))
+        self.render
+            .iter()
+            .flat_map(|r| std::iter::once(r.main.id).chain(r.others.iter().map(|t| t.id)))
     }
 
-    fn target(&self, id: SurfaceId) -> Option<&SurfaceTarget> {
-        if id.is_main() {
-            Some(&self.main)
-        } else {
-            self.others.iter().find(|t| t.id == id)
+    /// The frame to read the logic thread's telemetry and census from: the
+    /// first surface's latest.
+    fn primary_frame(&self) -> Option<Arc<crate::frame::RenderFrame>> {
+        match &self.render {
+            Some(r) => self.relay.current_for(r.main.id),
+            None => self.relay.current(),
         }
     }
 
@@ -824,7 +962,11 @@ impl Engine {
     /// ids through (RFC-0009 §2-C), see
     /// [`EncoderSubsystem::set_vector_ack_sender`](crate::encoder::EncoderSubsystem::set_vector_ack_sender).
     pub fn set_vector_ack_sender(&mut self, tx: crossbeam_channel::Sender<u64>) {
-        self.gpu.encoder.set_vector_ack_sender(tx);
+        match self.render.as_mut() {
+            Some(r) => r.gpu.encoder.set_vector_ack_sender(tx),
+            // Given to the GPU state when the first surface makes it.
+            None => self.pending_ack = Some(tx),
+        }
     }
 
     /// Notifies the engine that the window surface has been resized.
@@ -850,14 +992,13 @@ impl Engine {
         height: u32,
         scale_factor: f64,
     ) -> bool {
-        let Self {
-            gpu,
-            adapter: _,
-            main,
-            others,
-            ..
-        } = self;
-        let target = if id.is_main() {
+        let Some(Render {
+            gpu, main, others, ..
+        }) = self.render.as_mut()
+        else {
+            return false;
+        };
+        let target = if main.id == id {
             Some(main)
         } else {
             others.iter_mut().find(|t| t.id == id)
@@ -1082,7 +1223,7 @@ impl Engine {
     /// redraw to place the IME's candidate window.
     #[must_use]
     pub fn text_input(&self) -> Option<crate::frame::TextInputState> {
-        self.relay.current().and_then(|f| f.text_input())
+        self.primary_frame().and_then(|f| f.text_input())
     }
 
     /// Renders the latest [`RenderFrame`](crate::frame::RenderFrame) published
@@ -1132,7 +1273,10 @@ impl Engine {
     /// [`ByardError::RenderSurface`] if an id has no surface, and as
     /// [`render_latest`](Self::render_latest).
     pub fn render_surfaces(&mut self, ids: &[SurfaceId]) -> Result<(), ByardError> {
-        self.gpu.begin_round();
+        let Some(r) = self.render.as_mut() else {
+            return Ok(());
+        };
+        r.gpu.begin_round();
         let mut first_error = None;
         for &id in ids {
             let result = self.render_one(id);
@@ -1140,20 +1284,26 @@ impl Engine {
                 first_error.get_or_insert(e);
             }
         }
-        self.gpu.end_round();
+        if let Some(r) = self.render.as_mut() {
+            r.gpu.end_round();
+        }
         first_error.map_or(Ok(()), Err)
     }
 
     fn render_one(&mut self, id: SurfaceId) -> Result<(), ByardError> {
         let Self {
-            gpu,
-            main,
-            others,
+            render,
             relay,
             image_reload_rx,
             ..
         } = self;
-        let target = if id.is_main() {
+        let Some(Render {
+            gpu, main, others, ..
+        }) = render.as_mut()
+        else {
+            return Ok(());
+        };
+        let target = if main.id == id {
             Some(main)
         } else {
             others.iter_mut().find(|t| t.id == id)
@@ -1259,7 +1409,7 @@ impl Engine {
     /// [`crate::telemetry::drain_samples`] itself for those.
     #[must_use]
     pub fn latest_cpu_telemetry(&self) -> Option<crate::telemetry::SampleBlock> {
-        self.relay.current().map(|frame| frame.telemetry().clone())
+        self.primary_frame().map(|frame| frame.telemetry().clone())
     }
 
     /// Which layout paths the atlas took producing the most recently published
@@ -1281,8 +1431,7 @@ impl Engine {
     /// describes.
     #[must_use]
     pub fn latest_census(&self) -> Census {
-        self.relay
-            .current()
+        self.primary_frame()
             .map_or_else(Census::default, |frame| Census {
                 instances: frame.instance_count(),
                 texts: frame.text_count(),
@@ -1293,15 +1442,20 @@ impl Engine {
     /// How many text lines the last encoded frame re-shaped, see
     /// [`crate::encoder::EncoderSubsystem::last_text_reshapes`].
     #[must_use]
-    pub const fn last_text_reshapes(&self) -> usize {
-        self.gpu.encoder.last_text_reshapes()
+    pub fn last_text_reshapes(&self) -> usize {
+        match &self.render {
+            Some(r) => r.gpu.encoder.last_text_reshapes(),
+            None => 0,
+        }
     }
 
     /// Whether GPU pass timing is active for this engine (RFC-0013 **P5**),
     /// see [`crate::encoder::EncoderSubsystem::gpu_timing_available`].
     #[must_use]
     pub fn gpu_timing_available(&self) -> bool {
-        self.gpu.encoder.gpu_timing_available()
+        self.render
+            .as_ref()
+            .is_some_and(|r| r.gpu.encoder.gpu_timing_available())
     }
 }
 
@@ -1338,6 +1492,43 @@ fn logical_viewport(phys_w: u32, phys_h: u32, scale: f64) -> Viewport {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A window that is not transparent is opaque when the surface offers it,
+    /// whatever else it offers; a transparent one takes a blending mode,
+    /// premultiplied first (what the output shader writes), and falls back to
+    /// opaque only when none is offered.
+    #[test]
+    fn a_transparent_surface_gets_a_blending_alpha_mode_when_there_is_one() {
+        use wgpu::CompositeAlphaMode::{Auto, Opaque, PostMultiplied, PreMultiplied};
+        let offered = [Auto, Opaque, PostMultiplied, PreMultiplied];
+        assert_eq!(alpha_mode_for(&offered, false), Opaque);
+        assert_eq!(alpha_mode_for(&offered, true), PreMultiplied);
+        assert_eq!(
+            alpha_mode_for(&[Opaque, PostMultiplied], true),
+            PostMultiplied
+        );
+        assert_eq!(
+            alpha_mode_for(&[Opaque], true),
+            Opaque,
+            "said once on stderr"
+        );
+        assert_eq!(alpha_mode_for(&[PreMultiplied], false), PreMultiplied);
+    }
+
+    /// The engine of a program of several windows exists before its first
+    /// window: the logic thread can start and say which windows to open.
+    #[test]
+    fn an_engine_can_start_before_it_has_a_surface() {
+        let mut engine = Engine::without_surface().unwrap();
+        assert!(!engine.has_surface());
+        assert_eq!(engine.surface_ids().count(), 0);
+        assert!(!engine.drop_surface(SurfaceId::new(1)));
+        assert!(engine.render_surfaces(&[SurfaceId::new(1)]).is_ok());
+        let (tx, _rx) = crossbeam_channel::unbounded();
+        engine.set_vector_ack_sender(tx);
+        assert!(engine.pending_ack.is_some(), "kept for the GPU state");
+        assert!(engine.latest_cpu_telemetry().is_none());
+    }
 
     #[test]
     fn the_engine_draws_in_the_unorm_twin_of_the_surface() {

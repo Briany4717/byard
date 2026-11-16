@@ -432,6 +432,7 @@ impl App {
         if let Some((rgba, w, h)) = icon {
             window = window.with_icon(rgba, w, h);
         }
+        let views_shape = views.clone();
         window.run(Host {
             engine: None,
             views,
@@ -442,6 +443,8 @@ impl App {
             reloads,
             trace,
             mods: byard_core::KeyModifiers::default(),
+            multi: byard_compiler::surfaces::surface_shape(&views_shape).is_multi(),
+            title: self.title.clone(),
         })
     }
 
@@ -555,6 +558,7 @@ pub(crate) fn load_program(entry: &Path) -> Result<Program, ByardError> {
     if program.views.is_empty() {
         return Err(ByardError::compile(declares_no_view(program.source_map)));
     }
+    refuse_panels(&program.views, &program.source_map)?;
     let manifest_path = manifest.project_root.join("byard.toml");
     check_declared_views(&manifest.native_views, &manifest_path)?;
     let icon = match &manifest.icon {
@@ -584,6 +588,29 @@ pub(crate) fn load_program(entry: &Path) -> Result<Program, ByardError> {
         bundle_id: manifest.bundle.id,
         source_map: program.source_map,
     })
+}
+
+/// Stops a program that writes `Panel`, with a diagnostic: panels are layer
+/// surfaces, which the winit host cannot make (RFC-0068 §3, §8), and drawing
+/// nothing would say nothing. A program of `Window`s is not refused: the host
+/// opens each of them.
+pub(crate) fn refuse_panels(
+    views: &[ViewDecl],
+    source_map: &byard_compiler::resolve::SourceMap,
+) -> Result<(), ByardError> {
+    if !byard_compiler::surfaces::surface_shape(views).has_panel {
+        return Ok(());
+    }
+    Err(announced(ByardError::compile(CompileReport::new(
+        vec![byard_compiler::CompileError::Project {
+            span: byard_compiler::Span::new(0, 0),
+            message: "this program writes `Panel`, and the Wayland shell backend that creates \
+                      layer surfaces is not part of this build yet (RFC-0068 step 3b); \
+                      `byard shot` and `byard test` run it headlessly"
+                .to_string(),
+        }],
+        source_map.clone(),
+    ))))
 }
 
 /// A program with nothing to run, as a diagnostic: it is anchored to the start
@@ -617,9 +644,18 @@ struct Host {
     /// The modifier keys held now, stamped onto the events this host creates
     /// (RFC-0041 §2).
     mods: byard_core::KeyModifiers,
+    /// Whether the program writes `Window` (RFC-0068): it opens its windows as
+    /// the program asks, each a surface of the engine.
+    multi: bool,
+    /// The title a window with no `title` has: the app's.
+    title: String,
 }
 
 impl PlatformHost for Host {
+    fn is_multi_surface(&self) -> bool {
+        self.multi
+    }
+
     fn on_resume(
         &mut self,
         instance: &wgpu::Instance,
@@ -627,20 +663,278 @@ impl PlatformHost for Host {
         size: WindowSize,
         waker: byard_core::relay::FrameWaker,
     ) -> Result<(), ByardError> {
-        let mut engine = pollster::block_on(Engine::init(
+        let engine = pollster::block_on(Engine::init(
             instance,
             surface,
             size.width,
             size.height,
             size.scale_factor,
         ))?;
-        engine.set_frame_waker(waker);
-
         #[allow(clippy::cast_precision_loss, clippy::cast_possible_truncation)]
         let logical = (
             size.width as f32 / size.scale_factor as f32,
             size.height as f32 / size.scale_factor as f32,
         );
+        self.begin(engine, waker, logical)
+    }
+
+    fn on_start(&mut self, waker: byard_core::relay::FrameWaker) -> Result<(), ByardError> {
+        let engine = Engine::without_surface()?;
+        self.begin(engine, waker, (0.0, 0.0))
+    }
+
+    fn on_resize(&mut self, surface: byard_core::SurfaceId, size: WindowSize) {
+        if self.multi {
+            if let Some(engine) = self.engine.as_mut() {
+                engine.resize_surface(surface, size.width, size.height, size.scale_factor);
+            }
+            self.push_resized(surface, size);
+            return;
+        }
+        if let Some(engine) = self.engine.as_mut() {
+            engine.on_resize(size.width, size.height, size.scale_factor);
+            #[allow(clippy::cast_precision_loss, clippy::cast_possible_truncation)]
+            let w = size.width as f32 / size.scale_factor as f32;
+            #[allow(clippy::cast_precision_loss, clippy::cast_possible_truncation)]
+            let h = size.height as f32 / size.scale_factor as f32;
+            self.width_bits.store(w.to_bits(), Ordering::Relaxed);
+            self.height_bits.store(h.to_bits(), Ordering::Relaxed);
+        }
+    }
+
+    fn on_redraw_round(&mut self, surfaces: &[byard_core::SurfaceId]) -> Result<(), ByardError> {
+        match self.engine.as_mut() {
+            Some(engine) => engine.render_surfaces(surfaces),
+            None => Ok(()),
+        }
+    }
+
+    fn take_surface_changes(&mut self) -> Vec<byard_core::SurfaceChange> {
+        self.engine
+            .as_ref()
+            .map(|e| e.drain_surface_changes().collect())
+            .unwrap_or_default()
+    }
+
+    fn on_surface_created(
+        &mut self,
+        instance: &wgpu::Instance,
+        surface: byard_core::SurfaceId,
+        wgpu_surface: wgpu::Surface<'static>,
+        size: WindowSize,
+        transparent: bool,
+    ) -> Result<(), ByardError> {
+        let Some(engine) = self.engine.as_mut() else {
+            return Ok(());
+        };
+        if engine.has_surface() {
+            engine.add_surface(
+                surface,
+                wgpu_surface,
+                size.width,
+                size.height,
+                size.scale_factor,
+                transparent,
+            )?;
+        } else {
+            // The first window of the program is the engine's first surface.
+            pollster::block_on(engine.attach_first_surface(
+                instance,
+                surface,
+                wgpu_surface,
+                (size.width, size.height, size.scale_factor),
+                transparent,
+            ))?;
+        }
+        // The size the platform gave it, which the program draws it at.
+        self.push_resized(surface, size);
+        Ok(())
+    }
+
+    fn on_surface_destroyed(&mut self, surface: byard_core::SurfaceId) {
+        if let Some(engine) = self.engine.as_mut() {
+            engine.drop_surface(surface);
+        }
+    }
+
+    fn frame_version(&self, surface: byard_core::SurfaceId) -> Option<u64> {
+        self.engine
+            .as_ref()?
+            .latest_frame_for(surface)
+            .map(|f| f.version())
+    }
+
+    fn on_surface_close(&mut self, surface: byard_core::SurfaceId) {
+        self.push_on(
+            surface,
+            byard_core::EventKind::CloseRequest,
+            (0.0, 0.0),
+            (0.0, 0.0),
+            None,
+        );
+    }
+
+    fn on_redraw(&mut self, surface: byard_core::SurfaceId) -> Result<(), ByardError> {
+        let Some(engine) = self.engine.as_mut() else {
+            return Ok(());
+        };
+        if self.multi {
+            return engine.render_surface(surface);
+        }
+        engine.render_latest()?;
+        if let Some(trace) = self.trace.as_mut() {
+            let render = byard_core::telemetry::drain_samples();
+            trace.write_frame(engine.latest_cpu_telemetry().as_ref(), &render);
+        }
+        Ok(())
+    }
+
+    fn on_pointer_input(
+        &mut self,
+        surface: byard_core::SurfaceId,
+        button: PointerButton,
+        state: PointerState,
+        x: f32,
+        y: f32,
+    ) {
+        let kind = match state {
+            PointerState::Pressed => byard_core::EventKind::PointerDown,
+            PointerState::Released => byard_core::EventKind::PointerUp,
+        };
+        let payload =
+            (button == PointerButton::Right).then_some(byard_core::InputPayload::Bool(true));
+        self.push_on(surface, kind, (x, y), (0.0, 0.0), payload);
+    }
+
+    fn on_system_scheme(&mut self, dark: bool) {
+        self.push(
+            byard_core::EventKind::SystemScheme,
+            (0.0, 0.0),
+            (0.0, 0.0),
+            Some(byard_core::InputPayload::Bool(dark)),
+        );
+    }
+
+    fn on_cursor_moved(&mut self, surface: byard_core::SurfaceId, x: f32, y: f32) {
+        self.push_on(
+            surface,
+            byard_core::EventKind::PointerMove,
+            (x, y),
+            (0.0, 0.0),
+            None,
+        );
+    }
+
+    fn on_modifiers(&mut self, mods: byard_core::KeyModifiers) {
+        self.mods = mods;
+    }
+
+    fn on_window_focus(&mut self, surface: byard_core::SurfaceId, focused: bool) {
+        self.push_on(
+            surface,
+            byard_core::EventKind::WindowFocus,
+            (0.0, 0.0),
+            (0.0, 0.0),
+            Some(byard_core::InputPayload::Bool(focused)),
+        );
+    }
+
+    fn on_key(&mut self, surface: byard_core::SurfaceId, key: &str, pressed: bool) {
+        let kind = if pressed {
+            byard_core::EventKind::KeyDown
+        } else {
+            byard_core::EventKind::KeyUp
+        };
+        let payload = Some(byard_core::InputPayload::Key(key.to_string()));
+        self.push_on(surface, kind, (0.0, 0.0), (0.0, 0.0), payload);
+    }
+
+    fn on_text(&mut self, surface: byard_core::SurfaceId, text: &str) {
+        let payload = Some(byard_core::InputPayload::Key(text.to_string()));
+        self.push_on(
+            surface,
+            byard_core::EventKind::TextInput,
+            (0.0, 0.0),
+            (0.0, 0.0),
+            payload,
+        );
+    }
+
+    fn on_ime(&mut self, surface: byard_core::SurfaceId, event: byard_core::ImeEvent) {
+        if let (Some(engine), Some(mut input)) = (self.engine.as_ref(), event.into_input(now_ms()))
+        {
+            input.surface = surface;
+            engine.push_input(input);
+        }
+    }
+
+    fn text_input(
+        &self,
+        surface: byard_core::SurfaceId,
+    ) -> Option<byard_core::frame::TextInputState> {
+        let engine = self.engine.as_ref()?;
+        if self.multi {
+            engine.latest_frame_for(surface)?.text_input()
+        } else {
+            engine.text_input()
+        }
+    }
+
+    fn on_access_active(&mut self, active: bool) {
+        if let Some(engine) = self.engine.as_ref() {
+            engine.set_access_active(active);
+        }
+    }
+
+    fn access_frame(
+        &self,
+        surface: byard_core::SurfaceId,
+    ) -> Option<Arc<byard_core::frame::RenderFrame>> {
+        self.engine.as_ref()?.latest_frame_for(surface)
+    }
+
+    fn on_access_request(
+        &mut self,
+        surface: byard_core::SurfaceId,
+        request: byard_core::access::AccessRequest,
+    ) {
+        if let Some(engine) = self.engine.as_ref() {
+            engine.push_access_request_for(surface, &request, now_ms());
+        }
+    }
+
+    fn on_scroll(&mut self, surface: byard_core::SurfaceId, dx: f32, dy: f32, x: f32, y: f32) {
+        self.push_on(
+            surface,
+            byard_core::EventKind::Scroll,
+            (x, y),
+            (dx, dy),
+            None,
+        );
+    }
+
+    fn on_wheel(&mut self, surface: byard_core::SurfaceId, dx: f32, dy: f32, x: f32, y: f32) {
+        self.push_on(
+            surface,
+            byard_core::EventKind::Wheel,
+            (x, y),
+            (dx, dy),
+            None,
+        );
+    }
+}
+
+impl Host {
+    /// Everything that follows making the engine: the waker, the controllers,
+    /// the logic thread. The same for a program of one window, which has its
+    /// surface already, and for one of several, which has none yet.
+    fn begin(
+        &mut self,
+        mut engine: Engine,
+        waker: byard_core::relay::FrameWaker,
+        logical: (f32, f32),
+    ) -> Result<(), ByardError> {
+        engine.set_frame_waker(waker);
         self.width_bits
             .store(logical.0.to_bits(), Ordering::Relaxed);
         self.height_bits
@@ -655,6 +949,7 @@ impl PlatformHost for Host {
         let width_bits = Arc::clone(&self.width_bits);
         let height_bits = Arc::clone(&self.height_bits);
         let reloads = self.reloads.clone();
+        let title = self.title.clone();
 
         engine.start_logic_from_view(move |_arena| {
             let mut interp = Interpreter::new();
@@ -668,6 +963,10 @@ impl PlatformHost for Host {
                 interp.set_theme(theme);
             }
             interp.load_views(&views);
+            if byard_compiler::surfaces::surface_shape(&views).is_multi() {
+                interp.enable_surfaces();
+                interp.set_default_window_title(&title);
+            }
             let known: Vec<&str> = views.iter().map(|v| v.name.as_str()).collect();
             let root = byard_compiler::parser::ast::root_view(&views)
                 .expect("a program with no views is rejected before this");
@@ -697,123 +996,7 @@ impl PlatformHost for Host {
         Ok(())
     }
 
-    fn on_resize(&mut self, size: WindowSize) {
-        if let Some(engine) = self.engine.as_mut() {
-            engine.on_resize(size.width, size.height, size.scale_factor);
-            #[allow(clippy::cast_precision_loss, clippy::cast_possible_truncation)]
-            let w = size.width as f32 / size.scale_factor as f32;
-            #[allow(clippy::cast_precision_loss, clippy::cast_possible_truncation)]
-            let h = size.height as f32 / size.scale_factor as f32;
-            self.width_bits.store(w.to_bits(), Ordering::Relaxed);
-            self.height_bits.store(h.to_bits(), Ordering::Relaxed);
-        }
-    }
-
-    fn on_redraw(&mut self) -> Result<(), ByardError> {
-        let Some(engine) = self.engine.as_mut() else {
-            return Ok(());
-        };
-        engine.render_latest()?;
-        if let Some(trace) = self.trace.as_mut() {
-            let render = byard_core::telemetry::drain_samples();
-            trace.write_frame(engine.latest_cpu_telemetry().as_ref(), &render);
-        }
-        Ok(())
-    }
-
-    fn on_pointer_input(&mut self, button: PointerButton, state: PointerState, x: f32, y: f32) {
-        let kind = match state {
-            PointerState::Pressed => byard_core::EventKind::PointerDown,
-            PointerState::Released => byard_core::EventKind::PointerUp,
-        };
-        let payload =
-            (button == PointerButton::Right).then_some(byard_core::InputPayload::Bool(true));
-        self.push(kind, (x, y), (0.0, 0.0), payload);
-    }
-
-    fn on_system_scheme(&mut self, dark: bool) {
-        self.push(
-            byard_core::EventKind::SystemScheme,
-            (0.0, 0.0),
-            (0.0, 0.0),
-            Some(byard_core::InputPayload::Bool(dark)),
-        );
-    }
-
-    fn on_cursor_moved(&mut self, x: f32, y: f32) {
-        self.push(byard_core::EventKind::PointerMove, (x, y), (0.0, 0.0), None);
-    }
-
-    fn on_modifiers(&mut self, mods: byard_core::KeyModifiers) {
-        self.mods = mods;
-    }
-
-    fn on_window_focus(&mut self, focused: bool) {
-        self.push(
-            byard_core::EventKind::WindowFocus,
-            (0.0, 0.0),
-            (0.0, 0.0),
-            Some(byard_core::InputPayload::Bool(focused)),
-        );
-    }
-
-    fn on_key(&mut self, key: &str, pressed: bool) {
-        let kind = if pressed {
-            byard_core::EventKind::KeyDown
-        } else {
-            byard_core::EventKind::KeyUp
-        };
-        let payload = Some(byard_core::InputPayload::Key(key.to_string()));
-        self.push(kind, (0.0, 0.0), (0.0, 0.0), payload);
-    }
-
-    fn on_text(&mut self, text: &str) {
-        let payload = Some(byard_core::InputPayload::Key(text.to_string()));
-        self.push(
-            byard_core::EventKind::TextInput,
-            (0.0, 0.0),
-            (0.0, 0.0),
-            payload,
-        );
-    }
-
-    fn on_ime(&mut self, event: byard_core::ImeEvent) {
-        if let (Some(engine), Some(input)) = (self.engine.as_ref(), event.into_input(now_ms())) {
-            engine.push_input(input);
-        }
-    }
-
-    fn text_input(&self) -> Option<byard_core::frame::TextInputState> {
-        self.engine.as_ref().and_then(Engine::text_input)
-    }
-
-    fn on_access_active(&mut self, active: bool) {
-        if let Some(engine) = self.engine.as_ref() {
-            engine.set_access_active(active);
-        }
-    }
-
-    fn access_frame(&self) -> Option<Arc<byard_core::frame::RenderFrame>> {
-        self.engine.as_ref().and_then(Engine::latest_frame)
-    }
-
-    fn on_access_request(&mut self, request: byard_core::access::AccessRequest) {
-        if let Some(engine) = self.engine.as_ref() {
-            engine.push_access_request(&request, now_ms());
-        }
-    }
-
-    fn on_scroll(&mut self, dx: f32, dy: f32, x: f32, y: f32) {
-        self.push(byard_core::EventKind::Scroll, (x, y), (dx, dy), None);
-    }
-
-    fn on_wheel(&mut self, dx: f32, dy: f32, x: f32, y: f32) {
-        self.push(byard_core::EventKind::Wheel, (x, y), (dx, dy), None);
-    }
-}
-
-impl Host {
-    /// Forwards one OS event to the logic thread's queue.
+    /// Forwards one OS event of the main surface to the logic thread's queue.
     fn push(
         &self,
         kind: byard_core::EventKind,
@@ -821,9 +1004,37 @@ impl Host {
         delta: (f32, f32),
         payload: Option<byard_core::InputPayload>,
     ) {
+        self.push_on(byard_core::SurfaceId::MAIN, kind, pos, delta, payload);
+    }
+
+    /// Tells the program the size a surface now has, in logical pixels.
+    fn push_resized(&self, surface: byard_core::SurfaceId, size: WindowSize) {
+        #[allow(clippy::cast_precision_loss, clippy::cast_possible_truncation)]
+        let logical = (
+            size.width as f32 / size.scale_factor as f32,
+            size.height as f32 / size.scale_factor as f32,
+        );
+        self.push_on(
+            surface,
+            byard_core::EventKind::SurfaceResized,
+            logical,
+            (0.0, 0.0),
+            None,
+        );
+    }
+
+    /// Forwards one OS event of `surface` to the logic thread's queue.
+    fn push_on(
+        &self,
+        surface: byard_core::SurfaceId,
+        kind: byard_core::EventKind,
+        pos: (f32, f32),
+        delta: (f32, f32),
+        payload: Option<byard_core::InputPayload>,
+    ) {
         if let Some(engine) = self.engine.as_ref() {
             engine.push_input(InputEvent {
-                surface: byard_core::SurfaceId::MAIN,
+                surface,
                 kind,
                 pos,
                 delta,
@@ -900,6 +1111,16 @@ impl AppRuntime {
             }
             return;
         }
+        if byard_compiler::surfaces::surface_shape(&parsed.views).is_multi()
+            != self.interp.has_surfaces()
+        {
+            // The windows a program opens are decided when it starts.
+            eprintln!(
+                "  the edit adds or removes the program's `Window`s, which needs a restart; \
+                 the app keeps running the last program"
+            );
+            return;
+        }
         if let Some(mut theme) = parsed.theme.filter(|t| !t.same_tokens(&self.interp.theme)) {
             theme.active_dark = self.interp.theme.active_dark;
             self.interp.set_theme(theme);
@@ -940,6 +1161,25 @@ impl LogicRuntime for AppRuntime {
 
     fn wants_another_frame(&self) -> bool {
         self.interp.needs_another_frame() || self.reloaded.take()
+    }
+
+    fn multi_surface(&self) -> bool {
+        self.interp.has_surfaces()
+    }
+
+    fn evaluate_surfaces(
+        &mut self,
+        relay: &byard_core::relay::Relay,
+        input_events: &[InputEvent],
+    ) -> byard_core::relay::SurfaceTick {
+        self.follow();
+        self.interp.dispatch_events(input_events);
+        self.interp.tick();
+        let elapsed = u32::try_from(self.start.elapsed().as_millis()).unwrap_or(u32::MAX);
+        self.interp.set_now_ms(elapsed);
+        let tick = self.interp.render_surfaces_to(&self.tree, relay);
+        self.tell_new_errors();
+        tick
     }
 }
 
@@ -1006,6 +1246,15 @@ fn check_declared_views(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A program of windows loads: the host opens each of them (RFC-0068 §2),
+    /// where it used to stop with a diagnostic.
+    #[test]
+    fn a_program_of_windows_is_loaded_not_refused() {
+        let dir = Path::new(env!("CARGO_MANIFEST_DIR")).join("../byard-cli/examples/two_windows");
+        let program = load_program(&dir).expect("a program of windows loads");
+        assert!(byard_compiler::surfaces::surface_shape(&program.views).has_window);
+    }
 
     /// A project's icon is read and decoded when the app loads it; Aura
     /// Weather names one.

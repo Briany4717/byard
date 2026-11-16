@@ -270,8 +270,8 @@ fn a_slot_that_was_not_given_is_none_and_places_nothing() {
 #[test]
 fn the_trailing_block_and_named_slots_live_together() {
     let app = App::new(
-        "View Main() { Panel(head: { Text(\"H\") }) { Text(\"body\") } } \
-         View Panel(head: Slot, content) { Column { head content } }",
+        "View Main() { Pane(head: { Text(\"H\") }) { Text(\"body\") } } \
+         View Pane(head: Slot, content) { Column { head content } }",
     );
     assert_eq!(texts(&app), vec!["H", "body"]);
 }
@@ -287,7 +287,7 @@ fn content_can_be_tested_for_too() {
 
 #[test]
 fn a_required_slot_that_is_missing_is_a_missing_param() {
-    let errors = checked("View Main() { Panel() } View Panel(head: Slot) { Column { head } }");
+    let errors = checked("View Main() { Pane() } View Pane(head: Slot) { Column { head } }");
     assert!(
         errors.iter().any(|e| e.contains("MissingParam")),
         "{errors:?}"
@@ -297,13 +297,13 @@ fn a_required_slot_that_is_missing_is_a_missing_param() {
 #[test]
 fn a_value_for_a_slot_and_a_block_for_a_value_are_told() {
     let errors =
-        checked("View Main() { Panel(head: 3) } View Panel(head: Slot = none) { Column { head } }");
+        checked("View Main() { Pane(head: 3) } View Pane(head: Slot = none) { Column { head } }");
     assert!(
         errors.iter().any(|e| e.contains("SlotArgument")),
         "{errors:?}"
     );
     let errors = checked(
-        "View Main() { Panel(title: { Text(\"x\") }) } View Panel(title: Str) { Text(title) }",
+        "View Main() { Pane(title: { Text(\"x\") }) } View Pane(title: Str) { Text(title) }",
     );
     assert!(
         errors.iter().any(|e| e.contains("SlotArgument")),
@@ -1002,8 +1002,8 @@ fn a_package_qualified_view_in_a_block_is_a_slot() {
         "kit/icon.byd",
         "View Glyph(name: Str) { Text(name) }",
     )];
-    let source = "use kit as m\nView Main() { Panel(leading: { m.Glyph(\"wifi\") }) }\n\
-                  View Panel(leading: Slot = none) { Row { leading } }";
+    let source = "use kit as m\nView Main() { Pane(leading: { m.Glyph(\"wifi\") }) }\n\
+                  View Pane(leading: Slot = none) { Row { leading } }";
     let program = resolve_program(
         vec![SourceFile {
             name: "main.byd".into(),

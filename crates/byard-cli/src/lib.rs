@@ -203,6 +203,12 @@ enum Command {
         /// (or the picture); repeatable, in order with `--tap`.
         #[arg(long, value_name = "MS")]
         wait: Vec<u32>,
+        /// In a program with several windows (`Window`), the one to draw: its
+        /// `as` name, else its title. The taps and keys are for it too. A
+        /// program with one window draws it with no flag; with several, this
+        /// is required for a picture.
+        #[arg(long, value_name = "NAME")]
+        surface: Option<String>,
     },
     /// Run the project's scenario files, `tests/*.toml`, without a window or
     /// a GPU (RFC-0058).
@@ -426,7 +432,9 @@ pub fn main() {
             key,
             type_text,
             wait,
+            surface,
         } => commands::shot::run(&commands::shot::ShotArgs {
+            surface: surface.as_deref(),
             path: path.as_deref(),
             view: view.as_deref(),
             out: match (out.as_deref(), a11y.is_some()) {

@@ -1,0 +1,6 @@
+# A panel is a surface like a window (RFC-0068 §9): the dump starts it with its
+# namespace and the screen it is on.
+
+[[test]]
+name = "each panel starts with its own line"
+expect = ['Panel "bar" @ screen-1', 'Panel "clock" @ screen-1', 'Label "Hello from the bar"']

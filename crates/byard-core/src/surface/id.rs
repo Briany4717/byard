@@ -8,14 +8,16 @@
 //! - [`SurfaceId`], which surface an event, a frame or a change is about.
 //!   [`SurfaceId::MAIN`] is the one implicit window every program has today and
 //!   the only one anything creates yet.
-//! - [`SurfaceSpec`], what a surface is made of. Empty for now: the step that
-//!   adds `Window` fills it in.
+//! - [`SurfaceSpec`], what a surface is made of (a `Window`'s title, size,
+//!   bounds and flags).
 //! - [`SurfaceChange`], a request from the logic thread to the main thread to
 //!   create, reconfigure or destroy a surface, because only the main thread may
 //!   touch the platform's windows.
 //!
 //! None of it costs a single-surface program anything: `MAIN` is a constant, and
 //! the relay keeps its slot inline.
+
+use super::panel::{InputRegion, LayerSpec};
 
 /// Which surface something belongs to.
 ///
@@ -48,21 +50,117 @@ impl SurfaceId {
     }
 }
 
-/// What a surface is made of: its kind, its size, its title, everything the
-/// platform needs to create it.
+/// What kind of surface a [`SurfaceSpec`] describes.
 ///
-/// Empty today. The step that adds `Window` (RFC-0068 §2) gives it fields, and
-/// the type is `#[non_exhaustive]` so that does not break anything that already
-/// builds one with [`SurfaceSpec::new`].
-#[derive(Clone, Debug, Default, PartialEq)]
+/// A window or a panel; popups (RFC-0068 §7) will add their own.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 #[non_exhaustive]
-pub struct SurfaceSpec {}
+pub enum SurfaceKind {
+    /// A top-level window (RFC-0068 §2).
+    #[default]
+    Window,
+    /// A layer surface: a bar, a dock, a launcher (RFC-0068 §3). Its
+    /// [`SurfaceSpec::layer`] says how it is placed.
+    Panel,
+}
+
+/// What a surface is made of: its kind, its size, its title, everything the
+/// platform needs to create it (RFC-0068 §2).
+///
+/// Sizes are logical pixels. `width` and `height` are only the size the window
+/// opens at: after that the size is the user's, and the interpreter is told it
+/// through `Interpreter::set_surface_size`, never the other way round.
+/// `title`, the bounds, `resizable` and `decorations` are reactive, so a change
+/// of one arrives as a [`SurfaceChange::Configure`] with the whole spec.
+///
+/// `#[non_exhaustive]`: build one with [`SurfaceSpec::window`] and set the
+/// fields.
+// The flags are the ones a platform's window takes, each its own switch.
+#[allow(clippy::struct_excessive_bools)]
+#[derive(Clone, Debug, PartialEq)]
+#[non_exhaustive]
+pub struct SurfaceSpec {
+    /// What kind of surface it is.
+    pub kind: SurfaceKind,
+    /// The title bar and the task list.
+    pub title: String,
+    /// The name `byard shot --surface` and an extension find it by: the `as`
+    /// name when the element has one, else the title.
+    pub name: String,
+    /// The size it opens at, in logical pixels.
+    pub size: (f32, f32),
+    /// The smallest size a user may resize it to, per axis.
+    pub min_size: (Option<f32>, Option<f32>),
+    /// The largest size a user may resize it to, per axis.
+    pub max_size: (Option<f32>, Option<f32>),
+    /// Whether the user may resize it.
+    pub resizable: bool,
+    /// Whether the platform draws its title bar and borders.
+    pub decorations: bool,
+    /// Whether undrawn pixels show what is behind the window.
+    pub transparent: bool,
+    /// The layer-shell values of a [`SurfaceKind::Panel`]; `None` for a window.
+    /// For a panel, `size` is the size it asks for (0 on an axis the compositor
+    /// stretches), `name` its `as` name or its namespace, `title` its namespace,
+    /// and it is transparent, undecorated and not resizable.
+    pub layer: Option<LayerSpec>,
+    /// Whether the element has a `close =>`. Without one the platform's close
+    /// request ends the program, and a host may say so before it asks.
+    pub handles_close: bool,
+}
 
 impl SurfaceSpec {
-    /// A spec with nothing set.
+    /// The size a window opens at when it says nothing, the one the implicit
+    /// window has always had.
+    pub const DEFAULT_SIZE: (f32, f32) = (1280.0, 720.0);
+
+    /// A decorated, resizable, opaque window of the default size.
     #[must_use]
-    pub const fn new() -> Self {
-        Self {}
+    pub fn window(title: impl Into<String>) -> Self {
+        let title = title.into();
+        Self {
+            kind: SurfaceKind::Window,
+            name: title.clone(),
+            title,
+            size: Self::DEFAULT_SIZE,
+            min_size: (None, None),
+            max_size: (None, None),
+            resizable: true,
+            decorations: true,
+            transparent: false,
+            layer: None,
+            handles_close: false,
+        }
+    }
+
+    /// A panel of this namespace: transparent, undecorated, anchored nowhere,
+    /// of no size yet (the caller sets `size` and `layer`).
+    #[must_use]
+    pub fn panel(namespace: impl Into<String>) -> Self {
+        let namespace = namespace.into();
+        Self {
+            kind: SurfaceKind::Panel,
+            name: namespace.clone(),
+            title: namespace.clone(),
+            size: (0.0, 0.0),
+            resizable: false,
+            decorations: false,
+            transparent: true,
+            layer: Some(LayerSpec::new(namespace)),
+            ..Self::window(String::new())
+        }
+    }
+
+    /// A spec with nothing set: an untitled window.
+    #[must_use]
+    pub fn new() -> Self {
+        Self::window(String::new())
+    }
+}
+
+impl Default for SurfaceSpec {
+    fn default() -> Self {
+        Self::new()
     }
 }
 
@@ -94,6 +192,16 @@ pub enum SurfaceChange {
         /// The surface.
         id: SurfaceId,
     },
+    /// The part of a panel that takes the pointer changed (RFC-0068 §6): the
+    /// host sets the surface's input region to it, with `wl_surface.set_input_region`.
+    /// Sent only when it differs from the last one sent, after the frame that
+    /// moved it; never for a window.
+    InputRegion {
+        /// The surface.
+        id: SurfaceId,
+        /// The part of it that takes the pointer.
+        region: InputRegion,
+    },
 }
 
 impl SurfaceChange {
@@ -101,7 +209,10 @@ impl SurfaceChange {
     #[must_use]
     pub const fn id(&self) -> SurfaceId {
         match self {
-            Self::Create { id, .. } | Self::Configure { id, .. } | Self::Destroy { id } => *id,
+            Self::Create { id, .. }
+            | Self::Configure { id, .. }
+            | Self::Destroy { id }
+            | Self::InputRegion { id, .. } => *id,
         }
     }
 }

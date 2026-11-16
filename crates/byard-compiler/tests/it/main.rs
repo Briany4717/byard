@@ -93,6 +93,7 @@ mod typed_lambda_params;
 mod unknown_method;
 mod url_encoded;
 
+mod panels;
 mod unknown_name;
 mod user_views;
 mod variations;
@@ -100,3 +101,4 @@ mod watcher_files;
 mod wave2_fixes;
 mod wave3_fixes;
 mod window_and_roles;
+mod windows;

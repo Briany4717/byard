@@ -1,0 +1,60 @@
+// RFC-0068 §2, `Window`: one program, two windows, one state.
+//
+// Run it headlessly (from the repo root), one window at a time:
+//   cargo run -p byard-cli -- shot crates/byard-cli/examples/two_windows --surface counter -o counter.png
+//   cargo run -p byard-cli -- shot crates/byard-cli/examples/two_windows --surface inspector -o inspector.png
+//
+// The counter window and the inspector read the same `count`: a press in the
+// first changes what the second says. The inspector is open while `inspecting`
+// is true, and its own close button sets that to false (`close =>`); the
+// counter window has no `close =>`, so closing it ends the program.
+//
+// The taps and keys of `byard shot` are for the window it draws. `byard test`
+// runs the scenarios in tests/ (add `--shots DIR` for a picture of each window
+// at the end): a step that names an element finds it on whichever window it
+// is, and the accessibility dump starts each window with a `Window "title"`
+// line.
+View Main() {
+    var count = 0
+    var inspecting = true
+
+    Window #[title: "Counter", width: 360, height: 240] as counter {
+        Column #[p: 24, gap: 16, grow: 1, bg: 0xFFFBFE] {
+            Text("Counter") #[size: 20, weight: 600, color: 0x49454F]
+            Text("{count}") #[size: 56, weight: 700, color: 0x1D1B20]
+            Row #[gap: 8] {
+                Button("Add one") #[
+                    bg: 0x6750A4,
+                    color: 0xFFFFFF,
+                    width: 110,
+                    height: 40,
+                    radius: 20,
+                ] => count += 1
+                Button("Reset") #[
+                    bg: 0xE8DEF8,
+                    color: 0x1D1B20,
+                    width: 110,
+                    height: 40,
+                    radius: 20,
+                ] => count = 0
+            }
+            Button(inspecting ? "Hide the inspector" : "Show the inspector") #[color: 0x6750A4] => inspecting = !inspecting
+        }
+    }
+
+    when inspecting {
+        Window #[
+            title: "Inspector",
+            width: 300,
+            height: 200,
+            close => inspecting = false,
+        ] as inspector {
+            Column #[p: 24, gap: 12, grow: 1, bg: 0xECE6F0] {
+                Text("Inspector") #[size: 20, weight: 600, color: 0x49454F]
+                Text("The counter reads {count}") #[color: 0x1D1B20]
+                Text(count % 2 == 0 ? "That is even." : "That is odd.") #[color: 0x1D1B20]
+                Text(window.width) #[color: 0x625B71]
+            }
+        }
+    }
+}

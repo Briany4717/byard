@@ -64,6 +64,18 @@ pub fn run(opts: Options<'_>) -> Result<(), String> {
     // window. This covers the whole module graph (RFC-0008), not just the
     // entry file.
     let (program, provider) = resolve_project(&manifest).map_err(|e| e.to_string())?;
+    // Panels are layer surfaces, which the winit host cannot make: say so,
+    // rather than draw nothing (RFC-0068 step 3b).
+    let shape = byard_compiler::surfaces::surface_shape(&program.views);
+    if shape.has_panel {
+        return Err(
+            "this program writes `Panel`, and the Wayland shell backend that creates \
+                    layer surfaces is not part of this build yet (RFC-0068 step 3b); \
+                    `byard shot` and `byard test` run it headlessly"
+                .to_string(),
+        );
+    }
+    let multi = shape.is_multi();
 
     // The startup header is four facts, a rule, a result and a duration
     // (RFC-0030 §"Starting the dev runner"). Two of the facts, the adapter and
@@ -154,6 +166,8 @@ pub fn run(opts: Options<'_>) -> Result<(), String> {
         hud_telemetry: None,
         last_frame: std::time::Instant::now(),
         mods: byard_core::KeyModifiers::default(),
+        multi,
+        title: title.clone(),
     })
     .map_err(|e| format!("event loop error: {e}"))
 }
@@ -427,6 +441,16 @@ struct ByldRuntime {
     /// once the frame that mounts it has been reconciled, a stack nested in a
     /// tab is not there to receive anything before that.
     pending_deep_link: Option<String>,
+    /// Whether the program writes `Window`, as it did at startup: a reload
+    /// that changes it is not applied (it needs a restart).
+    multi: bool,
+    /// The window that has the keyboard, as the logic thread was told. The
+    /// dev runner's own surfaces (the error overlay, the HUD, the reload
+    /// flash) are drawn over it, since a window of several is where the
+    /// developer is looking; with none focused, over the first window.
+    focused: Option<byard_core::SurfaceId>,
+    /// The window the dev surfaces were drawn over last tick.
+    overlay_target: Option<byard_core::SurfaceId>,
 }
 
 impl ByldRuntime {
@@ -483,79 +507,25 @@ impl LogicRuntime for ByldRuntime {
         self.interp.needs_another_frame()
     }
 
+    fn multi_surface(&self) -> bool {
+        self.multi
+    }
+
+    fn evaluate_surfaces(
+        &mut self,
+        relay: &byard_core::relay::Relay,
+        input_events: &[byard_core::platform::InputEvent],
+    ) -> byard_core::relay::SurfaceTick {
+        self.evaluate_windows(relay, input_events)
+    }
+
     fn evaluate_tick(
         &mut self,
         frame: &mut RenderFrame,
         input_events: &[byard_core::platform::InputEvent],
         _dirty: &[TargetId],
     ) {
-        // ── Step 0: drain latest-wins reload channel (RFC-0006 §3.2 C3) ───────
-        if let Some(parsed) = self.reload_channel.take() {
-            if parsed.errors.is_empty() {
-                // A `[theme]` edit or a new seed image (RFC-0022): replaced
-                // before the views are lowered again, so they resolve their
-                // tokens against it. Only when it changed, since replacing
-                // it re-registers fonts and rebuilds the layout. The scheme
-                // the app is showing is kept: its signal outlives the swap.
-                if let Some(mut theme) = parsed.theme.filter(|t| !t.same_tokens(&self.interp.theme))
-                {
-                    theme.active_dark = self.interp.theme.active_dark;
-                    self.interp.set_theme(theme);
-                    self.wake_render_loop();
-                }
-                let pointer_pressed = self.interp.router.is_pointer_pressed();
-                // Classify the worst-case kind across all changed views.
-                let diffs = diff_program(&self.current_views, &parsed.views);
-                let worst =
-                    diffs
-                        .iter()
-                        .fold(ReloadKind::ReactiveCompatible, |acc, (_, r)| match r {
-                            ViewReload::Patch(ReloadKind::StructureIncompatible)
-                            | ViewReload::Added
-                            | ViewReload::Removed => ReloadKind::StructureIncompatible,
-                            ViewReload::Patch(ReloadKind::ReactiveCompatible) => acc,
-                        });
-                match gate(worst, pointer_pressed) {
-                    Gated::Apply => {
-                        self.apply_reload(&parsed.views, worst);
-                        // A reload changes the frame with no input behind it, so
-                        // an idle loop has to be told to present it.
-                        self.wake_render_loop();
-                    }
-                    Gated::Defer => {
-                        if self.pending_reload.defer(parsed.views, worst) {
-                            // The indicator appearing is itself a frame change
-                            // with no input behind it.
-                            self.wake_render_loop();
-                        }
-                    }
-                }
-            } else {
-                self.error_state = Some(parsed.errors);
-                self.wake_render_loop();
-            }
-        }
-
-        // ── Step 0b: apply deferred reload once pointer released ───────────────
-        let pressed = self.interp.router.is_pointer_pressed();
-        if let Some((new_views, kind)) = self.pending_reload.take_if_released(pressed) {
-            self.apply_reload(&new_views, kind);
-            self.wake_render_loop();
-        }
-
-        // ── Step 0c: invalidate hot-reloaded vector assets (RFC-0009 §3) ──────
-        // Drain every `.svg` change the watcher reported since the last tick and
-        // invalidate its MSDF field; the regenerated field reuses the same atlas
-        // cell, so the icon updates in place without remounting its `View`.
-        while let Ok(path) = self.asset_changes.try_recv() {
-            // A raster image is decoded again on the render thread, which
-            // owns the texture cache; a vector's field is regenerated here.
-            if byard_compiler::interp::reload::is_raster(&path) {
-                self.image_reloader.reload(path);
-            } else {
-                self.interp.invalidate_vector_asset(&path);
-            }
-        }
+        self.reload_steps();
 
         // ── Step 1: dispatch input events ─────────────────────────────────────
         self.interp.dispatch_events(input_events);
@@ -635,6 +605,183 @@ impl LogicRuntime for ByldRuntime {
 
         // ── Step 4: the dev-only surfaces (RFC-0030 §V3–§V4, §V6) ────────────
         self.render_dev_surfaces(frame, w, h, elapsed);
+    }
+}
+
+impl ByldRuntime {
+    /// One tick of a program with windows (RFC-0068): the steps of
+    /// `evaluate_tick`, each window drawn only if something in it changed, and
+    /// the dev surfaces over the window that has the keyboard.
+    fn evaluate_windows(
+        &mut self,
+        relay: &byard_core::relay::Relay,
+        input_events: &[byard_core::platform::InputEvent],
+    ) -> byard_core::relay::SurfaceTick {
+        use byard_core::platform::{EventKind, InputPayload};
+        self.reload_steps();
+        for ev in input_events {
+            if ev.kind == EventKind::WindowFocus {
+                if matches!(ev.payload, Some(InputPayload::Bool(true))) {
+                    self.focused = Some(ev.surface);
+                } else if self.focused == Some(ev.surface) {
+                    self.focused = None;
+                }
+            }
+        }
+        self.interp.dispatch_events(input_events);
+        self.interp.tick();
+        let elapsed = u32::try_from(self.start.elapsed().as_millis()).unwrap_or(u32::MAX);
+        self.interp.set_now_ms(elapsed);
+
+        // Where the dev surfaces go this tick, and which windows have to be
+        // drawn whole because they gained or lost them.
+        let ids = self.interp.surface_ids();
+        let target = self
+            .focused
+            .filter(|f| ids.contains(f))
+            .or_else(|| ids.first().copied());
+        let error_now = self.error_state.is_some();
+        let live = self.hud_visible.load(Ordering::Relaxed) || self.flash.is_active(elapsed);
+        let wanted = (error_now || live).then_some(target).flatten();
+        let mut whole = Vec::new();
+        if wanted != self.overlay_target || error_now != self.overlay_was_up {
+            whole.extend(self.overlay_target);
+            whole.extend(wanted);
+            self.overlay_target = wanted;
+            self.overlay_was_up = error_now;
+        }
+        for id in whole.iter().copied().chain(wanted.filter(|_| live)) {
+            self.interp.request_surface_paint(id);
+        }
+
+        let mut out = Vec::new();
+        self.interp
+            .render_surfaces(&self.tree, &mut || relay.acquire_recycled(), &mut out);
+        for (id, frame) in &mut out {
+            if whole.contains(id) {
+                frame.request_full_redraw();
+            }
+            if wanted == Some(*id) {
+                let (w, h) = self.interp.surface_size(*id).unwrap_or((0.0, 0.0));
+                if let Some(errors) = &self.error_state {
+                    frame.begin_layer();
+                    render_error_overlay(frame, errors, w, h);
+                }
+                self.render_dev_surfaces(frame, w, h, elapsed);
+            }
+        }
+        self.publish_animating(
+            self.interp.has_active_animations() || self.flash.is_active(elapsed),
+        );
+        if !error_now {
+            for warning in self.interp.perf_warnings() {
+                let text = perf_warning_text(warning);
+                if self.reported_perf.insert(text.clone()) {
+                    crate::style::warn(&text);
+                }
+            }
+            if let Some(url) = self.pending_deep_link.take() {
+                if self.interp.apply_deep_link(&url) {
+                    self.interp.tick();
+                    self.wake_render_loop();
+                } else {
+                    crate::style::warn(&format!(
+                        "no route matches the deep link `{url}`, ignoring it"
+                    ));
+                }
+            }
+        }
+        let tick = self.interp.publish_surfaces(out, relay);
+        if tick.painted > 0 {
+            // A frame with no input behind it (a reload, an overlay) is news
+            // for the render thread; a wake sent before it was published
+            // could have been spent on nothing.
+            self.wake_render_loop();
+        }
+        tick
+    }
+}
+
+impl ByldRuntime {
+    /// Steps 0 to 0c of a tick: what arrives from outside the program before
+    /// its input is dispatched, a re-read program, a deferred reload, a
+    /// changed asset.
+    fn reload_steps(&mut self) {
+        // ── Step 0: drain latest-wins reload channel (RFC-0006 §3.2 C3) ───────
+        if let Some(parsed) = self.reload_channel.take() {
+            if parsed.errors.is_empty()
+                && byard_compiler::surfaces::surface_shape(&parsed.views).is_multi() != self.multi
+            {
+                // The windows the program opens are decided when it starts.
+                crate::style::warn(
+                    "the edit adds or removes the program's `Window`s, which needs a restart; \
+                     the running program is kept",
+                );
+            } else if parsed.errors.is_empty() {
+                // A `[theme]` edit or a new seed image (RFC-0022): replaced
+                // before the views are lowered again, so they resolve their
+                // tokens against it. Only when it changed, since replacing
+                // it re-registers fonts and rebuilds the layout. The scheme
+                // the app is showing is kept: its signal outlives the swap.
+                if let Some(mut theme) = parsed.theme.filter(|t| !t.same_tokens(&self.interp.theme))
+                {
+                    theme.active_dark = self.interp.theme.active_dark;
+                    self.interp.set_theme(theme);
+                    self.wake_render_loop();
+                }
+                let pointer_pressed = self.interp.router.is_pointer_pressed();
+                // Classify the worst-case kind across all changed views.
+                let diffs = diff_program(&self.current_views, &parsed.views);
+                let worst =
+                    diffs
+                        .iter()
+                        .fold(ReloadKind::ReactiveCompatible, |acc, (_, r)| match r {
+                            ViewReload::Patch(ReloadKind::StructureIncompatible)
+                            | ViewReload::Added
+                            | ViewReload::Removed => ReloadKind::StructureIncompatible,
+                            ViewReload::Patch(ReloadKind::ReactiveCompatible) => acc,
+                        });
+                match gate(worst, pointer_pressed) {
+                    Gated::Apply => {
+                        self.apply_reload(&parsed.views, worst);
+                        // A reload changes the frame with no input behind it, so
+                        // an idle loop has to be told to present it.
+                        self.wake_render_loop();
+                    }
+                    Gated::Defer => {
+                        if self.pending_reload.defer(parsed.views, worst) {
+                            // The indicator appearing is itself a frame change
+                            // with no input behind it.
+                            self.wake_render_loop();
+                        }
+                    }
+                }
+            } else {
+                self.error_state = Some(parsed.errors);
+                self.wake_render_loop();
+            }
+        }
+
+        // ── Step 0b: apply deferred reload once pointer released ───────────────
+        let pressed = self.interp.router.is_pointer_pressed();
+        if let Some((new_views, kind)) = self.pending_reload.take_if_released(pressed) {
+            self.apply_reload(&new_views, kind);
+            self.wake_render_loop();
+        }
+
+        // ── Step 0c: invalidate hot-reloaded vector assets (RFC-0009 §3) ──────
+        // Drain every `.svg` change the watcher reported since the last tick and
+        // invalidate its MSDF field; the regenerated field reuses the same atlas
+        // cell, so the icon updates in place without remounting its `View`.
+        while let Ok(path) = self.asset_changes.try_recv() {
+            // A raster image is decoded again on the render thread, which
+            // owns the texture cache; a vector's field is regenerated here.
+            if byard_compiler::interp::reload::is_raster(&path) {
+                self.image_reloader.reload(path);
+            } else {
+                self.interp.invalidate_vector_asset(&path);
+            }
+        }
     }
 }
 
@@ -936,6 +1083,11 @@ struct App {
     /// The modifier keys held now, stamped onto the key and pointer events
     /// this host creates (RFC-0041 §2).
     mods: byard_core::KeyModifiers,
+    /// Whether the program writes `Window` (RFC-0068): each window is a surface
+    /// of the engine, drawn and fed input on its own.
+    multi: bool,
+    /// The title a window with no `title` has.
+    title: String,
 }
 
 impl App {
@@ -982,6 +1134,174 @@ impl App {
         // a structure-incompatible reload.
         std::mem::forget(watcher);
         Ok((reload_channel, asset_rx))
+    }
+
+    /// Everything that follows making the engine except the startup header:
+    /// the watcher, the logic thread, the counters. The same for a program of
+    /// one window and for one of several, which has no surface yet.
+    #[allow(clippy::too_many_lines, reason = "the whole start of a dev session")]
+    fn begin(
+        &mut self,
+        mut engine: Engine,
+        waker: byard_core::relay::FrameWaker,
+        logical: (f32, f32),
+    ) -> Result<(), ByardError> {
+        let (w, h) = logical;
+        let width_bits = Arc::new(AtomicU32::new(w.to_bits()));
+        let height_bits = Arc::new(AtomicU32::new(h.to_bits()));
+        let w_clone = Arc::clone(&width_bits);
+        let h_clone = Arc::clone(&height_bits);
+        // Seeded `true` so the first frames are always drawn; the logic thread
+        // takes over the moment it has rendered once.
+        let animating = Arc::new(AtomicBool::new(true));
+        let animating_logic = Arc::clone(&animating);
+        let reloads_logic = Arc::clone(&self.reloads);
+        let reload_pending_logic = Arc::clone(&self.reload_pending);
+        let hud_visible_logic = Arc::clone(&self.hud_visible);
+        // Bounded at one, latest-wins: the HUD wants the newest reading, and a
+        // queue of stale ones would only delay it.
+        let (hud_tx, hud_rx) = crossbeam_channel::bounded(1);
+        self.hud_telemetry = Some(hud_tx);
+
+        let (reload_channel, asset_rx) = self.start_file_watcher()?;
+
+        let initial_views = self.initial_views.clone();
+        let initial_theme = self.initial_theme.clone();
+        let initial_errors = if self.initial_errors.is_empty() {
+            None
+        } else {
+            Some(self.initial_errors.clone())
+        };
+        // Seeded to match, so a session that starts broken does not spend its
+        // first frame asking for a redraw it does not need, and a session that
+        // starts clean still gets one the moment it breaks.
+        let initial_errors_present = initial_errors.is_some();
+
+        // `byard dev` runs in Poll mode (redraws every iteration for hot-reload),
+        // so the waker is not strictly required, installing it is still correct
+        // and makes input-driven redraws prompt if the mode ever changes.
+        // The logic thread keeps its own handle: the relay only wakes on an
+        // input-bearing tick, and a hot reload (or an animation starting from a
+        // non-input source) also has to reach a sleeping loop.
+        let waker_for_logic = waker.clone();
+        engine.set_frame_waker(waker);
+
+        // RFC-0009 §2-C: the render thread reports which vector-atlas
+        // uploads it actually applied through this channel, so the dev JIT
+        // cache (on the logic thread) knows when to stop re-sending one.
+        let (vector_ack_tx, vector_ack_rx) = crossbeam_channel::unbounded();
+        engine.set_vector_ack_sender(vector_ack_tx);
+        let vector_cache_dir = self.vector_cache_dir.clone();
+        let deep_link = self.deep_link.clone();
+        // RFC-0028 §3: the capabilities a `.byd` file may `inject`, bundled
+        // with the pool that runs them and the channel their replies come back
+        // on. Built here, on the main thread, because it has to be `Send` into
+        // the logic-thread factory below and cannot be built inside it.
+        let dispatcher = engine.dispatcher(self.capabilities());
+        let image_reloader = engine.image_reloader();
+        let (multi, title) = (self.multi, self.title.clone());
+
+        engine.start_logic_from_view(move |_arena| {
+            let (mut interp, tree, current_views) = if initial_views.is_empty() {
+                let mut interp = Interpreter::new();
+                interp.set_dispatcher(dispatcher);
+                interp.set_theme(initial_theme);
+                if multi {
+                    interp.enable_surfaces();
+                    interp.set_default_window_title(&title);
+                }
+                (interp, vec![], vec![])
+            } else {
+                let mut interp = Interpreter::new();
+                // Both of these provide ambient values, and both must land
+                // before lowering: `inject` resolves against the ambient chain
+                // at lower time, so anything provided afterwards is invisible
+                // to the view that asked for it (RFC-0022, RFC-0028 §3).
+                interp.set_dispatcher(dispatcher);
+                interp.set_theme(initial_theme);
+                interp.load_views(&initial_views);
+                if multi {
+                    interp.enable_surfaces();
+                    interp.set_default_window_title(&title);
+                }
+                let known: Vec<&str> = initial_views.iter().map(|v| v.name.as_str()).collect();
+                let tree = interp.lower_view(root_of(&initial_views), &known);
+                interp.tick();
+                (interp, tree, initial_views)
+            };
+            // Copy, cut and paste in a `TextField` (RFC-0041 §3). Opens nothing
+            // until the first of them is used.
+            interp.set_clipboard(Box::new(byard_platform::SystemClipboard::new()));
+            interp.set_vector_ack_receiver(vector_ack_rx);
+            interp.set_vector_cache_dir(vector_cache_dir);
+
+            Box::new(ByldRuntime {
+                interp,
+                tree,
+                current_views,
+                reload_channel,
+                asset_changes: asset_rx,
+                image_reloader,
+                pending_reload: PendingReload::new(reload_pending_logic),
+                error_state: initial_errors,
+                width_bits: w_clone,
+                height_bits: h_clone,
+                start: std::time::Instant::now(),
+                reported_perf: std::collections::HashSet::new(),
+                reload_count: 0,
+                reloads_pub: reloads_logic,
+                animating: animating_logic,
+                waker: waker_for_logic,
+                flash: ReloadFlash::default(),
+                // Built here rather than handed in: the HUD owns an
+                // `Interpreter`, which is `!Send` by design (RFC-0001 §5), so
+                // it is constructed on the thread that will drive it. A HUD
+                // that fails to parse is a defect in *this* repository, so it
+                // is reported once and the session continues without it, a
+                // developer should never lose their dev runner to a broken
+                // diagnostic.
+                hud: match crate::hud::DevHud::new() {
+                    Ok(hud) => Some(hud),
+                    Err(e) => {
+                        crate::style::warn(&format!("the in-window HUD is unavailable: {e}"));
+                        None
+                    }
+                },
+                hud_visible: hud_visible_logic,
+                hud_telemetry: hud_rx,
+                overlay_was_up: initial_errors_present,
+                pending_deep_link: deep_link,
+                multi,
+                focused: None,
+                overlay_target: None,
+            })
+        })?;
+
+        self.engine = Some(engine);
+        self.width_bits = Some(width_bits);
+        self.height_bits = Some(height_bits);
+        self.animating = Some(animating);
+        Ok(())
+    }
+
+    /// The startup header and the statusline, which need the display's
+    /// refresh rate and so the first window (RFC-0030 §Q3).
+    fn finish(&mut self, refresh_rate_mhz: Option<u32>) {
+        // RFC-0030 §Q3/§V2: the budget is the display's refresh interval unless
+        // `[dev] frame_budget` pinned one, and it is printed in the startup
+        // header so it is never ambiguous which number a bar is drawn against.
+        let (budget_ns, budget_source) = resolve_budget(&self.dev, refresh_rate_mhz);
+        if let Some(header) = self.header.take() {
+            if let Some(engine) = self.engine.as_ref() {
+                header.print(budget_ns, budget_source, engine);
+            }
+        }
+
+        let mut statusline = StatusLine::new(self.dev.statusline, budget_ns);
+        if self.want_profile {
+            statusline.set_profile(true);
+        }
+        self.statusline = Some(statusline);
     }
 
     /// The non-TTY fallback for the statusline: **one plain line** per second
@@ -1187,190 +1507,27 @@ impl Header {
     }
 }
 
-impl PlatformHost for App {
-    fn on_resume(
-        &mut self,
-        instance: &wgpu::Instance,
-        surface: wgpu::Surface<'static>,
-        size: WindowSize,
-        waker: byard_core::relay::FrameWaker,
-    ) -> Result<(), ByardError> {
-        let (w, h) = logical_size(size);
-        let width_bits = Arc::new(AtomicU32::new(w.to_bits()));
-        let height_bits = Arc::new(AtomicU32::new(h.to_bits()));
-        let w_clone = Arc::clone(&width_bits);
-        let h_clone = Arc::clone(&height_bits);
-        // Seeded `true` so the first frames are always drawn; the logic thread
-        // takes over the moment it has rendered once.
-        let animating = Arc::new(AtomicBool::new(true));
-        let animating_logic = Arc::clone(&animating);
-        let reloads_logic = Arc::clone(&self.reloads);
-        let reload_pending_logic = Arc::clone(&self.reload_pending);
-        let hud_visible_logic = Arc::clone(&self.hud_visible);
-        // Bounded at one, latest-wins: the HUD wants the newest reading, and a
-        // queue of stale ones would only delay it.
-        let (hud_tx, hud_rx) = crossbeam_channel::bounded(1);
-        self.hud_telemetry = Some(hud_tx);
-
-        let (reload_channel, asset_rx) = self.start_file_watcher()?;
-
-        let initial_views = self.initial_views.clone();
-        let initial_theme = self.initial_theme.clone();
-        let initial_errors = if self.initial_errors.is_empty() {
-            None
-        } else {
-            Some(self.initial_errors.clone())
-        };
-        // Seeded to match, so a session that starts broken does not spend its
-        // first frame asking for a redraw it does not need, and a session that
-        // starts clean still gets one the moment it breaks.
-        let initial_errors_present = initial_errors.is_some();
-
-        let mut engine = pollster::block_on(Engine::init(
-            instance,
-            surface,
-            size.width,
-            size.height,
-            size.scale_factor,
-        ))?;
-        // `byard dev` runs in Poll mode (redraws every iteration for hot-reload),
-        // so the waker is not strictly required, installing it is still correct
-        // and makes input-driven redraws prompt if the mode ever changes.
-        // The logic thread keeps its own handle: the relay only wakes on an
-        // input-bearing tick, and a hot reload (or an animation starting from a
-        // non-input source) also has to reach a sleeping loop.
-        let waker_for_logic = waker.clone();
-        engine.set_frame_waker(waker);
-
-        // RFC-0009 §2-C: the render thread reports which vector-atlas
-        // uploads it actually applied through this channel, so the dev JIT
-        // cache (on the logic thread) knows when to stop re-sending one.
-        let (vector_ack_tx, vector_ack_rx) = crossbeam_channel::unbounded();
-        engine.set_vector_ack_sender(vector_ack_tx);
-        let vector_cache_dir = self.vector_cache_dir.clone();
-        let deep_link = self.deep_link.clone();
-        // RFC-0028 §3: the capabilities a `.byd` file may `inject`, bundled
-        // with the pool that runs them and the channel their replies come back
-        // on. Built here, on the main thread, because it has to be `Send` into
-        // the logic-thread factory below and cannot be built inside it.
-        let dispatcher = engine.dispatcher(self.capabilities());
-        let image_reloader = engine.image_reloader();
-
-        engine.start_logic_from_view(move |_arena| {
-            let (mut interp, tree, current_views) = if initial_views.is_empty() {
-                let mut interp = Interpreter::new();
-                interp.set_dispatcher(dispatcher);
-                interp.set_theme(initial_theme);
-                (interp, vec![], vec![])
-            } else {
-                let mut interp = Interpreter::new();
-                // Both of these provide ambient values, and both must land
-                // before lowering: `inject` resolves against the ambient chain
-                // at lower time, so anything provided afterwards is invisible
-                // to the view that asked for it (RFC-0022, RFC-0028 §3).
-                interp.set_dispatcher(dispatcher);
-                interp.set_theme(initial_theme);
-                interp.load_views(&initial_views);
-                let known: Vec<&str> = initial_views.iter().map(|v| v.name.as_str()).collect();
-                let tree = interp.lower_view(root_of(&initial_views), &known);
-                interp.tick();
-                (interp, tree, initial_views)
-            };
-            // Copy, cut and paste in a `TextField` (RFC-0041 §3). Opens nothing
-            // until the first of them is used.
-            interp.set_clipboard(Box::new(byard_platform::SystemClipboard::new()));
-            interp.set_vector_ack_receiver(vector_ack_rx);
-            interp.set_vector_cache_dir(vector_cache_dir);
-
-            Box::new(ByldRuntime {
-                interp,
-                tree,
-                current_views,
-                reload_channel,
-                asset_changes: asset_rx,
-                image_reloader,
-                pending_reload: PendingReload::new(reload_pending_logic),
-                error_state: initial_errors,
-                width_bits: w_clone,
-                height_bits: h_clone,
-                start: std::time::Instant::now(),
-                reported_perf: std::collections::HashSet::new(),
-                reload_count: 0,
-                reloads_pub: reloads_logic,
-                animating: animating_logic,
-                waker: waker_for_logic,
-                flash: ReloadFlash::default(),
-                // Built here rather than handed in: the HUD owns an
-                // `Interpreter`, which is `!Send` by design (RFC-0001 §5), so
-                // it is constructed on the thread that will drive it. A HUD
-                // that fails to parse is a defect in *this* repository, so it
-                // is reported once and the session continues without it, a
-                // developer should never lose their dev runner to a broken
-                // diagnostic.
-                hud: match crate::hud::DevHud::new() {
-                    Ok(hud) => Some(hud),
-                    Err(e) => {
-                        crate::style::warn(&format!("the in-window HUD is unavailable: {e}"));
-                        None
-                    }
-                },
-                hud_visible: hud_visible_logic,
-                hud_telemetry: hud_rx,
-                overlay_was_up: initial_errors_present,
-                pending_deep_link: deep_link,
-            })
-        })?;
-
-        // RFC-0030 §Q3/§V2: the budget is the display's refresh interval unless
-        // `[dev] frame_budget` pinned one, and it is printed in the startup
-        // header so it is never ambiguous which number a bar is drawn against.
-        let (budget_ns, budget_source) = resolve_budget(&self.dev, size.refresh_rate_mhz);
-        if let Some(header) = self.header.take() {
-            header.print(budget_ns, budget_source, &engine);
+impl App {
+    /// Tells the program the size a window now has, in logical pixels.
+    fn push_resized(&self, surface: byard_core::SurfaceId, size: WindowSize) {
+        if let Some(engine) = &self.engine {
+            let (w, h) = logical_size(size);
+            engine.push_input(byard_core::platform::InputEvent {
+                surface,
+                kind: byard_core::platform::EventKind::SurfaceResized,
+                pos: (w, h),
+                delta: (0.0, 0.0),
+                payload: None,
+                time_ms: now_ms(),
+                mods: self.mods,
+            });
         }
-
-        let mut statusline = StatusLine::new(self.dev.statusline, budget_ns);
-        if self.want_profile {
-            statusline.set_profile(true);
-        }
-        self.statusline = Some(statusline);
-
-        self.engine = Some(engine);
-        self.width_bits = Some(width_bits);
-        self.height_bits = Some(height_bits);
-        self.animating = Some(animating);
-        Ok(())
     }
 
-    /// RFC-0010's active set, read from the logic thread's published flag: while
-    /// something is animating the loop keeps requesting frames, and once
-    /// everything has settled it sleeps until the next input, file save or
-    /// published frame. Before the first render (`None`) it keeps spinning.
-    fn wants_frames(&self) -> bool {
-        self.animating
-            .as_ref()
-            .is_none_or(|flag| flag.load(Ordering::Relaxed))
-    }
-
-    fn on_resize(&mut self, size: WindowSize) {
+    /// What follows every presented frame: the telemetry, the statusline, the
+    /// trace and the HUD's reading.
+    fn after_render(&mut self) {
         if let Some(e) = self.engine.as_mut() {
-            e.on_resize(size.width, size.height, size.scale_factor);
-            #[allow(clippy::cast_precision_loss, clippy::cast_possible_truncation)]
-            let w = size.width as f32 / size.scale_factor as f32;
-            #[allow(clippy::cast_precision_loss, clippy::cast_possible_truncation)]
-            let h = size.height as f32 / size.scale_factor as f32;
-            if let Some(b) = &self.width_bits {
-                b.store(w.to_bits(), Ordering::Relaxed);
-            }
-            if let Some(b) = &self.height_bits {
-                b.store(h.to_bits(), Ordering::Relaxed);
-            }
-        }
-    }
-
-    fn on_redraw(&mut self) -> Result<(), ByardError> {
-        if let Some(e) = self.engine.as_mut() {
-            e.render_latest()?;
             // Drained every redraw (see `last_render_telemetry`'s doc comment),
             // independent of any print throttle.
             self.last_render_telemetry = byard_core::telemetry::drain_samples();
@@ -1437,7 +1594,161 @@ impl PlatformHost for App {
                 );
             }
         }
+    }
+}
+
+impl PlatformHost for App {
+    fn is_multi_surface(&self) -> bool {
+        self.multi
+    }
+
+    fn on_resume(
+        &mut self,
+        instance: &wgpu::Instance,
+        surface: wgpu::Surface<'static>,
+        size: WindowSize,
+        waker: byard_core::relay::FrameWaker,
+    ) -> Result<(), ByardError> {
+        let engine = pollster::block_on(Engine::init(
+            instance,
+            surface,
+            size.width,
+            size.height,
+            size.scale_factor,
+        ))?;
+        self.begin(engine, waker, logical_size(size))?;
+        self.finish(size.refresh_rate_mhz);
         Ok(())
+    }
+
+    fn on_start(&mut self, waker: byard_core::relay::FrameWaker) -> Result<(), ByardError> {
+        let engine = Engine::without_surface()?;
+        self.begin(engine, waker, (0.0, 0.0))
+    }
+
+    /// RFC-0010's active set, read from the logic thread's published flag: while
+    /// something is animating the loop keeps requesting frames, and once
+    /// everything has settled it sleeps until the next input, file save or
+    /// published frame. Before the first render (`None`) it keeps spinning.
+    fn wants_frames(&self) -> bool {
+        self.animating
+            .as_ref()
+            .is_none_or(|flag| flag.load(Ordering::Relaxed))
+    }
+
+    fn on_resize(&mut self, surface: byard_core::SurfaceId, size: WindowSize) {
+        if self.multi {
+            if let Some(e) = self.engine.as_mut() {
+                e.resize_surface(surface, size.width, size.height, size.scale_factor);
+            }
+            self.push_resized(surface, size);
+            return;
+        }
+        if let Some(e) = self.engine.as_mut() {
+            e.on_resize(size.width, size.height, size.scale_factor);
+            #[allow(clippy::cast_precision_loss, clippy::cast_possible_truncation)]
+            let w = size.width as f32 / size.scale_factor as f32;
+            #[allow(clippy::cast_precision_loss, clippy::cast_possible_truncation)]
+            let h = size.height as f32 / size.scale_factor as f32;
+            if let Some(b) = &self.width_bits {
+                b.store(w.to_bits(), Ordering::Relaxed);
+            }
+            if let Some(b) = &self.height_bits {
+                b.store(h.to_bits(), Ordering::Relaxed);
+            }
+        }
+    }
+
+    fn on_redraw(&mut self, surface: byard_core::SurfaceId) -> Result<(), ByardError> {
+        if self.multi {
+            return self.on_redraw_round(&[surface]);
+        }
+        if let Some(e) = self.engine.as_mut() {
+            e.render_latest()?;
+        }
+        self.after_render();
+        Ok(())
+    }
+
+    fn on_redraw_round(&mut self, surfaces: &[byard_core::SurfaceId]) -> Result<(), ByardError> {
+        if let Some(e) = self.engine.as_mut() {
+            e.render_surfaces(surfaces)?;
+        }
+        self.after_render();
+        Ok(())
+    }
+
+    fn take_surface_changes(&mut self) -> Vec<byard_core::SurfaceChange> {
+        self.engine
+            .as_ref()
+            .map(|e| e.drain_surface_changes().collect())
+            .unwrap_or_default()
+    }
+
+    fn on_surface_created(
+        &mut self,
+        instance: &wgpu::Instance,
+        surface: byard_core::SurfaceId,
+        wgpu_surface: wgpu::Surface<'static>,
+        size: WindowSize,
+        transparent: bool,
+    ) -> Result<(), ByardError> {
+        let mut first = false;
+        if let Some(e) = self.engine.as_mut() {
+            if e.has_surface() {
+                e.add_surface(
+                    surface,
+                    wgpu_surface,
+                    size.width,
+                    size.height,
+                    size.scale_factor,
+                    transparent,
+                )?;
+            } else {
+                // The first window of the program is the engine's first
+                // surface, and what the header can say about the device.
+                pollster::block_on(e.attach_first_surface(
+                    instance,
+                    surface,
+                    wgpu_surface,
+                    (size.width, size.height, size.scale_factor),
+                    transparent,
+                ))?;
+                first = true;
+            }
+        }
+        if first {
+            self.finish(size.refresh_rate_mhz);
+        }
+        self.push_resized(surface, size);
+        Ok(())
+    }
+
+    fn on_surface_destroyed(&mut self, surface: byard_core::SurfaceId) {
+        if let Some(e) = self.engine.as_mut() {
+            e.drop_surface(surface);
+        }
+    }
+
+    fn frame_version(&self, surface: byard_core::SurfaceId) -> Option<u64> {
+        self.engine
+            .as_ref()?
+            .latest_frame_for(surface)
+            .map(|f| f.version())
+    }
+
+    fn on_surface_close(&mut self, surface: byard_core::SurfaceId) {
+        if let Some(engine) = &self.engine {
+            engine.push_input(byard_core::platform::InputEvent {
+                surface,
+                kind: byard_core::platform::EventKind::CloseRequest,
+                pos: (0.0, 0.0),
+                delta: (0.0, 0.0),
+                payload: None,
+                time_ms: now_ms(),
+                mods: self.mods,
+            });
+        }
     }
 
     /// Dev chords, consumed before the router ever sees them (RFC-0030 §V3).
@@ -1445,7 +1756,13 @@ impl PlatformHost for App {
     /// A chord that reached `dispatch_events` would be indistinguishable from
     /// the user typing into the app under test, which is exactly why it is a
     /// `Mod+Shift` chord and not a bare function key (§Q1).
-    fn on_chord(&mut self, key: &str, pressed: bool, mods: byard_core::KeyModifiers) -> bool {
+    fn on_chord(
+        &mut self,
+        surface: byard_core::SurfaceId,
+        key: &str,
+        pressed: bool,
+        mods: byard_core::KeyModifiers,
+    ) -> bool {
         if !mods.is_dev_chord() {
             return false;
         }
@@ -1473,7 +1790,7 @@ impl PlatformHost for App {
                 // frame that mounts or dismisses the HUD has to be asked for.
                 if let Some(e) = self.engine.as_ref() {
                     e.push_input(byard_core::platform::InputEvent {
-                        surface: byard_core::SurfaceId::MAIN,
+                        surface,
                         kind: byard_core::platform::EventKind::PointerMove,
                         pos: (-1.0, -1.0),
                         delta: (0.0, 0.0),
@@ -1488,7 +1805,14 @@ impl PlatformHost for App {
         false
     }
 
-    fn on_pointer_input(&mut self, button: PointerButton, state: PointerState, x: f32, y: f32) {
+    fn on_pointer_input(
+        &mut self,
+        surface: byard_core::SurfaceId,
+        button: PointerButton,
+        state: PointerState,
+        x: f32,
+        y: f32,
+    ) {
         if let Some(engine) = &self.engine {
             let kind = match state {
                 PointerState::Pressed => byard_core::platform::EventKind::PointerDown,
@@ -1501,7 +1825,7 @@ impl PlatformHost for App {
             let payload = (button == PointerButton::Right)
                 .then_some(byard_core::platform::InputPayload::Bool(true));
             engine.push_input(byard_core::platform::InputEvent {
-                surface: byard_core::SurfaceId::MAIN,
+                surface,
                 kind,
                 pos: (x, y),
                 delta: (0.0, 0.0),
@@ -1512,10 +1836,10 @@ impl PlatformHost for App {
         }
     }
 
-    fn on_cursor_moved(&mut self, x: f32, y: f32) {
+    fn on_cursor_moved(&mut self, surface: byard_core::SurfaceId, x: f32, y: f32) {
         if let Some(engine) = &self.engine {
             engine.push_input(byard_core::platform::InputEvent {
-                surface: byard_core::SurfaceId::MAIN,
+                surface,
                 kind: byard_core::platform::EventKind::PointerMove,
                 pos: (x, y),
                 delta: (0.0, 0.0),
@@ -1530,10 +1854,10 @@ impl PlatformHost for App {
         self.mods = mods;
     }
 
-    fn on_window_focus(&mut self, focused: bool) {
+    fn on_window_focus(&mut self, surface: byard_core::SurfaceId, focused: bool) {
         if let Some(engine) = &self.engine {
             engine.push_input(byard_core::platform::InputEvent {
-                surface: byard_core::SurfaceId::MAIN,
+                surface,
                 kind: byard_core::platform::EventKind::WindowFocus,
                 pos: (0.0, 0.0),
                 delta: (0.0, 0.0),
@@ -1558,7 +1882,7 @@ impl PlatformHost for App {
         }
     }
 
-    fn on_key(&mut self, key: &str, pressed: bool) {
+    fn on_key(&mut self, surface: byard_core::SurfaceId, key: &str, pressed: bool) {
         if let Some(engine) = &self.engine {
             let kind = if pressed {
                 byard_core::platform::EventKind::KeyDown
@@ -1569,7 +1893,7 @@ impl PlatformHost for App {
             // handling off this payload, dropping it here silently
             // breaks both, since every key would otherwise look identical.
             engine.push_input(byard_core::platform::InputEvent {
-                surface: byard_core::SurfaceId::MAIN,
+                surface,
                 kind,
                 pos: (0.0, 0.0),
                 delta: (0.0, 0.0),
@@ -1580,10 +1904,10 @@ impl PlatformHost for App {
         }
     }
 
-    fn on_text(&mut self, text: &str) {
+    fn on_text(&mut self, surface: byard_core::SurfaceId, text: &str) {
         if let Some(engine) = &self.engine {
             engine.push_input(byard_core::platform::InputEvent {
-                surface: byard_core::SurfaceId::MAIN,
+                surface,
                 kind: byard_core::platform::EventKind::TextInput,
                 pos: (0.0, 0.0),
                 delta: (0.0, 0.0),
@@ -1594,16 +1918,23 @@ impl PlatformHost for App {
         }
     }
 
-    fn on_ime(&mut self, event: byard_core::platform::ImeEvent) {
-        if let (Some(engine), Some(input)) = (&self.engine, event.into_input(now_ms())) {
+    fn on_ime(&mut self, surface: byard_core::SurfaceId, event: byard_core::platform::ImeEvent) {
+        if let (Some(engine), Some(mut input)) = (&self.engine, event.into_input(now_ms())) {
+            input.surface = surface;
             engine.push_input(input);
         }
     }
 
-    fn text_input(&self) -> Option<byard_core::frame::TextInputState> {
-        self.engine
-            .as_ref()
-            .and_then(byard_core::Engine::text_input)
+    fn text_input(
+        &self,
+        surface: byard_core::SurfaceId,
+    ) -> Option<byard_core::frame::TextInputState> {
+        let engine = self.engine.as_ref()?;
+        if self.multi {
+            engine.latest_frame_for(surface)?.text_input()
+        } else {
+            engine.text_input()
+        }
     }
 
     fn on_access_active(&mut self, active: bool) {
@@ -1612,22 +1943,27 @@ impl PlatformHost for App {
         }
     }
 
-    fn access_frame(&self) -> Option<Arc<byard_core::frame::RenderFrame>> {
-        self.engine
-            .as_ref()
-            .and_then(byard_core::Engine::latest_frame)
+    fn access_frame(
+        &self,
+        surface: byard_core::SurfaceId,
+    ) -> Option<Arc<byard_core::frame::RenderFrame>> {
+        self.engine.as_ref()?.latest_frame_for(surface)
     }
 
-    fn on_access_request(&mut self, request: byard_core::access::AccessRequest) {
+    fn on_access_request(
+        &mut self,
+        surface: byard_core::SurfaceId,
+        request: byard_core::access::AccessRequest,
+    ) {
         if let Some(engine) = &self.engine {
-            engine.push_access_request(&request, now_ms());
+            engine.push_access_request_for(surface, &request, now_ms());
         }
     }
 
-    fn on_scroll(&mut self, dx: f32, dy: f32, x: f32, y: f32) {
+    fn on_scroll(&mut self, surface: byard_core::SurfaceId, dx: f32, dy: f32, x: f32, y: f32) {
         if let Some(engine) = &self.engine {
             engine.push_input(byard_core::platform::InputEvent {
-                surface: byard_core::SurfaceId::MAIN,
+                surface,
                 kind: byard_core::platform::EventKind::Scroll,
                 pos: (x, y),
                 delta: (dx, dy),
@@ -1638,10 +1974,10 @@ impl PlatformHost for App {
         }
     }
 
-    fn on_wheel(&mut self, dx: f32, dy: f32, x: f32, y: f32) {
+    fn on_wheel(&mut self, surface: byard_core::SurfaceId, dx: f32, dy: f32, x: f32, y: f32) {
         if let Some(engine) = &self.engine {
             engine.push_input(byard_core::platform::InputEvent {
-                surface: byard_core::SurfaceId::MAIN,
+                surface,
                 kind: byard_core::platform::EventKind::Wheel,
                 pos: (x, y),
                 delta: (dx, dy),

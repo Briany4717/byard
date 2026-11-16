@@ -24,7 +24,7 @@
 //   4. **Resize the window.** Every panel tracks its anchor, because the
 //      placement is computed from the anchor's rect each frame rather than from
 //      a hard-coded offset.
-//   5. Both panels are the same `Panel` view and come out different widths,
+//   5. Both panels are the same `Pane` view and come out different widths,
 //      because each takes its anchor's. No width is written twice:
 //      `width: match(searchField)` reads the anchor's resolved rect. The rows
 //      *inside* each panel fill it too, which is the part a rect widened after
@@ -42,7 +42,7 @@
 
 // No `width:` here at all. The panel takes the one its anchor has, so a field
 // that changes size takes its results list with it.
-View Panel(label: Str) {
+View Pane(label: Str) {
     Column #[bg: 0x1C2430, radius: 10, p: 10, gap: 6] {
         Text(label) #[color: 0x9AA3AE, size: 12]
         // A full-width row, so "the panel is the right width" and "the panel's
@@ -79,7 +79,7 @@ View Main() {
         Spacer #[grow: 1]
         // Near the bottom on purpose: its panel has nowhere to go downward.
         // Deliberately a different width from the field above: both panels are
-        // the same `Panel` view and come out different widths, which is the
+        // the same `Pane` view and come out different widths, which is the
         // whole claim of `match`.
         TextField #[value: lower, placeholder: "Flips upward, and is wider…", width: 320]
             as bottomField => lower = it
@@ -97,7 +97,7 @@ View Main() {
                 width: match(searchField),
                 dismiss => query = "",
             ] {
-                Panel("results")
+                Pane("results")
             }
         }
     }
@@ -133,7 +133,7 @@ View Main() {
                 width: match(bottomField),
                 dismiss => lower = "",
             ] {
-                Panel("flipped")
+                Pane("flipped")
             }
         }
     }

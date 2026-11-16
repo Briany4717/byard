@@ -1,0 +1,23 @@
+# Two windows, one state (RFC-0068 §2, §9): a step names an element and finds it
+# on whichever window it is.
+
+[[test]]
+name = "each window starts with its own line"
+expect = ['Window "Counter"', 'Window "Inspector"', 'Label "The counter reads 0"']
+
+[[test]]
+name = "a press in one window changes the other"
+steps = [{ tap = 'Button "Add one"' }, { tap = 'Button "Add one"' }]
+expect = ['Label "The counter reads 2"', 'Label "That is even."']
+not = ['Label "That is odd."']
+
+[[test]]
+name = "the inspector can be hidden and shown again"
+steps = [{ tap = 'Button "Hide the inspector"' }]
+expect = ['Window "Counter"', 'Button "Show the inspector"']
+not = ['Window "Inspector"']
+
+[[test]]
+name = "a closed window opens again with the program's state"
+steps = [{ tap = 'Button "Add one"' }, { tap = 'Button "Hide the inspector"' }, { tap = 'Button "Show the inspector"' }]
+expect = ['Window "Inspector"', 'Label "The counter reads 1"']

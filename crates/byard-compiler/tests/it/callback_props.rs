@@ -658,10 +658,10 @@ View Main() {
     var closed = 0
     Column {
         Text(\"{closed}\")
-        when open { Panel(on_gone: { closed = closed + 1 }) }
+        when open { Pane(on_gone: { closed = closed + 1 }) }
     }
 }
-View Panel(on_gone: Fn() = {}) {
+View Pane(on_gone: Fn() = {}) {
     var count = 0
     let double = count * 2
     Leaf(on_x: { count = count + double + 1 }, on_gone: on_gone)

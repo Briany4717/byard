@@ -2120,6 +2120,59 @@ impl EventRouter {
             .collect()
     }
 
+    /// The bounds of everything that takes the pointer, in surface
+    /// coordinates (RFC-0068 §6): the regions of handlers for pointer events
+    /// (a modal scrim among them) and of `hover`/`pressed` style blocks, but
+    /// not what sits under an `interactive: false` element. Under a transform
+    /// a region is the box around where it is drawn.
+    #[must_use]
+    pub fn pointer_rects(&self) -> Vec<Rect> {
+        let bounds = |r: Rect, frame: Option<Transform>| match frame {
+            None => r,
+            Some(t) => {
+                let pts = [
+                    [r.x, r.y],
+                    [r.x + r.w, r.y],
+                    [r.x, r.y + r.h],
+                    [r.x + r.w, r.y + r.h],
+                ]
+                .map(|p| t.apply_point(p));
+                let min = |i: usize| pts.iter().map(|p| p[i]).fold(f32::INFINITY, f32::min);
+                let max = |i: usize| pts.iter().map(|p| p[i]).fold(f32::NEG_INFINITY, f32::max);
+                Rect::new(min(0), min(1), max(0) - min(0), max(1) - min(1))
+            }
+        };
+        let handlers = self
+            .handlers
+            .iter()
+            .filter(|h| {
+                !h.through
+                    && matches!(
+                        h.kind,
+                        EventKind::PointerDown
+                            | EventKind::PointerUp
+                            | EventKind::Tap
+                            | EventKind::PointerMove
+                            | EventKind::PointerDrag
+                            | EventKind::DragStart
+                            | EventKind::Drag
+                            | EventKind::DragEnd
+                            | EventKind::Scroll
+                            | EventKind::Wheel
+                            | EventKind::Change
+                            | EventKind::PointerEnter
+                            | EventKind::PointerExit
+                            | EventKind::Hover
+                            | EventKind::LongPress
+                            | EventKind::DoubleTap
+                            | EventKind::Secondary
+                    )
+            })
+            .map(|h| bounds(h.rect, h.frame));
+        let hovers = self.hover_regions.iter().map(|(_, r, f)| bounds(*r, *f));
+        handlers.chain(hovers).collect()
+    }
+
     /// Returns `true` while a pointer is held down (between `PointerDown` and
     /// `PointerUp`).  Used by the hot-reload gesture gate (RFC-0006 §3.2, E5).
     #[must_use]

@@ -113,7 +113,7 @@ impl PlatformHost for App {
         Ok(())
     }
 
-    fn on_resize(&mut self, size: WindowSize) {
+    fn on_resize(&mut self, _surface: byard_core::SurfaceId, size: WindowSize) {
         // Engine reconfigures the surface (physical px) and updates the
         // viewport uniform (logical px) in one call.
         if let Some(engine) = self.engine.as_mut() {
@@ -121,14 +121,21 @@ impl PlatformHost for App {
         }
     }
 
-    fn on_redraw(&mut self) -> Result<(), ByardError> {
+    fn on_redraw(&mut self, _surface: byard_core::SurfaceId) -> Result<(), ByardError> {
         if let Some(engine) = self.engine.as_mut() {
             engine.render_latest()?;
         }
         Ok(())
     }
 
-    fn on_pointer_input(&mut self, button: PointerButton, state: PointerState, _x: f32, _y: f32) {
+    fn on_pointer_input(
+        &mut self,
+        _surface: byard_core::SurfaceId,
+        button: PointerButton,
+        state: PointerState,
+        _x: f32,
+        _y: f32,
+    ) {
         if button != PointerButton::Left || state != PointerState::Pressed {
             return;
         }

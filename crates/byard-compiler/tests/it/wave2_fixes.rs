@@ -602,8 +602,8 @@ fn a_scroll_view_does_not_cull_a_child_its_translate_brought_into_view() {
 #[test]
 fn an_anchored_panels_dismiss_reaches_the_state_of_its_view() {
     let mut app = App::new(
-        "View Main() { Panel() }
-        View Panel() {
+        "View Main() { Pane() }
+        View Pane() {
             var open = true
             Column {
                 Box #[width: 100, height: 30] as bar {}

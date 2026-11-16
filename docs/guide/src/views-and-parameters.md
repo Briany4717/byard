@@ -5,7 +5,7 @@ View Main() {
     Column #[p: 24, gap: 12] {
         Badge("new")
         Badge(label: "sale", tint: 0xEF4444)
-        Panel(title: "Profile") {
+        Pane(title: "Profile") {
             Text("Ada Lovelace")
             Text("Analyst")
         }
@@ -18,7 +18,7 @@ View Badge(label: Str, tint: Int = 0x3B82F6) {
     }
 }
 
-View Panel(title: Str, content) {
+View Pane(title: Str, content) {
     Column #[bg: 0x1E1E2A, radius: 12, p: 16, gap: 8] {
         Text(title) #[color: 0xFFFFFF, size: 18, weight: bold]
         content
@@ -28,7 +28,7 @@ View Panel(title: Str, content) {
 
 Everything on screen is a *view*. A view is a named piece of interface with
 parameters, like a function that returns a picture. `Main` uses `Badge` and
-`Panel`, and those use `Box`, `Column` and `Text`, which come with the engine.
+`Pane`, and those use `Box`, `Column` and `Text`, which come with the engine.
 You will not see a difference at the call site between a view you wrote and one
 the engine provides.
 
@@ -525,12 +525,12 @@ however many views down:
 View Settings() {
     var dark = false
     Column #[bg: 0x14141C, p: 24, gap: 12] {
-        Panel(bind: dark)
+        Pane(bind: dark)
         Text("dark is {dark}") #[color: 0xFFFFFF]
     }
 }
 
-View Panel(bind enabled: Bool) {
+View Pane(bind enabled: Bool) {
     Row { Row2(bind: enabled) }
 }
 

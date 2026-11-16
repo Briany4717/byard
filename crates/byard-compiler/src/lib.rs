@@ -26,6 +26,7 @@ pub mod interp;
 pub mod lexer;
 pub mod parser;
 pub mod resolve;
+pub mod surfaces;
 pub mod symbol;
 pub mod util;
 pub mod vector;

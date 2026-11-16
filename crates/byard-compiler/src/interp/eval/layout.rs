@@ -80,6 +80,17 @@ pub(super) struct Pools<'a> {
     pub(super) navs: &'a [NavPool],
 }
 
+/// What a multi-surface program lends the drawing of one of its surfaces
+/// (RFC-0068 §5): the pools, taken out of the interpreter once for every
+/// surface the tick draws, and whether this surface's structure moved since it
+/// was last drawn. The structure of the whole program was settled before any
+/// surface was drawn.
+#[derive(Clone, Copy)]
+pub(super) struct SharedFrame<'a> {
+    pub(super) pools: Pools<'a>,
+    pub(super) structure_changed: bool,
+}
+
 /// A `when`'s lazily-lowered branch cache (RFC-0018). Each branch's AST is kept
 /// and lowered only the first time the condition selects it, then reused, so an
 /// untaken (possibly recursive) branch costs nothing until it is actually shown.
@@ -359,6 +370,35 @@ impl Interpreter {
         Option<byard_core::atlas::layout::AtlasNodeId>,
         byard_core::atlas::layout::AtlasNodeId,
     )> {
+        let root_size = (Some(viewport.0), Some(viewport.1));
+        self.build_layout_pass_sized(
+            tree,
+            pools,
+            viewport,
+            root_size,
+            flat_ids,
+            overlays,
+            overlay_layouts,
+        )
+    }
+
+    /// [`build_layout_pass`](Self::build_layout_pass) with the main container's
+    /// own size given: `None` on an axis lets it take its content's (how a
+    /// panel measures itself, RFC-0068 §3).
+    #[allow(clippy::too_many_arguments)]
+    pub(super) fn build_layout_pass_sized<'a>(
+        &mut self,
+        tree: &'a [RenderNode],
+        pools: Pools<'a>,
+        viewport: (f32, f32),
+        root_size: (Option<f32>, Option<f32>),
+        flat_ids: &mut Vec<byard_core::atlas::layout::AtlasNodeId>,
+        overlays: &[(&'a RenderNode, AnimSlot)],
+        overlay_layouts: &mut Vec<OverlayLayout<'a>>,
+    ) -> Option<(
+        Option<byard_core::atlas::layout::AtlasNodeId>,
+        byard_core::atlas::layout::AtlasNodeId,
+    )> {
         let (width, height) = viewport;
         // Refilled by this walk (RFC-0038). Cleared rather than appended to,
         // because a retained build that rolls back runs the walk twice and the
@@ -381,7 +421,7 @@ impl Interpreter {
             None
         } else {
             let root_style =
-                byard_core::atlas::layout::ContainerStyle::new(Some(width), Some(height))
+                byard_core::atlas::layout::ContainerStyle::new(root_size.0, root_size.1)
                     .with_direction(byard_core::atlas::layout::FlexDir::Column);
             self.atlas.add_container(root_style, &root_children).ok()
         };
@@ -482,7 +522,11 @@ impl Interpreter {
                         }
                     }
                 }
-                RenderNode::For { pool, .. } => {
+                RenderNode::For { pool, list } => {
+                    // A surface that draws these rows depends on the list that
+                    // made them (RFC-0068 §5); nothing records it for any
+                    // other program.
+                    self.ctx.note_scope_read(*list);
                     if let Some(p) = pools.fors.get(*pool) {
                         // RFC-0066: rows past the list's end that are still
                         // going are drawn after the live ones.
@@ -958,7 +1002,25 @@ impl Interpreter {
                 RenderNode::Nav { pool, path } => {
                     dirtied |= self.reconcile_nav(*pool, *path, depth);
                 }
-                RenderNode::Box { children, .. } | RenderNode::Overlay { children, .. } => {
+                RenderNode::Box {
+                    name,
+                    children,
+                    uid,
+                    ..
+                } => {
+                    let moved = self.reconcile_structure(children, depth + 1);
+                    // RFC-0068 §5: a window whose own structure moved has to be
+                    // drawn again, and only that one. A single-surface program
+                    // has no surfaces to ask.
+                    if moved
+                        && self.surfaces.is_some()
+                        && super::surfaces::is_surface_name(name.as_str())
+                    {
+                        self.surface_structure_moved(*uid);
+                    }
+                    dirtied |= moved;
+                }
+                RenderNode::Overlay { children, .. } => {
                     dirtied |= self.reconcile_structure(children, depth + 1);
                 }
                 // Being reached by this walk *is* being mounted (RFC-0028

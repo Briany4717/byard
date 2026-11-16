@@ -49,7 +49,7 @@ pub use platform::{
     EventKind, ImeEvent, InputEvent, InputPayload, KeyModifiers, PlatformHost, PointerButton,
     PointerState, WindowSize,
 };
-pub use surface::{PerSurface, SurfaceChange, SurfaceId, SurfaceSpec};
+pub use surface::{PerSurface, ScreenInfo, SurfaceChange, SurfaceId, SurfaceKind, SurfaceSpec};
 
 /// Trait representing a logic tick execution runner.
 pub trait LogicRuntime {
@@ -88,6 +88,34 @@ pub trait LogicRuntime {
     /// before.
     fn wants_another_frame(&self) -> bool {
         false
+    }
+
+    /// Whether the program draws more than one surface (RFC-0068 §1): it has a
+    /// `Window`. The relay then drives it through
+    /// [`evaluate_surfaces`](Self::evaluate_surfaces) and never calls
+    /// [`evaluate_tick`](Self::evaluate_tick), so a single-surface program,
+    /// every one there was, runs exactly the loop it always did.
+    ///
+    /// Defaulted to `false`.
+    fn multi_surface(&self) -> bool {
+        false
+    }
+
+    /// One logic tick of a multi-surface program: routes `input_events` by
+    /// their [`InputEvent::surface`], then paints each surface that has
+    /// something new into a frame of its own and publishes it with
+    /// [`Relay::publish_to`](relay::Relay::publish_to). A surface that was
+    /// mounted, reconfigured or unmounted is queued with
+    /// [`Relay::push_surface_change`](relay::Relay::push_surface_change)
+    /// (RFC-0068 §5).
+    ///
+    /// Defaulted to a tick that does nothing.
+    fn evaluate_surfaces(
+        &mut self,
+        _relay: &relay::Relay,
+        _input_events: &[InputEvent],
+    ) -> relay::SurfaceTick {
+        relay::SurfaceTick::default()
     }
 }
 

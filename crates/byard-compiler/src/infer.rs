@@ -65,7 +65,7 @@ const FLOAT_METHODS: [&str; 10] = [
 /// Names the engine puts in scope itself: the animation namespace
 /// (`anim.spring`), a collapsing header's `scroll_fraction`, the `route`
 /// of the screen a navigation case draws, and the `window` (RFC-0067).
-const BUILT_IN_NAMES: [&str; 4] = ["anim", "scroll_fraction", "route", "window"];
+const BUILT_IN_NAMES: [&str; 5] = ["anim", "scroll_fraction", "route", "window", "screens"];
 
 /// Functions the language itself provides: `untrack(expr)`, the
 /// `match(element)` width of an anchored overlay, the navigation actions
@@ -141,6 +141,9 @@ pub struct Inference {
     pub bindings: Vec<(Symbol, Ty)>,
     /// The type of each top-level constant (RFC-0055), in declaration order.
     pub consts: Vec<(Symbol, Ty)>,
+    /// What surfaces the program writes (RFC-0068 §1): whether it is a
+    /// single-surface program, the implicit window, or has a `Window`.
+    pub surfaces: crate::surfaces::SurfaceShape,
 }
 
 /// What the value a handler may name is, by event (RFC-0063 §2).
@@ -175,6 +178,9 @@ fn event_record_fields(record: &str) -> Option<&'static [&'static str]> {
         "DragEvent" => Some(&["x", "y", "width", "height", "dx", "dy"]),
         // RFC-0067: the built-in `window`.
         "Window" => Some(&["width", "height"]),
+        // RFC-0068 §4: a screen of `screens`. `name` and `description` are
+        // text (see `screen_field_ty`), the rest are `Float`.
+        "Screen" => Some(&["name", "description", "x", "y", "width", "height", "scale"]),
         _ => None,
     }
 }
@@ -297,6 +303,7 @@ pub fn check_views(views: &[ViewDecl]) -> Inference {
         };
         checker.check_view(view);
     }
+    out.surfaces = crate::surfaces::check_surfaces(views, &mut out.errors);
     out
 }
 
@@ -1655,7 +1662,9 @@ impl Checker<'_> {
                     _ => Ty::Unknown,
                 };
                 let element = match &item {
-                    Ty::Named(n) if self.records.contains_key(n) => item.clone(),
+                    Ty::Named(n) if self.records.contains_key(n) || n.as_str() == "Screen" => {
+                        item.clone()
+                    }
                     _ => Ty::Unknown,
                 };
                 if let Some(key) = key {
@@ -1757,6 +1766,9 @@ impl Checker<'_> {
                             // names something `window`.
                             if sym.as_str() == "window" && !self.knows_own(sym) {
                                 Ty::Named(Symbol::intern("Window"))
+                            } else if sym.as_str() == "screens" && !self.knows_own(sym) {
+                                // RFC-0068 §4: the connected screens.
+                                Ty::List(Box::new(Ty::Named(Symbol::intern("Screen"))))
                             } else {
                                 Ty::Unknown
                             }
@@ -2088,7 +2100,13 @@ impl Checker<'_> {
         if !self.records.contains_key(record) {
             if let Some(fields) = event_record_fields(record.as_str()) {
                 if fields.contains(&field.as_str()) {
-                    return Ty::Float;
+                    return if record.as_str() == "Screen"
+                        && matches!(field.as_str(), "name" | "description")
+                    {
+                        Ty::Str
+                    } else {
+                        Ty::Float
+                    };
                 }
                 let hint = crate::util::closest_match(field.as_str(), fields.iter().copied())
                     .map(str::to_string);

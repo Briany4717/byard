@@ -175,17 +175,23 @@ another, and the only thing that changes is which value a `var` holds.
 - the two sides of an operator can be combined (`"a" - 1`, `true + 1` and `1 < 2 < 3` are
   `TypeMismatch`), and that two values compared with `==` are of one type;
 - a constant with a written type has a value of that type (`ConstantTypeMismatch`);
+- the first value of a `var` or `let` has the type written for it, each item of a list on its
+  own (`var n: Int = "a"` and `var xs: List<Int> = [1, "a"]` are `TypeMismatch`);
+- what is written to a `var` is a value it can hold: `n = e` a value of its type, `n += e` and
+  `n -= e` a number added to a number that keeps its type (`n += 0.5` on an `Int` is not), and
+  `n++` and `n--` a number;
 - an optional parameter is read only where nothing has been ruled out (`NoneNotHandled`);
 - a default given with `??` is of the type it stands in for.
 
-An `Int` may be given where a `Float` is wanted. Nothing else converts.
+An `Int` may be given where a `Float` is wanted, and is converted: `var w: Float = 3` holds
+`3.0`, so `w / 2` is `1.5`, and so does a `Float` `var` that is later written an `Int`. Nothing
+else converts.
 
 > **Not yet.** A number of things a typed language checks are not checked, and each is a
 > gap in the suite (`12_state.byd`, `08_functions.byd`, `05_records.byd`,
-> `07_operators.byd`):
+> `07_operators.byd`). The types judged so far are the scalars and lists of them; a record,
+> an enum or an optional is let through until its own step:
 >
-> - the first value of a `var` or `let` against its written type: `var n: Int = "a"`;
-> - an assignment against the type of the `var`: `n = "text"`;
 > - a type name nobody declared: `var m: Map<Str, Int>`;
 > - the arguments of a function, in number and in type, and its body against its result;
 > - a record literal against its declared type;
@@ -194,8 +200,8 @@ An `Int` may be given where a `Float` is wanted. Nothing else converts.
 > - two `var`s of one name in a view.
 >
 > Until they are, such a program runs, and what it draws is whatever the values happen to
-> give. An `Int` given where a `Float` is wanted also stays an `Int`, so dividing it
-> truncates.
+> give. An `Int` given as an argument where a `Float` is wanted also stays an `Int`, so
+> dividing it truncates.
 
 ## Values as text
 

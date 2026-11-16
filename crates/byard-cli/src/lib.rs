@@ -33,7 +33,6 @@ struct Cli {
     command: Command,
 }
 
-#[allow(clippy::large_enum_variant)]
 #[derive(Subcommand)]
 enum Command {
     /// Scaffold a new Byard project.

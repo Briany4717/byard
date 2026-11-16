@@ -62,7 +62,6 @@ fn f(x: Int) -> Int { x }
 View Main() { Text("a") }
 
 //# case: type-without-braces
-//# gap: one mistake is eight errors, one of them `KeywordAsName` for the next `View`
 //# error: UnexpectedToken
 type P = Int
 View Main() { Text("a") }
@@ -128,7 +127,6 @@ when true
 Text("a")
 
 //# case: lambda-without-a-body
-//# gap: the next line is taken as the body, so the error is `UnknownName` for `Text`
 //# fragment
 //# error: UnexpectedToken
 let f = (x: Int) =>
@@ -140,7 +138,6 @@ Text("a")
 Text("{1 * / 2}")
 
 //# case: one-mistake-is-one-error-in-a-call
-//# gap: one unknown word in an expression is reported several times
 //# fragment
 //# error: UnexpectedToken
 //# diagnostics: 1
@@ -212,12 +209,11 @@ Text("a") ]]]]]]]]]])))))))))))}}}}}}}}}}
 
 //# case: interpolation-four-strings-deep-is-refused
 //# fragment
+//# diagnostics: 1
 //# error: StringNestingTooDeep
-//# error: UnterminatedString
 Text("{"a{"b{"c"}"}"}")
 
 //# case: deeply-nested-interpolation-is-refused
-//# gap: thirty-two levels are thirty errors of one kind and three of two others
 //# diagnostics: 1
 //# fragment
 //# error: StringNestingTooDeep
@@ -232,3 +228,67 @@ Text("a") 
 //# gap: a file that starts with a byte order mark is refused
 //# text: a
 ﻿View Main() { Text("a") }
+
+//# case: stray-character-in-a-call
+//# fragment
+//# error: UnexpectedChar
+//# diagnostics: 1
+Text(@)
+
+//# case: duration-too-large-is-one-error
+//# fragment
+//# error: UnexpectedChar
+//# diagnostics: 1
+Text("{99999999999ms}")
+
+//# case: word-with-a-foreign-letter-in-a-call-is-one-error
+//# fragment
+//# error: UnexpectedChar
+//# diagnostics: 1
+Text(señal)
+
+//# case: unterminated-string-swallows-the-rest-and-is-one-error
+//# fragment
+//# error: UnterminatedString
+//# diagnostics: 1
+Text("abc
+Text(1)
+
+//# case: attribute-with-equals-leaves-the-next-attribute-alone
+//# fragment
+//# error: WrongAttributeSeparator
+//# diagnostics: 1
+Box #[width = 100, height: 20]
+
+//# case: call-missing-its-close-paren-is-one-error
+//# fragment
+//# error: UnexpectedToken
+//# diagnostics: 1
+Text("a"
+
+//# case: call-with-junk-before-its-close-paren-is-one-error
+//# fragment
+//# error: UnexpectedToken
+//# diagnostics: 1
+Text("a" 1 2 (3) { 4 })
+
+//# case: type-without-braces-does-not-hide-the-next-type
+//# error: UnexpectedToken
+//# diagnostics: 2
+type P = Int
+type Q = Int
+View Main() { Text("a") }
+
+//# case: lambda-body-on-the-next-line-is-a-body
+//# fragment
+//# text: 3
+let f = (x: Int) =>
+    x + 1
+Text("{f(2)}")
+
+//# case: lambda-without-a-body-before-a-box
+//# fragment
+//# error: UnexpectedToken
+//# diagnostics: 1
+let f = () =>
+Box { Text("a") }

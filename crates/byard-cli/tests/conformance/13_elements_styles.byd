@@ -34,7 +34,6 @@ Text("a") #[size: "big"]
 Text("a") #[size: 12, size: 14]
 
 //# case: attribute-with-equals
-//# gap: `size = 12` is five `UnexpectedToken`s, not the one `WrongAttributeSeparator` that exists for it
 //# fragment
 //# error: WrongAttributeSeparator
 Text("a") #[size = 12]

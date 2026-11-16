@@ -15,7 +15,7 @@ So every step below ends the same way: **its cases lose their `gap:` line, the r
 loses its note, and this file loses the step.** When this file is empty and the suite has no
 gap, the language is where this document wanted it.
 
-As written, the suite has 523 cases: 411 hold and 112 are gaps.
+As written, the suite has 534 cases: 431 hold and 103 are gaps.
 
 ```sh
 cargo test -p byard-cli --test it conformance -- --nocapture
@@ -62,22 +62,19 @@ This part closes that. Nothing here adds syntax.
 
 ### 1. One mistake, one error
 
-*Cases:* `int-literal-too-large-is-an-error`, `identifier-unicode-is-rejected`,
-`string-interpolation-unclosed`, `attribute-with-equals`, `type-without-braces`,
-`lambda-without-a-body`, `one-mistake-is-one-error-in-a-call`,
-`deeply-nested-interpolation-is-refused`, `constant-self-cycle-is-one-error`. Issues #358
-and #359.
+*Left:* one bullet, with no case yet. Its nine cases (`int-literal-too-large-is-an-error`,
+`identifier-unicode-is-rejected`, `string-interpolation-unclosed`, `attribute-with-equals`,
+`type-without-braces`, `lambda-without-a-body`, `one-mistake-is-one-error-in-a-call`,
+`deeply-nested-interpolation-is-refused`, `constant-self-cycle-is-one-error`; issues #358 and
+#359) hold, and so do the cases added with them.
 
-First, because every later step adds diagnostics and they are worth less in a flood.
-
-- After a lexing error, skip the bad token and do not also report the parser's surprise at
-  what is left.
-- Synchronise the parser at `}` and at the start of an item or a member, as the top level
-  already does (`skip_to_next_item`).
 - Report attribute errors in the same pass as the others, not after they are all fixed.
-- When a cycle is found, do not also report its names as unknown.
-- `size = 12` in an attribute list is `WrongAttributeSeparator`, which exists and is never
-  raised there.
+  They come from lowering the program to elements, which `byard check` skips while the type
+  checks have found anything. Lowering anyway was tried, and it puts follow-on errors beside
+  the real ones (`ClockOutsideAction` beside `ImpureFunction`, `MissingParam` beside
+  `SlotArgument`). It wants either the attribute checks run without lowering, or a list of
+  the kinds lowering is allowed to add. Add a case, `attribute-error-beside-a-type-error`,
+  with it.
 
 ### 2. Editions, and `byard fix`
 

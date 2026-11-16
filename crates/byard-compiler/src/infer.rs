@@ -448,6 +448,14 @@ fn check_consts(
     // The order they can be typed in; the ones in a cycle last, unknown.
     let mut sequence = ordered.order.clone();
     sequence.extend((0..consts.len()).filter(|i| !ordered.order.contains(i)));
+    // A constant that is in a cycle, or reads one, has no type to read yet, but
+    // it is not an unknown name: the cycle is the one error, already reported.
+    let untyped: HashSet<Symbol> = consts
+        .iter()
+        .enumerate()
+        .filter(|(i, _)| !ordered.order.contains(i))
+        .map(|(_, c)| c.name.clone())
+        .collect();
 
     let allowed: HashSet<&Symbol> = helpers
         .iter()
@@ -469,7 +477,7 @@ fn check_consts(
                 undo: Vec::new(),
                 origins: HashMap::new(),
                 fns: fns.clone(),
-                declared: HashSet::new(),
+                declared: untyped.clone(),
                 views: &no_views,
                 view_params: &no_view_params,
                 records: &no_records,

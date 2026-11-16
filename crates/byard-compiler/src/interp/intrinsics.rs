@@ -1637,6 +1637,7 @@ pub fn validate_element_in(
                 span: attr.span,
                 name: an.to_string(),
                 expected_property: false,
+                written: ":".to_string(),
             });
             continue;
         }
@@ -1645,6 +1646,7 @@ pub fn validate_element_in(
                 span: attr.span,
                 name: an.to_string(),
                 expected_property: true,
+                written: "=>".to_string(),
             });
             continue;
         }

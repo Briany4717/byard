@@ -42,7 +42,10 @@ rust-version = "1.86"
 [workspace.dependencies]
 # The workspace's own crates, with the version they are published at: a path
 # alone is enough to build here, and crates.io needs the version.
-byard-cli      = { path = "crates/byard-cli", version = "0.1.0" }
+# Without its defaults: `byard` turns the features on itself (its `cli`
+# feature), and a member may not write `default-features = false` over a
+# workspace entry that leaves them on (an error up to cargo 1.98).
+byard-cli      = { path = "crates/byard-cli", version = "0.1.0", default-features = false }
 byard-compiler = { path = "crates/byard-compiler", version = "0.1.0" }
 byard-core     = { path = "crates/byard-core", version = "0.1.0" }
 byard-macro    = { path = "crates/byard-macro", version = "0.1.0" }

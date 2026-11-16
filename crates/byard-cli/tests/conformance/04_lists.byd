@@ -26,7 +26,6 @@ let xs = [1]
 Text("{xs[5] + 1}")
 
 //# case: index-with-float-is-an-error
-//# gap: a `Float` index is accepted
 //# fragment
 //# error: TypeMismatch
 let xs = [1, 2]
@@ -146,7 +145,6 @@ let bad = xs.map(x => { xs = [] })
 Text("x")
 
 //# case: filter-predicate-must-be-bool
-//# gap: a predicate that is a number is accepted inside a text
 //# fragment
 //# error: PredicateNotBool
 let xs = [1, 2]
@@ -158,13 +156,11 @@ Text("{xs.filter(x => x + 1).len}")
 Text("{[1].pusj(2).len}")
 
 //# case: map-wrong-arity-lambda
-//# gap: a lambda with too many parameters for `map` is accepted
 //# fragment
 //# error: ArityMismatch
 Text("{[1].map((a, b, c) => a).len}")
 
 //# case: push-wrong-type
-//# gap: pushing a `Str` onto a `List<Int>` is accepted
 //# fragment
 //# error: TypeMismatch
 var xs = [1, 2]
@@ -215,3 +211,42 @@ Text("end")
 //# fragment
 //# error: TypeMismatch
 for s in 5 { Text("{s}") }
+
+//# case: index-with-text-is-an-error
+//# fragment
+//# error: TypeMismatch
+//# diagnostics: 1
+let xs = [1, 2]
+Text("{xs["a"]}")
+
+//# case: map-lambda-without-a-parameter
+//# fragment
+//# error: ArityMismatch
+//# diagnostics: 1
+Text("{[1].map(() => 1).len}")
+
+//# case: reduce-lambda-needs-two-parameters
+//# fragment
+//# error: ArityMismatch
+//# diagnostics: 1
+Text("{[1, 2].reduce(0, x => x)}")
+
+//# case: filter-by-a-bool-is-fine
+//# fragment
+//# text: 1
+let xs = [1, 2]
+Text("{xs.filter(x => x > 1).len}")
+
+//# case: push-an-int-onto-floats-stays-a-float
+//# fragment
+//# text: 0.5
+var xs: List<Float> = [0.5]
+on mount => { xs = xs.push(1) }
+Text("{xs[1] / 2}")
+
+//# case: push-the-right-type-is-fine
+//# fragment
+//# text: 3
+var xs = [1, 2]
+on mount => { xs = xs.push(3) }
+Text("{xs.len}")

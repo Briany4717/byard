@@ -15,7 +15,7 @@ So every step below ends the same way: **its cases lose their `gap:` line, the r
 loses its note, and this file loses the step.** When this file is empty and the suite has no
 gap, the language is where this document wanted it.
 
-As written, the suite has 550 cases: 457 hold and 93 are gaps.
+As written, the suite has 564 cases: 485 hold and 79 are gaps.
 
 ```sh
 cargo test -p byard-cli --test it conformance -- --nocapture
@@ -86,25 +86,6 @@ manifest. The two editions differ by nothing yet. What is left is the first rewr
 `Edition::migrations` in `byard-compiler/src/edition.rs`, and the case that proves `byard fix`
 keeps a program's meaning. Until then `byard new` writes no edition, and a project without one
 stays on `2026`.
-
-### 5. Calls to functions and actions
-
-*Cases:* `function-too-few-arguments`, `function-too-many-arguments`,
-`function-argument-of-the-wrong-type`, `function-body-of-the-wrong-type`,
-`function-int-where-float-is-wanted`, `view-int-argument-divides-as-a-float`,
-`named-action-wrong-arity`, `named-action-wrong-type`, `calling-a-number`,
-`callback-argument-of-the-wrong-type`, `map-wrong-arity-lambda`, `push-wrong-type`,
-`filter-predicate-must-be-bool`, `index-with-float-is-an-error`.
-
-- A call to a `fn` or a named action is checked as a call to a view already is: number,
-  then types. Reuse `ArgumentTypeMismatch` and `ArityMismatch`.
-- A function's body is checked against its result type.
-- A parameter that was not given must never again read as its own name. That it does
-  (`add(1)` draws `1b`) is the interpreter resolving an unbound name to text; after this
-  step the checker refuses the call, and the interpreter's fallback becomes an internal
-  error, not a value.
-- The built-in methods get signatures the checker reads: `push(T)` on a `List<T>`, a
-  one-parameter function for `map`, a `Bool` result for `filter` wherever it is written.
 
 ### 6. Records
 

@@ -900,6 +900,12 @@ pub struct Interpreter {
     /// `now()` in their body is [`CompileError::ClockOutsideAction`] whoever
     /// calls them (RFC-0049 §3).
     pure_fns: std::collections::HashSet<u32>,
+    /// The types written for the parameters of the entries of `fn_table` that
+    /// have any, so an `Int` given for a `Float` is one.
+    fn_types: std::collections::HashMap<u32, Vec<Option<Type>>>,
+    /// The result type written for the entries of `fn_table` that have one,
+    /// so an `Int` a `-> Float` function gives is a `Float`.
+    fn_rets: std::collections::HashMap<u32, Type>,
     /// How many `fn` bodies are being lowered right now. Above zero, an
     /// enclosing action does not make the clock readable.
     pure_depth: u32,
@@ -1362,6 +1368,11 @@ impl Interpreter {
                 let id = super::env::AstId(u32::try_from(self.fn_table.len()).unwrap_or(u32::MAX));
                 let params = decl.params.iter().map(|p| p.name.clone()).collect();
                 self.fn_table.push((params, decl.body.clone(), false, None));
+                self.fn_types
+                    .insert(id.0, decl.params.iter().map(|p| p.ty.clone()).collect());
+                if let Some(ret) = &decl.ret {
+                    self.fn_rets.insert(id.0, ret.clone());
+                }
                 self.pure_fns.insert(id.0);
                 self.report_clock_in_fn(
                     &decl
@@ -1611,8 +1622,12 @@ impl Interpreter {
                 }
             }
             Member::Fn {
-                name, params, body, ..
-            } => self.define_fn(name, params, body),
+                name,
+                params,
+                ret,
+                body,
+                ..
+            } => self.define_fn(name, params, ret.as_ref(), body),
             Member::Expr(e) => {
                 // A bare statement member is an action, so a call written
                 // there is in effect position like any other (RFC-0028 §4).
@@ -1783,8 +1798,12 @@ impl Interpreter {
                 }
                 Member::Let { name, init, .. } => self.define_let_or_fn(name, init),
                 Member::Fn {
-                    name, params, body, ..
-                } => self.define_fn(name, params, body),
+                    name,
+                    params,
+                    ret,
+                    body,
+                    ..
+                } => self.define_fn(name, params, ret.as_ref(), body),
                 _ => {}
             }
         }
@@ -1793,16 +1812,20 @@ impl Interpreter {
     /// `fn f(params) => body`. With no parameters it is a memo, read by
     /// `f()`; with parameters its body is inlined at each call with the
     /// arguments bound, which is what [`Self::lower_call`] does for it.
-    fn define_fn(&mut self, name: &Symbol, params: &[Param], body: &Expr) {
+    fn define_fn(&mut self, name: &Symbol, params: &[Param], ret: Option<&Type>, body: &Expr) {
         if params.is_empty() {
             self.define_let(name.clone(), body);
         } else {
             let names: Vec<Symbol> = params.iter().map(|p| p.name.clone()).collect();
-            self.define_callable(name, names.clone(), body);
+            let types = params.iter().map(|p| p.ty.clone()).collect();
+            self.define_callable(name, names.clone(), types, body);
             // A `fn` is pure; a `let f = (x) => …` is a named action.
             self.report_clock_in_fn(&names, body);
             if let Some(Value::Fn(id)) = self.env.lookup(name).cloned() {
                 self.pure_fns.insert(id.0);
+                if let Some(ret) = ret {
+                    self.fn_rets.insert(id.0, ret.clone());
+                }
             }
         }
     }
@@ -1812,7 +1835,13 @@ impl Interpreter {
     /// (`let load = () => { state = "loading" http.get(...) ... }`). Any
     /// other `let` is a memo.
     fn define_let_or_fn(&mut self, name: &Symbol, init: &Expr) {
-        if let Expr::Lambda { params, body, .. } = init {
+        if let Expr::Lambda {
+            params,
+            types,
+            body,
+            ..
+        } = init
+        {
             // `() => { ... }` parses its block as a block literal, which is a
             // parameterless lambda of its own (the `on_tap: { count++ }`
             // form). The body to inline is the block, not a lambda that would
@@ -1825,16 +1854,23 @@ impl Interpreter {
                 } if inner.is_empty() && matches!(block.as_ref(), Expr::Block(..)) => block,
                 other => other,
             };
-            self.define_callable(name, params.clone(), body);
+            self.define_callable(name, params.clone(), types.clone(), body);
         } else {
             self.define_let(name.clone(), init);
         }
     }
 
     /// Binds `name` to a body [`Self::lower_call`] inlines at each call.
-    fn define_callable(&mut self, name: &Symbol, params: Vec<Symbol>, body: &Expr) {
+    fn define_callable(
+        &mut self,
+        name: &Symbol,
+        params: Vec<Symbol>,
+        types: Vec<Option<Type>>,
+        body: &Expr,
+    ) {
         let id = crate::interp::env::AstId(u32::try_from(self.fn_table.len()).unwrap_or(u32::MAX));
         self.fn_table.push((params, body.clone(), false, None));
+        self.fn_types.insert(id.0, types);
         self.env.push(name.clone(), Value::Fn(id));
     }
 
@@ -2567,6 +2603,27 @@ fn floor_char_boundary(s: &str, i: usize) -> usize {
 #[cfg(test)]
 #[allow(clippy::float_cmp)]
 mod tests;
+
+/// `lowered`, as the type written for it where there is one.
+pub(super) fn coerced_value(mut lowered: Lowered, ty: Option<&Type>) -> Lowered {
+    let Some(ty) = ty.cloned() else {
+        return lowered;
+    };
+    Box::new(move |ctx| coerce_to(lowered(ctx), &ty))
+}
+
+/// What a call to the entry `id` of the function table gives for the argument
+/// at `index`: the value as the type written for that parameter, if any.
+pub(super) fn coerced_arg(
+    types: Option<&Vec<Option<Type>>>,
+    index: usize,
+    mut lowered: Lowered,
+) -> Lowered {
+    let Some(Some(ty)) = types.and_then(|t| t.get(index)).cloned() else {
+        return lowered;
+    };
+    Box::new(move |ctx| coerce_to(lowered(ctx), &ty))
+}
 
 /// `value` as the type written for it: an `Int` is a `Float` where a `Float` is
 /// wanted, and so is each item of a `List<Float>`. Anything else is as it was.

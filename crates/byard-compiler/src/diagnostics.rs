@@ -2267,7 +2267,7 @@ impl CompileError {
                 expected,
                 found,
                 ..
-            } => format!("`{name}` takes {expected} content argument(s), found {found}"),
+            } => format!("`{name}` takes {expected} argument(s), found {found}"),
             Self::AttributeTypeMismatch { expected, .. } => {
                 format!("expected {expected}")
             }
@@ -2846,6 +2846,12 @@ impl CompileError {
                     "`{op}` takes a number and keeps it in a number, and a `{rhs_ty}` does not fit a `{lhs_ty}`"
                 ),
                 "++" | "--" => format!("`{op}` needs a number, and this is a `{lhs_ty}`"),
+                "()" => format!(
+                    "this is a `{lhs_ty}`, not a function: only a `fn`, a named action or a callback can be called"
+                ),
+                "[]" => format!(
+                    "an item of a `{lhs_ty}` is found by a whole number, and this is a `{rhs_ty}`"
+                ),
                 _ => format!("operator `{op}` cannot compare `{lhs_ty}` with `{rhs_ty}`"),
             },
             Self::PredicateNotBool { .. } => "this predicate must evaluate to `Bool`".to_string(),

@@ -22,6 +22,7 @@ Byard uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Changed
 
+- **Soft edges keep what is behind them.** The anti-aliased edge of a shape now blends over the translucent boxes and shadows painted behind it, in paint order, instead of leaving a one-pixel dark or see-through outline (an opaque line on a translucent panel, a card on its own shadow).
 - **A view called `Panel` is now `IntrinsicShadowed`.** `Panel` is an element (RFC-0068), as `Window` is, so a program's own `View Panel` has to be called something else.
 - **For Rust code that drives `byard-core` directly: an `InputEvent` names its surface.** It has a `surface: SurfaceId` field, `SurfaceId::MAIN` for the one window every program has today, so an `InputEvent { … }` written out in full needs `surface: SurfaceId::MAIN` (or `..` from one that has it). `Engine` also gains `add_surface`, `resize_surface`, `drop_surface` and `render_surfaces` on a shared `Gpu`, the ground RFC-0068's windows and panels are built on. Apps written in Byld, and `byard::App`, see no change.
 

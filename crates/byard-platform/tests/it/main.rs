@@ -16,6 +16,7 @@ mod corner_smoothing_readback;
 mod font_families_example_readback;
 mod font_family_readback;
 mod frame_budget;
+mod fringe_readback;
 mod gradient_kinds_readback;
 mod group_opacity_example_readback;
 mod group_opacity_readback;

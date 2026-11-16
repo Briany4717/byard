@@ -700,6 +700,21 @@ impl EncoderSubsystem {
         )
         .await?;
 
+        // The fringe of the same instances (see `fs_fringe`): the partially
+        // covered fragments the opaque pipeline above discards, drawn in the
+        // transparent pass in paint order. Same shader module, same layout.
+        let solid_fringe_pipeline = build_solid_box_pipeline(
+            &device,
+            &bind_group_layout,
+            quad_vertex_layout(),
+            surface_format,
+            Some(STRAIGHT_ALPHA_OVER),
+            draw_depth_stencil_fringe(),
+            SOLID_FRINGE_ENTRY,
+            "ByardCore - SolidBox Fringe Pipeline",
+        )
+        .await?;
+
         // See `EncoderSubsystem::clear_pipeline`'s doc comment, same shader
         // and layout, only the blend state differs (no blending → the
         // fragment output unconditionally replaces the destination).
@@ -837,8 +852,14 @@ impl EncoderSubsystem {
         // the stream it always did (pixel parity with the old path, and a draw
         // order that is declared rather than incidental).
         let mut pipelines = pipeline::PipelineRegistry::new();
-        pipelines.register_core(SolidBoxPipeline::new(render_pipeline))?;
-        pipelines.register_core(decorated_box::DecoratedBoxPipeline::new(decorated_pipeline))?;
+        pipelines.register_core(SolidBoxPipeline::new(
+            render_pipeline,
+            solid_fringe_pipeline.clone(),
+        ))?;
+        pipelines.register_core(decorated_box::DecoratedBoxPipeline::new(
+            decorated_pipeline,
+            solid_fringe_pipeline,
+        ))?;
         pipelines.register_core(ripple::RipplePipeline::new(ripple_pipeline))?;
         pipelines.register_core(canvas_shape::CanvasShapePipeline::new(canvas_pipeline))?;
         pipelines.register_core(texture_sampler::TextureSamplerPipeline::new(
@@ -3161,6 +3182,8 @@ fn draw_ui_pass(
                 vector_atlas,
                 texture_cache,
                 textures: &textures[seg.texture.clone()],
+                solid_depths: sub_slice(primitives.solid_depths, &seg.solid),
+                decorated_depths: sub_slice(primitives.decorated_depths, &seg.decorated),
             },
         );
 
@@ -4113,6 +4136,32 @@ pub(crate) fn draw_depth_stencil_no_write() -> wgpu::DepthStencilState {
     }
 }
 
+/// Depth-stencil state for the solid boxes' **fringe** (`fs_fringe`): the
+/// partially covered edge of an opaque shape, or the body of a translucent one.
+///
+/// It *writes* depth, like the opaque pass it belongs to, because a fringe pixel
+/// hides what is behind it as much as the interior does: whatever was painted
+/// earlier and is drawn after this (a canvas, a vector glyph, text) must stay
+/// under it. Writing is safe here, and was not for the decorated pass, because
+/// the fringe is drawn in paint order against the decorated boxes (see
+/// `DecoratedBoxPipeline::draw`): everything painted before it is already on
+/// the target, and everything painted after it carries a nearer depth and so
+/// passes. The compare is `Less` rather than `LessEqual`: the opaque pass wrote
+/// this instance's own depth over its interior, and `Less` turns that into an
+/// early rejection, so the fringe pass does not shade the interior at all.
+pub(crate) fn draw_depth_stencil_fringe() -> wgpu::DepthStencilState {
+    wgpu::DepthStencilState {
+        format: DEPTH_FORMAT,
+        depth_write_enabled: Some(true),
+        depth_compare: Some(wgpu::CompareFunction::Less),
+        stencil: wgpu::StencilState::default(),
+        bias: wgpu::DepthBiasState::default(),
+    }
+}
+
+/// The fragment entry point of `solid_box.wgsl` the fringe pipeline runs.
+const SOLID_FRINGE_ENTRY: &str = "fs_fringe";
+
 /// The fragment entry point of `solid_box.wgsl` the clear pipeline runs. It
 /// must be the one that writes every pixel the quad covers (see the shader).
 const CLEAR_FRAGMENT_ENTRY: &str = "fs_clear";
@@ -4296,15 +4345,21 @@ fn stage_solid_box_instances(
 /// The oldest pipeline in the engine, and now an ordinary entry in the
 /// registry like every other: the only thing that makes it "core" is that the
 /// engine registers it first.
+///
+/// It draws the opaque half of every solid box: the fragments a box fully
+/// covers, which write depth. The partially covered rest, the fringe, is drawn
+/// by `DecoratedBoxPipeline::draw`, in paint order against the translucent
+/// geometry, from the same staged instances (so the fringe costs no staging).
 pub struct SolidBoxPipeline {
     pipeline: wgpu::RenderPipeline,
+    fringe: wgpu::RenderPipeline,
 }
 
 impl SolidBoxPipeline {
-    /// Wraps a built pipeline for registration.
+    /// Wraps the built opaque and fringe pipelines for registration.
     #[must_use]
-    pub const fn new(pipeline: wgpu::RenderPipeline) -> Self {
-        Self { pipeline }
+    pub const fn new(pipeline: wgpu::RenderPipeline, fringe: wgpu::RenderPipeline) -> Self {
+        Self { pipeline, fringe }
     }
 }
 
@@ -4348,6 +4403,10 @@ impl pipeline::RenderPipeline for SolidBoxPipeline {
         // depth handling the interpreter's own boxes get, without having to
         // know that is how this pipeline works.
         pass.set_vertex_buffer(2, cx.arena.slice(cx.depths));
+        pass.draw(0..4, 0..cx.count);
+        // A batch is one primitive run with nothing interleaved, so its fringe
+        // follows it at once.
+        pass.set_pipeline(&self.fringe);
         pass.draw(0..4, 0..cx.count);
     }
 }

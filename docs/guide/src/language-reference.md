@@ -915,10 +915,27 @@ The checker means to report each mistake once, at the place it was made, and to 
 find the next. A stray token at the top of a file, a keyword used as a name and an unknown
 word in an expression are each one error.
 
-> **Not yet.** Several mistakes are still reported more than once: a number too large, a
-> character that cannot be in a name, an unclosed interpolation, `size = 12` in an attribute
-> list, and a `type` with no braces. Attribute errors are only reported once every other
-> error is fixed. (`01_lexical.byd`, `14_syntax_and_recovery.byd`)
+What the parser does after a mistake is chosen so that nothing it reads next is a second one:
+
+- A number too large to hold, and a word with a letter outside the English alphabet, are one
+  `UnexpectedChar` over the whole of the number or the word. The number then stands as `0`
+  and the word as one name, so the rest of the line reads as it was meant.
+- A string that is never closed runs to the end of the file, as the language says a string
+  may, and that is its one `UnterminatedString`. Nesting past three levels is one
+  `StringNestingTooDeep`, however deep it goes.
+- A call that is missing its `)`, or has something before it, skips to the `)` that closes
+  it. A `type` with no braces skips to the next declaration. A lambda's `=>` followed, on the
+  next line, by an element of the engine is one error, not that element taken for a
+  function.
+- `size = 12` in an attribute list is `WrongAttributeSeparator`, and `12` is read as the
+  value, so what follows is checked as it was written.
+- Constants that read each other in a circle are one `ConstantCycle`; the names in it are
+  not also unknown.
+
+> **Not yet.** Attribute errors are only reported once every other error is fixed: an
+> unknown attribute, a value of the wrong kind, `:` where `=>` is wanted. They are found
+> by lowering the program to elements, and a program that already has type errors piles
+> follow-on errors onto them when lowered. (`13_elements_styles.byd`)
 
 No text, however malformed, makes the checker or a running program stop with a panic. The
 suite's last file is made of such texts.

@@ -353,21 +353,22 @@ enum StrState {
 
 /// Hard cap on interpolated-string nesting (D12): the outer string is level 1,
 /// so at most 3 `InString` frames may exist at once.
-const MAX_STRING_DEPTH: u8 = 3;
+const MAX_STRING_DEPTH: usize = 3;
 
 /// Locates the end of a string literal opened by `"`, accounting for escapes
 /// and interpolation (`{ expr }`, where `expr` may itself contain strings).
 ///
 /// On success bumps the lexer past the closing quote and returns `Ok(())`.
-/// Returns [`LexError::StringNestingTooDeep`] if nesting would exceed
-/// [`MAX_STRING_DEPTH`] (D12), or [`LexError::UnterminatedString`] if input
-/// ends first.
+/// A literal nested deeper than [`MAX_STRING_DEPTH`] (D12) is still scanned to
+/// its closing quote, and the whole of it is one
+/// [`LexError::StringNestingTooDeep`]: stopping at the level that is too deep
+/// would leave the levels inside it to be lexed as strings of their own, one
+/// error each. [`LexError::UnterminatedString`] if input ends first.
 fn lex_string(lex: &mut Lexer<Token>) -> Result<(), LexError> {
-    // Capacity for depth 4 (7 frames) so the 4th level is *observed* and
-    // rejected cleanly rather than overflowing the array (D12).
-    let mut stack = [StrState::InString; 8];
-    let mut sp: usize = 1; // stack[0] is the opening quote's InString frame
-    let mut string_depth: u8 = 1; // number of InString frames currently open
+    // stack[0] is the opening quote's `InString` frame.
+    let mut stack = vec![StrState::InString];
+    let mut string_depth = 1usize; // number of `InString` frames currently open
+    let mut too_deep = false;
     let mut consumed = 0usize;
     let mut escaped = false;
 
@@ -385,39 +386,35 @@ fn lex_string(lex: &mut Lexer<Token>) -> Result<(), LexError> {
             escaped = true;
             continue;
         }
-        match stack[sp - 1] {
+        let Some(&state) = stack.last() else {
+            break;
+        };
+        match state {
             StrState::InString => {
                 if c == '"' {
-                    sp -= 1;
+                    stack.pop();
                     string_depth -= 1;
-                    if sp == 0 {
+                    if stack.is_empty() {
                         lex.bump(consumed);
-                        return Ok(());
+                        return if too_deep {
+                            Err(LexError::StringNestingTooDeep)
+                        } else {
+                            Ok(())
+                        };
                     }
                 } else if c == '{' {
-                    if sp >= stack.len() {
-                        return Err(LexError::StringNestingTooDeep);
-                    }
-                    stack[sp] = StrState::InBrace;
-                    sp += 1;
+                    stack.push(StrState::InBrace);
                 }
             }
             StrState::InBrace => match c {
-                '{' => {
-                    if sp >= stack.len() {
-                        return Err(LexError::StringNestingTooDeep);
-                    }
-                    stack[sp] = StrState::InBrace;
-                    sp += 1;
+                '{' => stack.push(StrState::InBrace),
+                '}' => {
+                    stack.pop();
                 }
-                '}' => sp -= 1,
                 '"' => {
-                    if string_depth >= MAX_STRING_DEPTH || sp >= stack.len() {
-                        return Err(LexError::StringNestingTooDeep);
-                    }
-                    stack[sp] = StrState::InString;
-                    sp += 1;
                     string_depth += 1;
+                    too_deep |= string_depth > MAX_STRING_DEPTH;
+                    stack.push(StrState::InString);
                 }
                 _ => {}
             },
@@ -439,6 +436,11 @@ pub struct LexedFile {
     pub tokens: Vec<SpannedToken>,
     /// Diagnostics collected during lexing.
     pub errors: Vec<CompileError>,
+    /// Where each lex error that left no token behind ended, as an offset in
+    /// the file. The token after one is the parser's first surprise at what
+    /// is left of a mistake it has already been told about, and the parser
+    /// does not report that one again.
+    pub gaps: Vec<u32>,
 }
 
 /// Lexes `source` into a [`LexedFile`]. Every `logos` failure becomes a
@@ -448,26 +450,82 @@ pub fn lex(source: &str) -> LexedFile {
     lex_remapped(source, |span| span)
 }
 
+/// Whether `text` is made of what a name is made of, in any alphabet.
+fn is_word(text: &str) -> bool {
+    !text.is_empty() && text.chars().all(|c| c.is_alphanumeric() || c == '_')
+}
+
 /// [`lex`], with every token and diagnostic span passed through `remap`. The
 /// parser uses it to re-lex a string interpolation's fragment so its spans
 /// land on the fragment's position in the file, not at the fragment's start.
+///
+/// One mistake is one error. A lex error does not leave a hole for the parser
+/// to trip over: a number too large to read is replaced by a `0` and a word
+/// with a letter outside the English alphabet by one name, both with the error
+/// on the whole of them; an unclosed string swallows the rest of the file, as
+/// the language says it does; and any other bad token is skipped and its place
+/// recorded in [`LexedFile::gaps`].
 pub(crate) fn lex_remapped(source: &str, remap: impl Fn(Span) -> Span) -> LexedFile {
     let mut lexer = Token::lexer(source);
     let mut out = LexedFile::default();
     // The source range of each token, for splitting a percent literal below.
     let mut raw: Vec<std::ops::Range<usize>> = Vec::new();
     while let Some(result) = lexer.next() {
-        let span = remap(lexer.span().into());
+        let range = lexer.span();
+        let span = remap(range.clone().into());
         match result {
             Ok(token) => {
                 out.tokens.push((token, span));
-                raw.push(lexer.span());
+                raw.push(range);
             }
-            Err(err) => out.errors.push(match err {
-                LexError::StringNestingTooDeep => CompileError::StringNestingTooDeep { span },
-                LexError::UnterminatedString => CompileError::UnterminatedString { span },
-                LexError::Unexpected => CompileError::UnexpectedChar { span },
-            }),
+            Err(LexError::StringNestingTooDeep) => {
+                out.errors.push(CompileError::StringNestingTooDeep { span });
+                out.gaps.push(span.end);
+            }
+            Err(LexError::UnterminatedString) => {
+                out.errors.push(CompileError::UnterminatedString { span });
+                out.gaps.push(span.end);
+                // Everything after the quote is the string, so there is
+                // nothing left to read.
+                lexer.bump(lexer.remainder().len());
+            }
+            Err(LexError::Unexpected) => {
+                let text = &source[range.clone()];
+                if text.starts_with(|c: char| c.is_ascii_digit()) {
+                    // A literal that does not fit what it is: a number too
+                    // large to hold, a duration past its limit.
+                    out.errors.push(CompileError::UnexpectedChar { span });
+                    out.tokens.push((Token::IntLit(0), span));
+                    raw.push(range);
+                } else if text.starts_with(|c: char| c.is_alphanumeric()) {
+                    // A letter outside the English alphabet: the error is the
+                    // whole word it is in, which then stands for one name.
+                    let mut start = range.start;
+                    if let Some(before) = raw.last()
+                        && before.end == start
+                        && is_word(&source[before.clone()])
+                    {
+                        start = before.start;
+                        out.tokens.pop();
+                        raw.pop();
+                    }
+                    let end = range.end
+                        + source[range.end..]
+                            .chars()
+                            .take_while(|c| c.is_alphanumeric() || *c == '_')
+                            .map(char::len_utf8)
+                            .sum::<usize>();
+                    lexer.bump(end - range.end);
+                    let word = remap((start..end).into());
+                    out.errors.push(CompileError::UnexpectedChar { span: word });
+                    out.tokens
+                        .push((Token::Ident(Symbol::intern(&source[start..end])), word));
+                    raw.push(start..end);
+                } else {
+                    out.errors.push(CompileError::UnexpectedChar { span });
+                    out.gaps.push(span.end);
+                }
+            }
         }
     }
     split_unkeyed_percents(&mut out.tokens, &raw, source, &remap);
@@ -735,6 +793,55 @@ mod tests {
                 .iter()
                 .any(|e| matches!(e, CompileError::UnterminatedString { .. }))
         );
+    }
+
+    #[test]
+    fn an_unclosed_string_swallows_the_rest_and_is_one_error() {
+        let lexed = lex("a \"open { 1 + \"x\" b c d");
+        assert_eq!(lexed.errors.len(), 1, "{:?}", lexed.errors);
+        assert_eq!(
+            lexed.tokens.len(),
+            1,
+            "only `a` is left: {:?}",
+            lexed.tokens
+        );
+        assert_eq!(lexed.gaps.len(), 1);
+    }
+
+    #[test]
+    fn a_string_nested_too_deep_is_one_error_however_deep() {
+        let lexed = lex(r#"a "{"{"{"{"{"{"x"}"}"}"}"}"}" b"#);
+        assert_eq!(lexed.errors.len(), 1, "{:?}", lexed.errors);
+        assert!(matches!(
+            lexed.errors[0],
+            CompileError::StringNestingTooDeep { .. }
+        ));
+        // Lexing goes on after the whole string, at `b`.
+        assert_eq!(lexed.tokens.len(), 2, "{:?}", lexed.tokens);
+    }
+
+    #[test]
+    fn a_word_with_a_foreign_letter_is_one_error_and_one_name() {
+        let lexed = lex("let año = 3");
+        assert_eq!(lexed.errors.len(), 1, "{:?}", lexed.errors);
+        let names: Vec<_> = lexed
+            .tokens
+            .iter()
+            .filter_map(|(t, _)| match t {
+                Token::Ident(name) => Some(name.as_str().to_string()),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(names, ["año"]);
+        assert!(lexed.gaps.is_empty(), "the name stands in for the word");
+    }
+
+    #[test]
+    fn a_number_too_large_is_one_error_and_stands_as_a_zero() {
+        let lexed = lex("1 + 9223372036854775808");
+        assert_eq!(lexed.errors.len(), 1, "{:?}", lexed.errors);
+        assert_eq!(lexed.tokens.len(), 3);
+        assert_eq!(lexed.tokens[2].0, Token::IntLit(0));
     }
 
     #[test]

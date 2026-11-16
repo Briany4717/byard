@@ -31,7 +31,6 @@ Text("{0xFF} {0xff} {0xFFFFFF}")
 Text("{9223372036854775807}")
 
 //# case: int-literal-too-large-is-an-error
-//# gap: one bad literal is reported as two errors
 //# fragment
 //# error: UnexpectedChar
 Text("{9223372036854775808}")
@@ -142,7 +141,6 @@ Text("a {} b")
 Text("{1 2 3}")
 
 //# case: string-interpolation-unclosed
-//# gap: one unclosed interpolation is reported as eight errors
 //# fragment
 //# error: UnterminatedString
 Text("a {1 + 2")
@@ -195,7 +193,6 @@ let _a1_b = 3
 Text("{_a1_b}")
 
 //# case: identifier-unicode-is-rejected
-//# gap: one bad character is reported as three errors
 //# fragment
 //# error: UnexpectedChar
 let año = 3

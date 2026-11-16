@@ -100,13 +100,20 @@ View Main() { Text("{pad}") }
 
 //# case: constant-cycle
 //# error: ConstantCycle
-//# error: UnknownName
+//# diagnostics: 1
 let a = b
 let b = a
 View Main() { Text("x") }
 
+//# case: constant-reading-a-cycle-is-not-an-unknown-name
+//# error: ConstantCycle
+//# diagnostics: 1
+let a = b
+let b = a
+let c = a + 1
+View Main() { Text("x") }
+
 //# case: constant-self-cycle-is-one-error
-//# gap: a cycle is reported twice, as `ConstantCycle` and as `UnknownName`
 //# error: ConstantCycle
 let a = a + 1
 View Main() { Text("x") }

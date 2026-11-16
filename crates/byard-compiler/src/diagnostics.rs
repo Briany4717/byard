@@ -199,6 +199,8 @@ pub enum CompileError {
         name: String,
         /// Whether the attribute *should* be a property (`:`), else an event.
         expected_property: bool,
+        /// The separator that was written: `=>`, `:` or `=`.
+        written: String,
     },
     /// An intrinsic received the wrong number of positional `(...)` content
     /// arguments (RFC-0005 §5).
@@ -2238,12 +2240,13 @@ impl CompileError {
             Self::WrongAttributeSeparator {
                 name,
                 expected_property,
+                written,
                 ..
             } => {
                 if *expected_property {
-                    format!("`{name}` is a property; use `:` not `=>`")
+                    format!("`{name}` is a property; use `:` not `{written}`")
                 } else {
-                    format!("`{name}` is an event; use `=>` not `:`")
+                    format!("`{name}` is an event; use `=>` not `{written}`")
                 }
             }
             Self::ArityMismatch {

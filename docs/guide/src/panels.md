@@ -174,4 +174,5 @@ an input method** (no IME, no dead-key composition), so typing Japanese or an ac
 compose key does not work there; a text field in a `Window` of the same program has the same
 limit on this backend. Popups from a panel are a later step: an anchored `Overlay` is drawn
 inside the panel for now. The app's appearance does not follow the desktop's light or dark
-setting on this backend; it opens in the theme's own.
+setting on this backend (reading it needs a D-Bus client Byard does not carry): `scheme =
+"system"` uses the theme's own scheme, and the terminal says so once at startup.

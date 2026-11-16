@@ -307,6 +307,12 @@ fn run(cfg: ShellHost, host: Box<dyn PlatformHost>) -> Result<(), ByardError> {
         })
         .map_err(|e| platform_error(e.error))?;
 
+    // winit reads no system appearance on Wayland either, and the portal that
+    // does needs a D-Bus client the tree does not have: say so, once.
+    eprintln!(
+        "  the Wayland shell backend cannot read the system's light or dark setting yet; \
+         `scheme = \"system\"` uses the theme's own scheme"
+    );
     shell.host.on_start(waker)?;
     shell.tell_screens();
 
@@ -437,6 +443,30 @@ impl Shell {
         None
     }
 
+    /// What is known of the output a surface will be on: the one its `screen`
+    /// names, else the first (the compositor's own choice is learned only
+    /// later, and a guess here is corrected by `preferred_scale`).
+    fn output_facts_for(&self, spec: &SurfaceSpec) -> Option<outputs::OutputFacts> {
+        let wanted = spec.layer.as_ref().and_then(|l| l.screen.as_deref());
+        let facts = self.output_facts();
+        let found = wanted.and_then(|name| {
+            facts
+                .iter()
+                .enumerate()
+                .find(|(n, f)| outputs::name_of(*n, f) == name)
+                .map(|(_, f)| f.clone())
+        });
+        found.or_else(|| facts.into_iter().next())
+    }
+
+    /// The scale a new surface is first drawn at.
+    fn first_scale(&self, spec: &SurfaceSpec) -> f64 {
+        outputs::initial_scale(
+            self.output_facts_for(spec).as_ref(),
+            self.fractional_manager.is_some(),
+        )
+    }
+
     /// The refresh rate, in millihertz, of the screen a surface is on: its
     /// `screen` when it names one, else the first.
     fn refresh_rate(&self, spec: &SurfaceSpec) -> Option<u32> {
@@ -497,6 +527,7 @@ impl Shell {
         }
         let output = output.flatten();
         let (wl, viewport, fractional) = self.new_wl_surface(id);
+        let scale = self.first_scale(spec);
         let layer_surface = self.layers.create_layer_surface(
             &self.qh,
             wl.clone(),
@@ -536,6 +567,7 @@ impl Shell {
                 wl,
                 viewport,
                 fractional,
+                scale,
             ),
         );
         Ok(())
@@ -550,6 +582,7 @@ impl Shell {
             );
         };
         let (wl, viewport, fractional) = self.new_wl_surface(id);
+        let scale = self.first_scale(spec);
         let decorations = if spec.decorations {
             WindowDecorations::RequestServer
         } else {
@@ -575,6 +608,7 @@ impl Shell {
                 wl,
                 viewport,
                 fractional,
+                scale,
             ),
         );
         Ok(())
@@ -968,6 +1002,7 @@ impl Surf {
         wl: WlSurface,
         viewport: Option<WpViewport>,
         fractional: Option<WpFractionalScaleV1>,
+        scale: f64,
     ) -> Self {
         Self {
             spec,
@@ -976,7 +1011,7 @@ impl Surf {
             wl,
             viewport,
             fractional,
-            scale: 1.0,
+            scale,
             logical: (0, 0),
             configured: false,
             drawable: false,

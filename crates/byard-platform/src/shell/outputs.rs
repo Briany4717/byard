@@ -49,6 +49,16 @@ pub(crate) fn screens(outputs: &[OutputFacts], fractional: bool) -> Vec<ScreenIn
     list
 }
 
+/// The scale a surface is first drawn at, from the output it is made on
+/// (`None` when no output is known: scale 1). It is the scale `screens` gives
+/// that output, fractional where `fractional` says
+/// `wp_fractional_scale_v1` was offered and the integer `wl_output.scale`
+/// otherwise, so a surface on a scaled screen is not drawn once at 1 before
+/// the compositor's `preferred_scale` arrives.
+pub(crate) fn initial_scale(facts: Option<&OutputFacts>, fractional: bool) -> f64 {
+    facts.map_or(1.0, |f| f64::from(screen(0, f, fractional).scale))
+}
+
 /// The name of the `n`th output (from 0, in connection order): the
 /// connector when the compositor says it, else `screen-N` counting from 1.
 pub(crate) fn name_of(n: usize, o: &OutputFacts) -> String {
@@ -207,6 +217,18 @@ mod tests {
         // A logical size larger than the mode is not a scale.
         o.mode = Some((800, 600));
         assert!((screens(&[o], true)[0].scale - 2.0).abs() < f32::EPSILON);
+    }
+
+    #[test]
+    fn a_surface_starts_at_the_scale_of_its_output() {
+        let o = out("DP-1", (0, 0), (1707, 960), (2560, 1440));
+        assert!((initial_scale(Some(&o), true) - 1.5).abs() < 0.01);
+        let mut integer = out("DP-2", (0, 0), (1280, 720), (2560, 1440));
+        integer.scale_factor = 2;
+        // No fractional protocol: the integer scale.
+        assert!((initial_scale(Some(&integer), false) - 2.0).abs() < f64::EPSILON);
+        // No output known: 1.
+        assert!((initial_scale(None, true) - 1.0).abs() < f64::EPSILON);
     }
 
     #[test]

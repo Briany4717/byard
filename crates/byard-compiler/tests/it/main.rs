@@ -94,6 +94,7 @@ mod unknown_method;
 mod url_encoded;
 
 mod panels;
+mod popups;
 mod unknown_name;
 mod user_views;
 mod variations;

@@ -303,6 +303,11 @@ pub enum EventKind {
     /// `InputPayload::Screens`. Not routed to an element; the interpreter
     /// writes the `screens` list.
     Screens,
+    /// The compositor dismissed a popup (`xdg_popup.popup_done`, RFC-0068 §7):
+    /// the user clicked outside a popup that had the grab. Not routed to an
+    /// element: the popup's overlay runs its `dismiss`, as a press outside runs
+    /// it in a window.
+    PopupDone,
 }
 
 impl EventKind {
@@ -346,7 +351,8 @@ impl EventKind {
             | Self::WindowFocus
             | Self::CloseRequest
             | Self::SurfaceResized
-            | Self::Screens => false,
+            | Self::Screens
+            | Self::PopupDone => false,
         }
     }
 }

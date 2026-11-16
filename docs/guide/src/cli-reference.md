@@ -109,8 +109,10 @@ library package.
 | `--key <KEY>` | | Presses a key before the picture, such as `Left`, `shift+Left` or `mod+a`. Repeat it to press more. |
 | `--type <TEXT>` | | Types text before the picture. Repeat it to type more. |
 | `--wait <MS>` | | Lets this many milliseconds of app time pass before the next input or the picture. Repeatable. |
-| `--surface <NAME>` | | In a program with several windows (`Window`), the one to draw: its `as` name, else its title. The taps and keys are for it too. It is drawn at the size it opens at, and `--size` is not used. A program with one window needs no flag; with several and no `--surface`, the command lists their names. A program with no `Window` refuses it. |
-| `--a11y <FILE>` | | Writes the accessibility tree to a text file, one node a line. A control a screen reader could not name is marked `(unnamed)`. In a program with windows, each window starts with a `Window "title"` line and its tree is indented below it. |
+| `--screens <SCREENS>` | one `screen-1` of `--size` | The screens a program of windows and panels is drawn on, `NAME:WxH[@SCALE][+X+Y]` separated by commas, like `"DP-1:2560x1440@1.5, HDMI-A-1:1920x1080"`. `WxH` is the mode in device pixels, so the logical size is that divided by the scale (1707 by 960 for the first); a screen with no `+X+Y` sits right of the one before it. They are what `screens` lists. A program with no `Window` or `Panel` refuses it. |
+| `--screen <NAME>` | | The screen to draw alone, or, with `--surface`, the one whose instance of a surface made once per screen is meant. |
+| `--surface <NAME>` | | In a program of windows and panels, the surface to draw alone: its `as` name, else its namespace (a panel) or its title (a window). It is drawn at its own size, `--size` is not used, and the taps and keys are for it, in its own coordinates. A surface made once per screen needs `--screen` too. A program with no `Window` or `Panel` refuses it. |
+| `--a11y <FILE>` | | Writes the accessibility tree to a text file, one node a line. A control a screen reader could not name is marked `(unnamed)`. In a program of windows and panels, each surface starts with a `Window "title"`, `Panel "namespace" @ DP-1` or `Popup "name" @ DP-1` line and its tree is indented below it. |
 
 `--tap`, `--hold`, `--hover`, `--drag`, `--key`, `--type` and `--wait` run in the order they are written on the command line. A key is a single
 character or one of `Left`, `Right`, `Up`, `Down`, `Home`, `End`, `PageUp`, `PageDown`, `Insert`, `Backspace`, `Delete`, `Enter`,
@@ -122,6 +124,29 @@ by `+`. `mod` is Command on macOS and Control elsewhere. With `--a11y`, the pict
 Text that starts with `-`, such as a negative number, would be read as another option. Join it to the
 option with `=`: `--type=-1.5`.
 
+### Screens
+
+Without `--surface`, a program of windows and panels is drawn as the desktop would show it: the
+screens side by side at their positions, over a checkerboard where nothing is, with every surface
+composited in layer order (`background`, `bottom`, windows, `top`, `overlay`, popups). Panels are
+placed by layer shell's rules, anchors, margins and exclusive zones in the order the compositor
+applies them, windows are centred in the area the panels left, and popups are positioned and
+flipped as an `xdg_positioner` does. The picture is at `--scale` on every screen; a screen's own
+scale decides its logical size and what `screens` reports. A program whose only surface is one
+`Window`, with no `--screens`, is drawn whole, as before.
+
+`--tap`, `--hover`, `--drag` and the rest take points of the screens, in logical pixels, and go to
+the topmost surface whose input region holds the point, so a tap on the transparent part of a
+panel reaches what is below. A press outside the popup that has the grab is the compositor
+taking the popup away: its `dismiss` runs and the press goes no further. `--key` and `--type` go
+to the popup that has the grab, else to the surface last tapped.
+
+```sh
+byard shot shell/ --screens "DP-1:1600x900, HDMI-A-1:1280x720" --scale 1 -o screens.png
+byard shot shell/ --screens "DP-1:1600x900, HDMI-A-1:1280x720" --surface bar --screen DP-1 -o bar.png
+byard shot shell/ --screens "DP-1:1600x900" --scale 1 --tap 40,30 -o menu.png
+```
+
 ## `byard test`
 
 ```text
@@ -132,10 +157,12 @@ Runs the scenario files `tests/*.toml` of a project: each test draws a view head
 with the inputs `shot` takes, and checks the accessibility tree. It opens no window and never needs a
 GPU. Output is one line per test and a summary, as `cargo test` prints; the exit status is 1 if any
 test failed or any scenario file is wrong. A project with no `tests/*.toml` is an error. The format is
-in [the dev loop](dev-loop.md#byard-test). In a program with several windows (`Window`), it sees every one:
-the dump starts each window with a `Window "title"` line, a step that names an element finds it on whichever
-window it is and taps it there, and `--shots` writes a picture of each window at its own size
-(`<file>-<name>-<window>.png`); see [several windows](windows.md).
+in [the dev loop](dev-loop.md#byard-test). In a program of windows and panels, it sees every surface:
+the dump starts each with a `Window "title"`, `Panel "namespace" @ DP-1` or `Popup "name" @ DP-1` line, a step that names an element finds it on whichever
+surface it is and taps it there, a step that gives a point is a point of the screens, and `--shots` writes the screens as
+`<file>-<name>.png` and a picture of each surface at its own size (`<file>-<name>-<surface>.png`). A
+`screens = "DP-1:1600x900, …"` key, in the file or in a test, says the screens, as `--screens` does; see [several windows](windows.md)
+and [panels and screens](panels.md).
 
 | Argument or flag | Default | |
 |------------------|---------|-|

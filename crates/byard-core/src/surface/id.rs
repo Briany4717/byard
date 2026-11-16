@@ -18,6 +18,7 @@
 //! the relay keeps its slot inline.
 
 use super::panel::{InputRegion, LayerSpec};
+use super::popup::PopupSpec;
 
 /// Which surface something belongs to.
 ///
@@ -52,7 +53,7 @@ impl SurfaceId {
 
 /// What kind of surface a [`SurfaceSpec`] describes.
 ///
-/// A window or a panel; popups (RFC-0068 §7) will add their own.
+/// A window, a panel, or a popup of a panel (RFC-0068 §7).
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 #[non_exhaustive]
 pub enum SurfaceKind {
@@ -62,6 +63,9 @@ pub enum SurfaceKind {
     /// A layer surface: a bar, a dock, a launcher (RFC-0068 §3). Its
     /// [`SurfaceSpec::layer`] says how it is placed.
     Panel,
+    /// An `xdg_popup`: an `Overlay` of a panel that is anchored to an element
+    /// (RFC-0068 §7). Its [`SurfaceSpec::popup`] says where it goes.
+    Popup,
 }
 
 /// What a surface is made of: its kind, its size, its title, everything the
@@ -104,6 +108,11 @@ pub struct SurfaceSpec {
     /// stretches), `name` its `as` name or its namespace, `title` its namespace,
     /// and it is transparent, undecorated and not resizable.
     pub layer: Option<LayerSpec>,
+    /// The positioner data and the grab of a [`SurfaceKind::Popup`]; `None`
+    /// for a window or a panel. For a popup, `size` is what its content
+    /// measured, laid out unbounded, `name` its `as` name (else `popup`), and
+    /// it is transparent, undecorated and not resizable.
+    pub popup: Option<PopupSpec>,
     /// Whether the element has a `close =>`. Without one the platform's close
     /// request ends the program, and a host may say so before it asks.
     pub handles_close: bool,
@@ -129,7 +138,26 @@ impl SurfaceSpec {
             decorations: true,
             transparent: false,
             layer: None,
+            popup: None,
             handles_close: false,
+        }
+    }
+
+    /// A popup with this positioner data: transparent, undecorated, not
+    /// resizable, of no size yet (the caller sets `size`).
+    #[must_use]
+    pub fn popup(name: impl Into<String>, popup: PopupSpec) -> Self {
+        let name = name.into();
+        Self {
+            kind: SurfaceKind::Popup,
+            title: name.clone(),
+            name,
+            size: (0.0, 0.0),
+            resizable: false,
+            decorations: false,
+            transparent: true,
+            popup: Some(popup),
+            ..Self::window(String::new())
         }
     }
 

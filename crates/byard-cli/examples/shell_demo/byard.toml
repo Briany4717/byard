@@ -1,0 +1,43 @@
+[project]
+name = "shell_demo"
+entry = "src/main.byd"
+
+# The colours come from here, not from hex literals in the program: a Material 3
+# dark scheme, so the bar, the menu, the dock and the window read as one family.
+[theme]
+name = "shell"
+extends = "byard-base"
+scheme = "dark"
+
+[theme.color.dark]
+primary = "#D0BCFF"
+on_primary = "#381E72"
+primary_container = "#4F378B"
+on_primary_container = "#EADDFF"
+secondary = "#CCC2DC"
+secondary_container = "#4A4458"
+on_secondary_container = "#E8DEF8"
+tertiary = "#EFB8C8"
+tertiary_container = "#633B48"
+on_tertiary_container = "#FFD8E4"
+surface = "#141218"
+surface_container_low = "#1D1B20"
+surface_container = "#211F26"
+surface_container_high = "#2B2930"
+surface_container_highest = "#36343B"
+on_surface = "#E6E0E9"
+on_surface_variant = "#CAC4D0"
+outline = "#938F99"
+outline_variant = "#49454F"
+
+[theme.typography]
+title_medium = { size = 16, weight = "medium" }
+label_large = { size = 14, weight = "medium" }
+label_medium = { size = 12, weight = "medium" }
+body_medium = { size = 14, weight = "regular" }
+headline_small = { size = 24, weight = "regular" }
+
+[theme.shape]
+corner_md = 12
+corner_lg = 16
+corner_xl = 28

@@ -72,6 +72,8 @@ struct Test {
     name: String,
     view: Option<String>,
     size: (u32, u32),
+    /// The screens of a program of windows and panels (RFC-0068 §9).
+    screens: Option<Vec<byard_core::ScreenInfo>>,
     dark: Option<bool>,
     at: u32,
     now: Option<String>,
@@ -86,11 +88,12 @@ impl Test {
     }
 }
 
-const FILE_KEYS: &[&str] = &["view", "size", "scheme", "at", "now", "test"];
+const FILE_KEYS: &[&str] = &["view", "size", "screens", "scheme", "at", "now", "test"];
 const TEST_KEYS: &[&str] = &[
     "name",
     "view",
     "size",
+    "screens",
     "scheme",
     "at",
     "now",
@@ -283,7 +286,7 @@ fn parse_file(file: &str, text: &str) -> Result<Vec<Test>, Vec<String>> {
     }
     // The file's own defaults, which a test overrides key by key.
     let mut base = Table::new();
-    for k in ["view", "size", "scheme", "at", "now"] {
+    for k in ["view", "size", "screens", "scheme", "at", "now"] {
         if let Some(v) = table.get(k) {
             base.insert(k.into(), v.clone());
         }
@@ -330,6 +333,7 @@ fn parse_file(file: &str, text: &str) -> Result<Vec<Test>, Vec<String>> {
             name,
             view: None,
             size: (440, 880),
+            screens: None,
             dark: None,
             at: 0,
             now: None,
@@ -349,6 +353,13 @@ fn parse_file(file: &str, text: &str) -> Result<Vec<Test>, Vec<String>> {
         }));
         field(pick("size").map_or(Ok(()), |v| {
             case.size = size_of(v)?;
+            Ok(())
+        }));
+        field(pick("screens").map_or(Ok(()), |v| {
+            case.screens = Some(
+                super::screens::parse_screens(&string_of(v, "screens")?)
+                    .map_err(|e| format!("`screens`: {e}"))?,
+            );
             Ok(())
         }));
         field(pick("scheme").map_or(Ok(()), |v| {
@@ -493,7 +504,7 @@ fn resolve(scene: &Scene, sel: &str) -> Result<(byard_core::SurfaceId, f32, f32)
             // A window's own line is not an element to press.
             let b = line.bounds.ok_or_else(|| {
                 vec![format!(
-                    "`{}` is a window, not an element: name something inside it",
+                    "`{}` is a surface, not an element: name something inside it",
                     line.text.trim_start()
                 )]
             })?;
@@ -568,6 +579,7 @@ fn run_test(project: &Project, test: &Test) -> (Option<Failure>, Option<Scene>) 
             dark: test.dark,
             wall_clock: test.now.as_deref(),
             access: true,
+            screens: test.screens.clone(),
         },
     ) {
         Ok(scene) => scene,
@@ -791,15 +803,28 @@ pub fn run(args: &TestArgs<'_>) -> Result<(), String> {
 
 fn write_picture(gpu: &Gpu, scene: &Scene, size: (u32, u32), out: &Path) -> Result<(), String> {
     let scale = 2.0;
-    // A program with windows has a picture of each, at the size it opens at
-    // (RFC-0068 §9): `name-window.png` beside the one a plain program makes.
+    // A program with surfaces has the screens as one picture, `name.png`, and a
+    // picture of each surface at its own size, `name-surface.png` (RFC-0068 §9).
     if scene.has_windows() {
         let stem = out.with_extension("");
-        for s in scene.surfaces() {
-            let path = PathBuf::from(format!("{}-{}.png", stem.display(), slug(s.name)));
+        let all = scene.surfaces();
+        if !scene.is_lone_window() {
+            let (pixels, w, h) = scene.composite(gpu, scale, None)?;
+            image::save_buffer(out, &pixels, w, h, image::ColorType::Rgba8)
+                .map_err(|e| format!("{}: {e}", out.display()))?;
+        }
+        for s in &all {
+            // A surface made once per screen is told apart by the screen.
+            let twin = all.iter().filter(|o| o.name == s.name).count() > 1;
+            let name = if twin {
+                format!("{}-{}", slug(s.name), slug(s.screen))
+            } else {
+                slug(s.name)
+            };
+            let path = PathBuf::from(format!("{}-{name}.png", stem.display()));
             #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
             let size = (s.size.0.round() as u32, s.size.1.round() as u32);
-            save_png(gpu, s.frame, size, scale, s.is_panel, &path)?;
+            save_png(gpu, s.frame, size, scale, s.transparent, &path)?;
         }
         return Ok(());
     }

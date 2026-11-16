@@ -735,7 +735,10 @@ impl Interpreter {
                 }
                 // A surface's close request is the program's, not an
                 // element's (RFC-0068 §2).
-                CoreKind::CloseRequest | CoreKind::SurfaceResized | CoreKind::Screens => {
+                CoreKind::CloseRequest
+                | CoreKind::SurfaceResized
+                | CoreKind::Screens
+                | CoreKind::PopupDone => {
                     consumed[i] = true;
                 }
                 _ => {}
@@ -774,7 +777,8 @@ impl Interpreter {
                     | CoreKind::AccessScrollIntoView
                     | CoreKind::CloseRequest
                     | CoreKind::SurfaceResized
-                    | CoreKind::Screens => {
+                    | CoreKind::Screens
+                    | CoreKind::PopupDone => {
                         unreachable!(
                             "composition, window focus, scheme and accessibility events are consumed before routing"
                         )

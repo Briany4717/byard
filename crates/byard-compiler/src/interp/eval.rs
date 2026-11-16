@@ -51,6 +51,7 @@ mod measure;
 mod navigation;
 mod overlay;
 mod paint;
+mod popups;
 mod props;
 mod retire;
 mod scroll;
@@ -1149,6 +1150,8 @@ pub struct Interpreter {
     screens: Vec<byard_core::ScreenInfo>,
     /// The signal behind `screens`, made when a program first reads it.
     screens_sig: Option<SignalId>,
+    /// What a popup is, while one is drawn or looked for (RFC-0068 §7).
+    popup: popups::PopupCtx,
 }
 
 /// What an `on measure` was last told, as raw bits: width, height, x, y
@@ -1976,8 +1979,13 @@ impl Interpreter {
         // gesture state (a pending `down`, the focused element) so a tap that
         // spans this re-render is still recognized (RFC-0003 E4).
         self.router.clear_handlers();
+        // RFC-0068 §3: an exclusive panel's frame is a focus scope.
         if let Some(key) = self.panel_scope {
             self.router.begin_scope(key, false);
+        }
+        // RFC-0068 §7: a popup's frame is a focus scope, dismisses, or leaves.
+        if self.popup.frame.is_some() {
+            self.begin_popup_frame(width, height);
         }
         // RFC-0021, over the previous frame's scroll targets (before they are
         // dropped, so the offset writes below are what *this* frame paints):
@@ -2016,8 +2024,14 @@ impl Interpreter {
         self.radio_groups.clear();
         // The walk starts outside every `for`. Reset rather than assume,
         // so a frame that ends deep inside a list cannot leak that row's
-        // identity into the next frame's top-level animations.
-        self.anim_slot = AnimSlot::default();
+        // identity into the next frame's top-level animations. A popup's content
+        // is the inside of an overlay, so it starts under that overlay's slot,
+        // the leaving group when the popup is on its way out.
+        self.anim_slot = self
+            .popup
+            .frame
+            .as_ref()
+            .map_or_else(AnimSlot::default, |p| p.slot);
 
         // Everything that could still be called from the previous frame's
         // handlers has been cleared above, so the scopes its painting opened
@@ -2272,6 +2286,9 @@ impl Interpreter {
             self.emit_overlay(ol, frame, width, height, pools);
         }
         self.anim_slot = AnimSlot::default();
+        if self.popup.frame.is_some() {
+            self.end_popup_frame();
+        }
         if let Some(key) = self.panel_scope {
             self.router.close_scope(key);
         }

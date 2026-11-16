@@ -115,6 +115,9 @@ my_app/
   src/main.rs    # only if the app has Rust controllers or widgets
 ```
 
+`byard new` puts `main.byd` beside the manifest and not under `src/`. Both
+work: what matters is the `entry` line in `byard.toml`.
+
 A Rust app starts with
 
 ```rust
@@ -150,10 +153,6 @@ Unchanged parts of a frame are not laid out or redrawn again.
 | `byld-lsp` | Editor support (early) |
 
 The design documents are in [`docs/rfcs`](docs/rfcs).
-
-`third_party/swash` is a vendored copy of the `swash` crate with one fix to
-how it handles variable fonts; its `BYARD.md` explains why and how to remove
-it once the fix is released upstream.
 
 ## Contributing
 

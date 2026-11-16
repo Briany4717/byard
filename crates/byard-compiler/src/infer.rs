@@ -212,11 +212,12 @@ pub fn check_views(views: &[ViewDecl]) -> Inference {
         .chain(enum_decls.iter().map(|e| e.name.clone()))
         .collect();
     let type_names = &type_names;
-    let top_fns = check_top_fns(&helpers, &const_decls, &enums, type_names, &mut out);
+    let (top_fns, top_sigs) = check_top_fns(&helpers, &const_decls, &enums, type_names, &mut out);
     let consts = check_consts(
         &const_decls,
         &helpers,
         &top_fns,
+        &top_sigs,
         &enums,
         type_names,
         &mut out,
@@ -277,6 +278,9 @@ pub fn check_views(views: &[ViewDecl]) -> Inference {
             errors: &mut out.errors,
             bindings: &mut out.bindings,
             type_names,
+            top_sigs: top_sigs.clone(),
+            local_sigs: Sigs::new(),
+            view: Symbol::intern(""),
             env: HashMap::new(),
             undo: Vec::new(),
             origins: HashMap::new(),
@@ -307,6 +311,9 @@ pub fn check_views(views: &[ViewDecl]) -> Inference {
             errors: &mut out.errors,
             bindings: &mut out.bindings,
             type_names,
+            top_sigs: top_sigs.clone(),
+            local_sigs: Sigs::new(),
+            view: Symbol::intern(""),
             env: HashMap::new(),
             undo: Vec::new(),
             origins: HashMap::new(),
@@ -338,7 +345,11 @@ fn check_top_fns(
     enums: &HashMap<Symbol, Vec<Symbol>>,
     type_names: &HashSet<Symbol>,
     out: &mut Inference,
-) -> HashMap<Symbol, Option<Ty>> {
+) -> (HashMap<Symbol, Option<Ty>>, Sigs) {
+    let top_sigs: Sigs = helpers
+        .iter()
+        .map(|decl| (decl.name.clone(), sig_of(&decl.params)))
+        .collect();
     // What a function may read besides its parameters: other functions, the
     // constants, and the enums whose cases it names.
     let names: std::collections::HashSet<&Symbol> = helpers
@@ -356,6 +367,9 @@ fn check_top_fns(
         errors: &mut out.errors,
         bindings: &mut out.bindings,
         type_names,
+        top_sigs: top_sigs.clone(),
+        local_sigs: Sigs::new(),
+        view: Symbol::intern(""),
         env: HashMap::new(),
         undo: Vec::new(),
         origins: HashMap::new(),
@@ -393,7 +407,10 @@ fn check_top_fns(
                 what: "function return".to_string(),
             });
         }
-        checker.check_expr(&decl.body);
+        let found = checker.check_expr(&decl.body);
+        if let Some(Some(ret)) = top.get(&decl.name) {
+            checker.must_fit(ret, &found, decl.body.span());
+        }
         checker.leave(mark);
 
         let impure = |span: Span| CompileError::ImpureFunction {
@@ -424,7 +441,7 @@ fn check_top_fns(
             }
         }
     }
-    top
+    (top, top_sigs)
 }
 
 /// The program's enums by name, each with its distinct cases.
@@ -451,6 +468,7 @@ fn check_consts(
     consts: &[ConstDecl],
     helpers: &[FnDecl],
     fns: &HashMap<Symbol, Option<Ty>>,
+    top_sigs: &Sigs,
     enums: &HashMap<Symbol, Vec<Symbol>>,
     type_names: &HashSet<Symbol>,
     out: &mut Inference,
@@ -499,6 +517,9 @@ fn check_consts(
                 errors: &mut out.errors,
                 bindings: &mut out.bindings,
                 type_names,
+                top_sigs: top_sigs.clone(),
+                local_sigs: Sigs::new(),
+                view: Symbol::intern(""),
                 env: HashMap::new(),
                 undo: Vec::new(),
                 origins: HashMap::new(),
@@ -590,11 +611,55 @@ fn bind_attrs(control: &str) -> &'static [&'static str] {
     }
 }
 
+/// What a call to a function is checked against: each parameter's name, its
+/// type, and whether it has a default.
+type Sigs = HashMap<Symbol, Vec<(Symbol, Ty, bool)>>;
+
+/// The signature of a lambda: the types its parameters were written with, and
+/// unknown for the ones that were not.
+fn lambda_sig(params: &[Symbol], types: &[Option<Type>]) -> Vec<(Symbol, Ty, bool)> {
+    params
+        .iter()
+        .enumerate()
+        .map(|(i, name)| {
+            let ty = types
+                .get(i)
+                .and_then(Option::as_ref)
+                .map_or(Ty::Unknown, plain_ty);
+            (name.clone(), ty, false)
+        })
+        .collect()
+}
+
+/// The signature of a parameter list.
+fn sig_of(params: &[Param]) -> Vec<(Symbol, Ty, bool)> {
+    params
+        .iter()
+        .map(|p| {
+            let ty = p.ty.as_ref().map_or(Ty::Unknown, plain_ty);
+            let ty = if p.optional {
+                Ty::Optional(Box::new(ty))
+            } else {
+                ty
+            };
+            // A `fn` has no defaults yet (step 16): every parameter is given.
+            (p.name.clone(), ty, false)
+        })
+        .collect()
+}
+
 struct Checker<'a> {
     errors: &'a mut Vec<CompileError>,
     /// The names of the program's own types: its `type`s, `context`s and
     /// `enum`s.
     type_names: &'a HashSet<Symbol>,
+    /// The parameters of each top-level `fn`, for checking a call to it.
+    top_sigs: Sigs,
+    /// The parameters of the `fn`s and named actions of the view being
+    /// checked, which hide a top-level one of the same name.
+    local_sigs: Sigs,
+    /// The view being checked, for the errors that name it.
+    view: Symbol,
     bindings: &'a mut Vec<(Symbol, Ty)>,
     /// Known binding types in scope (params, vars, lets).
     env: HashMap<Symbol, Ty>,
@@ -656,11 +721,30 @@ impl Checker<'_> {
                 self.optional.insert(param.name.clone());
             }
         }
-        // Pre-collect `fn` return types so calls in any order can resolve them.
+        self.view = view.name.clone();
+        self.local_sigs.clear();
+        // Pre-collect `fn` return types so calls in any order can resolve them,
+        // and the parameters of the `fn`s and named actions to check them by.
         for member in &view.body {
-            if let Member::Fn { name, ret, .. } = member {
-                let ty = ret.as_ref().map(|t| self.resolve_written(t));
-                self.fns.insert(name.clone(), ty);
+            match member {
+                Member::Fn {
+                    name, ret, params, ..
+                } => {
+                    let ty = ret.as_ref().map(|t| self.resolve_written(t));
+                    self.fns.insert(name.clone(), ty);
+                    if !params.is_empty() {
+                        self.local_sigs.insert(name.clone(), sig_of(params));
+                    }
+                }
+                Member::Let {
+                    name,
+                    init: Expr::Lambda { params, types, .. },
+                    ..
+                } => {
+                    self.local_sigs
+                        .insert(name.clone(), lambda_sig(params, types));
+                }
+                _ => {}
             }
         }
         for member in &view.body {
@@ -1584,12 +1668,17 @@ impl Checker<'_> {
                     Origin::Let
                 };
                 self.bind_from(name.clone(), inferred.clone(), origin);
+                self.note_signature(name, init, origin == Origin::Let);
                 if top_level {
                     self.bindings.push((name.clone(), inferred));
                 }
             }
             Member::Fn {
-                params, ret, body, ..
+                name,
+                params,
+                ret,
+                body,
+                ..
             } => {
                 // The parameters are in scope for the body alone.
                 let mark = self.undo.len();
@@ -1602,7 +1691,10 @@ impl Checker<'_> {
                         what: "function return".to_string(),
                     });
                 }
-                self.value(body);
+                let found = self.value(body);
+                if let Some(Some(ret)) = self.fns.get(name).cloned() {
+                    self.must_fit(&ret, &found, body.span());
+                }
                 self.leave(mark);
             }
             Member::Inject { ty, name, span } => {
@@ -1777,6 +1869,20 @@ impl Checker<'_> {
         match init {
             Expr::Array(elems, _) => self.infer_array(elems, span),
             other => self.value(other),
+        }
+    }
+
+    /// A `let` that is a lambda is a named action, and is called by what its
+    /// parameters say; any other binding of the name is not.
+    fn note_signature(&mut self, name: &Symbol, init: &Expr, is_let: bool) {
+        match init {
+            Expr::Lambda { params, types, .. } if is_let => {
+                self.local_sigs
+                    .insert(name.clone(), lambda_sig(params, types));
+            }
+            _ => {
+                self.local_sigs.remove(name);
+            }
         }
     }
 
@@ -1992,9 +2098,18 @@ impl Checker<'_> {
                 let e = self.narrowed_in(when_false, |s| s.check_expr(els));
                 if t == e { t } else { Ty::Unknown }
             }
-            Expr::Index { base, index, .. } => {
+            Expr::Index { base, index, span } => {
                 let b = self.value(base);
-                self.value(index);
+                let at = self.value(index);
+                // An item is found by a whole number.
+                if matches!(b, Ty::List(_)) && is_concrete(&at) && at != Ty::Int {
+                    self.errors.push(CompileError::TypeMismatch {
+                        span: *span,
+                        op: "[]".to_string(),
+                        lhs_ty: ty_name(&b),
+                        rhs_ty: ty_name(&at),
+                    });
+                }
                 match b {
                     Ty::List(elem) => *elem,
                     _ => Ty::Unknown,
@@ -2029,7 +2144,7 @@ impl Checker<'_> {
                     Ty::Unknown
                 }
             }
-            Expr::Call { callee, args, .. } => self.check_call(callee, args),
+            Expr::Call { callee, args, span } => self.check_call(callee, args, *span),
             // `(vertical: 8)`, `(kind: radial, …)`: a property's own shape.
             // A named field is a value (an offset, a colour, a length), so
             // `shadow: (y: sze)` and `gradient: (to: blak)` are misspelt
@@ -2091,6 +2206,7 @@ impl Checker<'_> {
             } => {
                 let bound = self.infer_binding(ty.as_ref(), value, *span);
                 self.bind_from(name.clone(), bound, Origin::Let);
+                self.note_signature(name, value, true);
                 Ty::Unknown
             }
             Expr::Assign {
@@ -2269,10 +2385,78 @@ impl Checker<'_> {
         Ty::Unknown
     }
 
+    /// Checks a call to a name against what the name is: a `fn` or a named
+    /// action takes the number of arguments it declares, each of the type it
+    /// declares; a callback takes what its `Fn(…)` type says; a value that is
+    /// none of those cannot be called.
+    fn check_fn_call(
+        &mut self,
+        name: &Symbol,
+        args: &[crate::parser::ast::Arg],
+        found: &[Ty],
+        span: Span,
+    ) {
+        // Arguments by name are step 16's.
+        if args.iter().any(|a| a.name.is_some()) {
+            return;
+        }
+        let sig = self.local_sigs.get(name).cloned().or_else(|| {
+            if self.env.contains_key(name) {
+                None
+            } else {
+                self.top_sigs.get(name).cloned()
+            }
+        });
+        if let Some(sig) = sig {
+            let required = sig.iter().filter(|p| !p.2).count();
+            if args.len() < required || args.len() > sig.len() {
+                self.errors.push(CompileError::ArityMismatch {
+                    span,
+                    name: name.as_str().to_string(),
+                    expected: sig.len(),
+                    found: args.len(),
+                });
+                return;
+            }
+            for ((arg, ty), (param, expected, _)) in args.iter().zip(found).zip(&sig) {
+                if !fits(expected, ty) {
+                    self.errors.push(CompileError::ArgumentTypeMismatch {
+                        span: arg.value.span(),
+                        callee: name.as_str().to_string(),
+                        name: param.as_str().to_string(),
+                        expected: ty_name(expected),
+                        found: ty_name(ty),
+                    });
+                }
+            }
+            return;
+        }
+        match self.env.get(name).cloned() {
+            Some(Ty::Fn(params, _)) if self.origins.get(name) == Some(&Origin::Param) => {
+                for ((arg, ty), expected) in args.iter().zip(found).zip(&params) {
+                    if !fits(expected, ty) {
+                        self.errors.push(CompileError::CallbackTypeMismatch {
+                            span: arg.value.span(),
+                            callee: self.view.as_str().to_string(),
+                            name: name.as_str().to_string(),
+                        });
+                    }
+                }
+            }
+            Some(ty) if judged(&ty) => self.errors.push(CompileError::TypeMismatch {
+                span,
+                op: "()".to_string(),
+                lhs_ty: ty_name(&ty),
+                rhs_ty: ty_name(&ty),
+            }),
+            _ => {}
+        }
+    }
+
     /// Checks a call: a method call (`recv.method(args)`, RFC-0027 §4) validates
     /// the method against the receiver type; a plain `fn` call resolves to its
     /// declared return type.
-    fn check_call(&mut self, callee: &Expr, args: &[crate::parser::ast::Arg]) -> Ty {
+    fn check_call(&mut self, callee: &Expr, args: &[crate::parser::ast::Arg], span: Span) -> Ty {
         self.reject_bind_args(args);
         if let Expr::Member { base, field, span } = callee {
             let recv = self.value(base);
@@ -2295,15 +2479,20 @@ impl Checker<'_> {
         // A named argument may be a word of the function it is passed to
         // (`repeat: infinite`); a positional one is a value wherever a value
         // is expected.
-        for arg in args {
-            if arg.name.is_some() {
-                self.word(&arg.value);
-            } else {
-                self.check_expr(&arg.value);
-            }
-        }
+        let arg_tys: Vec<Ty> = args
+            .iter()
+            .map(|arg| {
+                if arg.name.is_some() {
+                    self.word(&arg.value)
+                } else {
+                    self.check_expr(&arg.value)
+                }
+            })
+            .collect();
         match callee {
-            Expr::Ident(name, span) => {
+            Expr::Ident(name, name_span) => {
+                let span_of_call = span;
+                let span = name_span;
                 // A call names a function where a value is being read. Inside
                 // an animation's arguments a call names a curve
                 // (`anim.stagger(linear(320ms), …)`), which is the curve's to
@@ -2311,6 +2500,7 @@ impl Checker<'_> {
                 if self.strict && !self.knows(name) && !BUILT_IN_CALLS.contains(&name.as_str()) {
                     self.unknown_name(name, *span);
                 }
+                self.check_fn_call(name, args, &arg_tys, span_of_call);
                 self.fns.get(name).cloned().flatten().unwrap_or_else(|| {
                     // The clock answers text (RFC-0049).
                     if matches!(name.as_str(), "now" | "nowUtc") && !self.knows(name) {
@@ -2387,9 +2577,29 @@ impl Checker<'_> {
                 // turn every lambda over a typed list into a checked position,
                 // and the `Ty` of an element is only as good as the literal
                 // it was inferred from.
+                let expected = if name.as_str() == "reduce" { 2 } else { 1 };
+                if params.len() != expected {
+                    self.errors.push(CompileError::ArityMismatch {
+                        span: args[at].value.span(),
+                        name: name.as_str().to_string(),
+                        expected,
+                        found: params.len(),
+                    });
+                }
+                // The item of a list of scalars is of that type. A record's is
+                // the next step's.
+                let item = match recv {
+                    Ty::List(item)
+                        if matches!(**item, Ty::Int | Ty::Float | Ty::Str | Ty::Bool) =>
+                    {
+                        (**item).clone()
+                    }
+                    _ => Ty::Unknown,
+                };
                 let mark = self.undo.len();
-                for p in params {
-                    self.bind(p.clone(), Ty::Unknown);
+                for (i, p) in params.iter().enumerate() {
+                    let is_item = i + 1 == expected;
+                    self.bind(p.clone(), if is_item { item.clone() } else { Ty::Unknown });
                 }
                 let bt = self.value(body);
                 self.leave(mark);
@@ -2408,7 +2618,11 @@ impl Checker<'_> {
             if arg.name.is_some() {
                 self.word(&arg.value);
             } else {
-                self.check_expr(&arg.value);
+                let found = self.check_expr(&arg.value);
+                // `push` adds an item, which has to be one the list holds.
+                if let (Ty::List(item), "push", 0) = (recv, name.as_str(), i) {
+                    self.must_fit(item, &found, arg.value.span());
+                }
             }
         }
         match (recv, name.as_str()) {
@@ -2998,7 +3212,7 @@ mod tests {
         let goldens = [
             "View Counter() { var count = 0\n Text(\"{count}\") }",
             "View UserCard() { var clicks = 0\n inject AppEnvironment as env\n Text(\"{clicks}\") }",
-            "View Search() { var query = \"\"\n var items: List<Str> = [\"a\"]\n let filtered = items.filter(|x| x)\n fn greeting() -> Str => \"x\" }",
+            "View Search() { var query = \"\"\n var items: List<Str> = [\"a\"]\n let filtered = items.filter(|x| x != \"\")\n fn greeting() -> Str => \"x\" }",
             "View ProfileCard(name: Str) { var liked = false }",
         ];
         for src in goldens {

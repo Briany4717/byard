@@ -175,6 +175,15 @@ another, and the only thing that changes is which value a `var` holds.
 - the two sides of an operator can be combined (`"a" - 1`, `true + 1` and `1 < 2 < 3` are
   `TypeMismatch`), and that two values compared with `==` are of one type;
 - a constant with a written type has a value of that type (`ConstantTypeMismatch`);
+- a call to a `fn`, a named action or a callback gives the number of arguments it declares
+  (`ArityMismatch`) and each of the type it declares (`ArgumentTypeMismatch`, and
+  `CallbackTypeMismatch` for a callback); an `Int` given for a `Float` is a `Float`. A `fn`'s
+  body is of the type it says it returns, and a name that is not a function cannot be called;
+- a list's item is found by an `Int` (`xs[0.5]` is `TypeMismatch`), `push` adds an item of the
+  type the list holds, a lambda given to `map`, `filter`, `find` or `sortBy` takes one
+  parameter and one given to `reduce` two, and what `filter` and `find` give back is a `Bool`
+  (`PredicateNotBool`). The parameter of such a lambda is of the item's type when the list is
+  of numbers, text or truth;
 - every type written is one: built in (`Int`, `Float`, `Str`, `Bool`, `Color`, `List<T>`,
   `Fn(…)`, `Slot`, and the `Screen` and `Window` the language provides) or declared by the
   program as a `type`, an `enum` or a `context`, or another package's as `package.Name`. Any
@@ -196,15 +205,13 @@ else converts.
 > `07_operators.byd`). The types judged so far are the scalars and lists of them; a record,
 > an enum or an optional is let through until its own step:
 >
-> - the arguments of a function, in number and in type, and its body against its result;
 > - a record literal against its declared type;
 > - the condition of `when`, `if` and `? :`, which should be a `Bool`;
 > - writing to a `let`, a parameter, a loop variable or a literal;
 > - two `var`s of one name in a view.
 >
 > Until they are, such a program runs, and what it draws is whatever the values happen to
-> give. An `Int` given as an argument where a `Float` is wanted also stays an `Int`, so
-> dividing it truncates.
+> give.
 
 ## Values as text
 
@@ -375,9 +382,8 @@ A function given to one of these must be *pure*: it computes and returns, and as
 nothing (`EffectInPureLambda`).
 
 > **Not yet.** An index past the end is silent, and arithmetic on the nothing it gives joins
-> text. `for` over something that is not a list draws nothing and says nothing. A `Float`
-> index, an item of the wrong type given to `push`, and a function with the wrong number of
-> parameters are all accepted. (`04_lists.byd`)
+> text. `for` over something that is not a list draws nothing and says nothing.
+> (`04_lists.byd`)
 
 ### Records
 
@@ -484,11 +490,8 @@ constants and calls other shared functions (`ImpureFunction`). A function is wri
 each place that calls it, so it cannot call itself, directly or through another
 (`RecursiveFunction`).
 
-> **Not yet.** A call is not checked against the function: too few arguments, too many, and
-> arguments of the wrong type are all accepted, and a parameter that was not given reads as
-> its own name. The body is not checked against the result type. Arguments cannot be given
-> by name, a function cannot have type parameters, and its body cannot be a block.
-> (`08_functions.byd`)
+> **Not yet.** Arguments cannot be given by name, a function cannot have type parameters or
+> default values, and its body cannot be a block. (`08_functions.byd`)
 
 ### Record types
 
@@ -890,8 +893,7 @@ Text(message)
 
 > **Not yet.** An action cannot loop and cannot stop early. `if` takes any value as its
 > condition. Writing to a `let`, a parameter, a loop variable or a literal is accepted, and
-> so is an assignment inside a text. A named action is not checked against how it is
-> called. (`11_control_flow.byd`, `07_operators.byd`, `08_functions.byd`)
+> so is an assignment inside a text. (`11_control_flow.byd`, `07_operators.byd`)
 
 ## How the screen follows
 

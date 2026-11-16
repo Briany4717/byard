@@ -62,7 +62,6 @@ View Bar(w: Float) { Text("{w}") }
 View Main() { Bar(3) }
 
 //# case: view-int-argument-divides-as-a-float
-//# gap: an `Int` given to a `Float` parameter stays an `Int`, so `w / 2` truncates
 //# text: 1.5
 View Bar(w: Float) { Text("{w / 2}") }
 View Main() { Bar(3) }
@@ -298,7 +297,6 @@ View Choice(on_pick: Fn(Str) = {|_| }) {
 View Main() { Choice() }
 
 //# case: callback-argument-of-the-wrong-type
-//# gap: what a callback is called with is not checked against `Fn(Str)`
 //# error: CallbackTypeMismatch
 View Choice(on_pick: Fn(Str) = {|_| }) {
     on mount => on_pick(5)

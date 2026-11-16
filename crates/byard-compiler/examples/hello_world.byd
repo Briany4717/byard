@@ -15,8 +15,8 @@ View Main() {
     var count: Int = 0
     var liked: Bool = true
     var volume: Float = 0.5
-    var name: String = ""
-    var note: String = ""
+    var name: Str = ""
+    var note: Str = ""
     var hovered: Bool = false
     var eventFocused: Bool = false
     var pokes: Int = 0

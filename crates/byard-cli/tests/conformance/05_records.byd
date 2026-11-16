@@ -95,7 +95,6 @@ type P = { b: Int }
 View Main() { Text("x") }
 
 //# case: record-type-with-unknown-field-type
-//# gap: a type name nobody declared is accepted in a record type
 //# error: UnknownType
 type P = { a: Nope }
 View Main() { Text("x") }

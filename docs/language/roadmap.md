@@ -15,7 +15,7 @@ So every step below ends the same way: **its cases lose their `gap:` line, the r
 loses its note, and this file loses the step.** When this file is empty and the suite has no
 gap, the language is where this document wanted it.
 
-As written, the suite has 574 cases: 503 hold and 71 are gaps.
+As written, the suite has 584 cases: 525 hold and 59 are gaps.
 
 ```sh
 cargo test -p byard-cli --test it conformance -- --nocapture
@@ -87,22 +87,6 @@ relied on reordered records being unequal, so step 12's ternary is the one that 
 `Edition::migrations` in `byard-compiler/src/edition.rs`, and the case that proves `byard fix`
 keeps a program's meaning. Until then `byard new` writes no edition, and a project without one
 stays on `2026`.
-
-### 7. Conditions, and what can be written to
-
-*Cases:* `when-condition-must-be-bool`, `action-if-condition-must-be-bool`,
-`ternary-condition-must-be-bool`, `ternary-arms-of-different-types`,
-`logic-on-a-number-is-an-error`, `assign-to-a-let`, `assign-to-a-parameter`,
-`assign-to-a-literal`, `assign-to-a-loop-variable`,
-`assignment-is-not-an-expression-in-a-text`, `increment-in-a-let-is-an-error`,
-`for-over-a-non-list`.
-
-- The condition of `when`, `if` and `? :` is a `Bool`. The two arms of `? :` are of one
-  type (an `Int` and a `Float` are a `Float`).
-- An assignment's target is a `var`, a binding, or a field of one (step 9). Anything else
-  is `NotAssignable`, which exists and is not raised for these.
-- An assignment outside an action is `EffectInPureContext`, which exists too.
-- `for` takes a list.
 
 ### 8. Names
 

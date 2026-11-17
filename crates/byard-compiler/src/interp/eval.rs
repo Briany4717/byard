@@ -2541,7 +2541,15 @@ impl Interpreter {
         // should be; a type with no obvious zero stays `Unit`.
         for param in &view.params {
             if another_view || self.env.lookup(&param.name).is_none() {
-                self.env.push(param.name.clone(), unset_param(param));
+                let unset = unset_param(param);
+                // A binding is the caller's `var`, which the view writes:
+                // standalone it is a cell of its own, so a write to it is one.
+                let value = if param.bind {
+                    Value::Signal(self.ctx.create_signal(unset))
+                } else {
+                    unset
+                };
+                self.env.push(param.name.clone(), value);
             }
         }
         self.eval_view_decls(view);

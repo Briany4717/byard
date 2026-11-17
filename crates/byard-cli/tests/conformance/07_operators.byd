@@ -33,7 +33,6 @@ let xs: List<Int> = []
 Text("{xs.len == 0 || xs[0] > 5}")
 
 //# case: logic-on-a-number-is-an-error
-//# gap: `1 && true` is accepted, though `!5` is not
 //# fragment
 //# error: TypeMismatch
 Text("{1 && true}")
@@ -83,13 +82,11 @@ var b = true
 Text((a || b) ? "on" : "off")
 
 //# case: ternary-condition-must-be-bool
-//# gap: a condition that is text or a number is accepted
 //# fragment
 //# error: TypeMismatch
 Text("{"a" ? 1 : 2}")
 
 //# case: ternary-arms-of-different-types
-//# gap: arms of two types are accepted, and the value has no one type
 //# fragment
 //# error: TypeMismatch
 let x: Int = true ? 1 : "a"
@@ -168,14 +165,12 @@ Text("{((1 + 2)) * 3} {(1 < 2)}")
 Text("{(1 + 2}")
 
 //# case: assignment-is-not-an-expression-in-a-text
-//# gap: an assignment inside a text is accepted
 //# fragment
 //# error: EffectInPureContext
 var n = 0
 Text("{n = 1}")
 
 //# case: increment-in-a-let-is-an-error
-//# gap: `n++` in a `let` is accepted
 //# fragment
 //# error: EffectInPureContext
 var n = 0
@@ -183,7 +178,6 @@ let m = n++
 Text("{m}")
 
 //# case: assign-to-a-let
-//# gap: writing a `let` in an action is accepted
 //# fragment
 //# error: NotAssignable
 let n = 0
@@ -191,7 +185,6 @@ on mount => { n = 1 }
 Text("{n}")
 
 //# case: assign-to-a-parameter
-//# gap: writing a parameter that is not a binding is accepted
 //# error: NotAssignable
 View Card(n: Int) {
     on mount => { n = 1 }
@@ -200,14 +193,12 @@ View Card(n: Int) {
 View Main() { Card(0) }
 
 //# case: assign-to-a-literal
-//# gap: `5 = 1` is accepted
 //# fragment
 //# error: NotAssignable
 on mount => { 5 = 1 }
 Text("x")
 
 //# case: assign-to-a-loop-variable
-//# gap: writing a `for` variable is accepted
 //# fragment
 //# error: NotAssignable
 for x in [1, 2] {
@@ -229,3 +220,52 @@ Text("{((((((((((((((((((((((((((((((((1))))))))))))))))))))))))))))))))+(((((((
 //# fragment
 //# text: 64
 Text("{1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1}")
+
+//# case: ternary-int-and-float-arms-are-a-float
+//# fragment
+//# text: 0.5
+Text("{(false ? 1 : 0.5)}")
+
+//# case: or-of-a-text-is-an-error
+//# fragment
+//# error: TypeMismatch
+//# diagnostics: 1
+Text("{"a" || true}")
+
+//# case: not-a-bool-condition-in-a-comparison-is-fine
+//# fragment
+//# text: yes
+var n = 1
+Text(n != 0 && n > 0 ? "yes" : "no")
+
+//# case: increment-a-loop-variable
+//# fragment
+//# error: NotAssignable
+//# diagnostics: 1
+for x in [1, 2] {
+    Button("a") => x++
+}
+
+//# case: assign-to-the-result-of-a-call
+//# fragment
+//# error: NotAssignable
+//# diagnostics: 1
+fn one() -> Int => 1
+on mount => { one() = 2 }
+Text("x")
+
+//# case: plus-equals-in-a-text-is-an-effect
+//# fragment
+//# error: EffectInPureContext
+//# diagnostics: 1
+var n = 0
+Text("{n += 1}")
+
+//# case: a-binding-parameter-is-written-like-a-var
+//# text: 1
+View Inner(bind n: Int) { on mount => { n = 1 } }
+View Main() {
+    var n = 0
+    Inner(bind: n)
+    Text("{n}")
+}

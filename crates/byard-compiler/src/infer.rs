@@ -1817,7 +1817,16 @@ impl Checker<'_> {
             } => {
                 // A list of records gives its loop variable the record's type,
                 // so a misspelt field inside the loop is told.
-                let item = match self.value(iter) {
+                let iterated = self.value(iter);
+                if is_not_a_list(&iterated) {
+                    self.errors.push(CompileError::TypeMismatch {
+                        span: iter.span(),
+                        op: "for".to_string(),
+                        lhs_ty: ty_name(&iterated),
+                        rhs_ty: ty_name(&iterated),
+                    });
+                }
+                let item = match iterated {
                     Ty::List(inner) => *inner,
                     _ => Ty::Unknown,
                 };
@@ -1838,7 +1847,8 @@ impl Checker<'_> {
             Member::When {
                 cond, then, els, ..
             } => {
-                self.value(cond);
+                let found = self.value(cond);
+                self.must_be_bool(&found, cond.span());
                 let (when_true, when_false) = self.narrowing(cond);
                 self.narrowed_in(when_true, |s| s.check_scoped(then, &[]));
                 if let Some(els) = els {
@@ -1920,6 +1930,18 @@ impl Checker<'_> {
         }
     }
 
+    /// The condition of `when`, `if` and `? :` is a `Bool`.
+    fn must_be_bool(&mut self, found: &Ty, span: Span) {
+        if is_not_a_bool(found) {
+            self.errors.push(CompileError::TypeMismatch {
+                span,
+                op: "cond".to_string(),
+                lhs_ty: ty_name(found),
+                rhs_ty: ty_name(found),
+            });
+        }
+    }
+
     /// Reports a value `found` where the type `expected` was written for it:
     /// the first value of a `var` or `let`, one assigned to a `var`.
     fn must_fit(&mut self, expected: &Ty, found: &Ty, span: Span) {
@@ -1929,6 +1951,22 @@ impl Checker<'_> {
                 op: "=".to_string(),
                 lhs_ty: ty_name(expected),
                 rhs_ty: ty_name(found),
+            });
+        }
+    }
+
+    /// What an assignment writes is a `var`, a binding, or a field or an item
+    /// of one. A `let`, a parameter, a loop variable, a lambda's parameter or
+    /// a literal is [`CompileError::NotAssignable`].
+    fn check_write_target(&mut self, target: &Expr) {
+        let refused = match target {
+            Expr::Ident(name, _) => !matches!(self.origins.get(name), Some(Origin::Var) | None),
+            Expr::Member { .. } | Expr::Index { .. } => false,
+            _ => true,
+        };
+        if refused {
+            self.errors.push(CompileError::NotAssignable {
+                span: target.span(),
             });
         }
     }
@@ -2147,16 +2185,47 @@ impl Checker<'_> {
                         op: "||".to_string(),
                     });
                 }
+                // `&&` and `||` take `Bool`s. `a || b ? x : y` is told once, by
+                // the warning about its precedence, and not again here.
+                let mixed = *op == BinOp::Or
+                    && matches!(rhs.as_ref(), Expr::Ternary { span: t, .. } if t.end == span.end);
+                if matches!(op, BinOp::And | BinOp::Or) && !mixed {
+                    if let Some(side) = [&l, &r].into_iter().find(|side| is_not_a_bool(side)) {
+                        self.errors.push(CompileError::TypeMismatch {
+                            span: *span,
+                            op: op_str(*op).to_string(),
+                            lhs_ty: ty_name(side),
+                            rhs_ty: ty_name(side),
+                        });
+                    }
+                }
                 self.check_binary(*op, &l, &r, *span)
             }
             Expr::Ternary {
                 cond, then, els, ..
             } => {
-                self.value(cond);
+                let found = self.value(cond);
+                self.must_be_bool(&found, cond.span());
                 let (when_true, when_false) = self.narrowing(cond);
                 let t = self.narrowed_in(when_true, |s| s.check_expr(then));
                 let e = self.narrowed_in(when_false, |s| s.check_expr(els));
-                if t == e { t } else { Ty::Unknown }
+                // The two arms are of one type, and an `Int` beside a `Float`
+                // is a `Float`.
+                if judged(&t) && judged(&e) && !(assignable(&t, &e) || assignable(&e, &t)) {
+                    self.errors.push(CompileError::TypeMismatch {
+                        span: expr.span(),
+                        op: "?:".to_string(),
+                        lhs_ty: ty_name(&t),
+                        rhs_ty: ty_name(&e),
+                    });
+                    Ty::Unknown
+                } else if t == e {
+                    t
+                } else if matches!((&t, &e), (Ty::Int | Ty::Float, Ty::Int | Ty::Float)) {
+                    Ty::Float
+                } else {
+                    Ty::Unknown
+                }
             }
             Expr::Index { base, index, span } => {
                 let b = self.value(base);
@@ -2266,6 +2335,7 @@ impl Checker<'_> {
             Expr::Assign {
                 target, op, value, ..
             } => {
+                self.check_write_target(target);
                 self.value(target);
                 let found = self.value(value);
                 if let Some(var) = self.written_ty(target) {
@@ -2274,6 +2344,7 @@ impl Checker<'_> {
                 Ty::Unknown
             }
             Expr::Postfix { target, op, span } => {
+                self.check_write_target(target);
                 self.value(target);
                 if let Some(var) = self.written_ty(target) {
                     if !matches!(var, Ty::Int | Ty::Float) {
@@ -2298,7 +2369,8 @@ impl Checker<'_> {
             Expr::If {
                 cond, then, els, ..
             } => {
-                self.value(cond);
+                let found = self.value(cond);
+                self.must_be_bool(&found, cond.span());
                 let (when_true, when_false) = self.narrowing(cond);
                 for (i, branch) in std::iter::once(then).chain(els).enumerate() {
                     let mark = self.undo.len();
@@ -3147,6 +3219,19 @@ fn assignable(expected: &Ty, found: &Ty) -> bool {
         (Ty::List(e), Ty::List(f)) => assignable(e, f),
         _ => expected == found,
     }
+}
+
+/// Whether `t` is surely not a `Bool`: a number, a text, a list or a record.
+fn is_not_a_bool(t: &Ty) -> bool {
+    matches!(
+        t,
+        Ty::Int | Ty::Float | Ty::Str | Ty::List(_) | Ty::Shape(_)
+    )
+}
+
+/// Whether `t` is surely not a list.
+fn is_not_a_list(t: &Ty) -> bool {
+    matches!(t, Ty::Int | Ty::Float | Ty::Str | Ty::Bool | Ty::Shape(_))
 }
 
 /// Whether a type is concrete enough to trigger a diagnostic (i.e. not

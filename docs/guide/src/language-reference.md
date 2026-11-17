@@ -187,6 +187,7 @@ another, and the only thing that changes is which value a `var` holds.
 - a record literal given where a declared record is wanted (a `var`'s first value or a later
   one, an item of a list) writes only fields the record has (`UnknownField`), of the types it
   has (`TypeMismatch`), and all the fields it needs, the ones not marked `?`;
+- `for` goes over a list;
 - every type written is one: built in (`Int`, `Float`, `Str`, `Bool`, `Color`, `List<T>`,
   `Fn(…)`, `Slot`, and the `Screen` and `Window` the language provides) or declared by the
   program as a `type`, an `enum` or a `context`, or another package's as `package.Name`. Any
@@ -208,8 +209,6 @@ else converts.
 > `07_operators.byd`). The types judged so far are the scalars and lists of them; a record,
 > an enum or an optional is let through until its own step:
 >
-> - the condition of `when`, `if` and `? :`, which should be a `Bool`;
-> - writing to a `let`, a parameter, a loop variable or a literal;
 > - two `var`s of one name in a view.
 >
 > Until they are, such a program runs, and what it draws is whatever the values happen to
@@ -342,8 +341,9 @@ That draws `5 él 12 0`.
 right side may depend on the left: `xs.len > 0 && xs[0] > 5`. `a ? b : c` evaluates `a`,
 then only the arm it picks.
 
-> **Not yet.** `1 && true` is accepted, though `!5` is an error. The condition of `? :` is
-> not checked to be a `Bool`, nor that its two arms are of one type. (`07_operators.byd`)
+A number, a text, a list or a record where a `Bool` goes (`1 && true`, `!5`) is `TypeMismatch`.
+So is the condition of `when`, `if` and `? :`, and so are the two arms of a `? :` of two types,
+though an `Int` beside a `Float` is a `Float`.
 
 ### Lists
 
@@ -384,8 +384,7 @@ A function given to one of these must be *pure*: it computes and returns, and as
 nothing (`EffectInPureLambda`).
 
 > **Not yet.** An index past the end is silent, and arithmetic on the nothing it gives joins
-> text. `for` over something that is not a list draws nothing and says nothing.
-> (`04_lists.byd`)
+> text. (`04_lists.byd`)
 
 ### Records
 
@@ -898,9 +897,12 @@ Button("Add") => add(1)
 Text(message)
 ```
 
-> **Not yet.** An action cannot loop and cannot stop early. `if` takes any value as its
-> condition. Writing to a `let`, a parameter, a loop variable or a literal is accepted, and
-> so is an assignment inside a text. (`11_control_flow.byd`, `07_operators.byd`)
+What an assignment writes is a `var`, a `bind` parameter, or a field or an item of one. A
+`let`, a parameter, a loop variable, a lambda's parameter or a literal is `NotAssignable`. An
+assignment, `++` or `--` anywhere but an action, such as inside a text or a `let`, is
+`EffectInPureContext`.
+
+> **Not yet.** An action cannot loop and cannot stop early. (`11_control_flow.byd`)
 
 ## How the screen follows
 

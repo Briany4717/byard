@@ -734,6 +734,9 @@ impl Interpreter {
                 Box::new(move |_| Value::Str(s.clone()))
             }
             Expr::Postfix { target, op, span } => {
+                if let Some(noop) = self.refuse_write_here(target, *span) {
+                    return noop;
+                }
                 if let Ok(sig) = self.resolve_var(target, *span) {
                     let op = *op;
                     Box::new(move |ctx| {
@@ -755,6 +758,9 @@ impl Interpreter {
                 value,
                 span,
             } => {
+                if let Some(noop) = self.refuse_write_here(target, *span) {
+                    return noop;
+                }
                 if let Ok(sig) = self.resolve_var(target, *span) {
                     let op = *op;
                     let mut rhs = self.lower_expr(value, payload_name);
@@ -2233,6 +2239,35 @@ impl Interpreter {
             Value::Int(n) => n as f32,
             _ => default,
         }
+    }
+
+    /// A write (`=`, `+=`, `-=`, `++`, `--`) where it cannot be made: outside
+    /// an action it is [`CompileError::EffectInPureContext`], and to something
+    /// that is no `var` or binding (a `let`, a parameter, a loop variable, a
+    /// literal) it is [`CompileError::NotAssignable`]. Either way it is told
+    /// once, here, and what it would have done is nothing. `None` when the
+    /// write is fine. A field or an item as the target is step 9's.
+    fn refuse_write_here(&mut self, target: &Expr, span: Span) -> Option<Lowered> {
+        if self.bridge.action_depth == 0 {
+            // Lowered all the same, so what is wrong inside it is told too.
+            self.errors.push(CompileError::EffectInPureContext {
+                span,
+                context: "a value position".to_string(),
+            });
+            return None;
+        }
+        if matches!(target, Expr::Member { .. } | Expr::Index { .. }) {
+            return None;
+        }
+        // A name nothing binds is the checker's `UnknownName`, not this.
+        if matches!(target, Expr::Ident(name, _) if self.env.lookup(name).is_none()) {
+            return None;
+        }
+        if let Err(error) = self.resolve_var(target, span) {
+            self.errors.push(error);
+            return Some(Box::new(|_| Value::Unit));
+        }
+        None
     }
 
     fn resolve_var(&self, target: &Expr, span: Span) -> Result<SignalId, CompileError> {

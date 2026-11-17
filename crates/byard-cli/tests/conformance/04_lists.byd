@@ -207,7 +207,6 @@ for s in xs { Text(s) }
 Text("end")
 
 //# case: for-over-a-non-list
-//# gap: `for` over a number draws nothing and says nothing
 //# fragment
 //# error: TypeMismatch
 for s in 5 { Text("{s}") }

@@ -1025,6 +1025,13 @@ pub enum CompileError {
         /// The closest field the type has, if any.
         hint: Option<String>,
     },
+    /// A record literal writes one field twice: `{ a: 1, a: 2 }`.
+    DuplicateField {
+        /// Source range of the second value.
+        span: Span,
+        /// The field.
+        name: String,
+    },
     /// An expression read a name nothing declares: a misspelt `var`, a
     /// parameter that was renamed. At runtime such a name is its own text,
     /// which is how an enum word like `center` works and why a typo in a
@@ -1714,6 +1721,7 @@ impl CompileError {
             | Self::UnknownEnumCase { span, .. }
             | Self::EnumShorthand { span, .. }
             | Self::UnknownField { span, .. }
+            | Self::DuplicateField { span, .. }
             | Self::ShapeMismatch { span, .. } => *span,
         }
     }
@@ -1868,6 +1876,7 @@ impl CompileError {
             | Self::UnknownEnumCase { span, .. }
             | Self::EnumShorthand { span, .. }
             | Self::UnknownField { span, .. }
+            | Self::DuplicateField { span, .. }
             | Self::ShapeMismatch { span, .. } => {
                 span.start = (i64::from(span.start) + delta).max(0) as u32;
                 span.end = (i64::from(span.end) + delta).max(0) as u32;
@@ -1995,6 +2004,7 @@ impl CompileError {
             Self::NoneNotHandled { .. } => "NoneNotHandled",
             Self::DuplicateProvide { .. } => "DuplicateProvide",
             Self::UnknownContext { .. } => "UnknownContext",
+            Self::DuplicateField { .. } => "DuplicateField",
             Self::UnknownType { .. } => "UnknownType",
             Self::ContextFieldNeedsDefault { .. } => "ContextFieldNeedsDefault",
             Self::MisplacedProvide { .. } => "MisplacedProvide",
@@ -2932,6 +2942,9 @@ impl CompileError {
             } => with_hint(
                 format!("a `{record}` has no field `{name}`"),
                 hint.as_deref(),
+            ),
+            Self::DuplicateField { name, .. } => format!(
+                "this record writes `{name}` twice: the last one wins, so remove the one that does not count"
             ),
             Self::UnknownName { name, hint, .. } => {
                 with_hint(format!("nothing here is named `{name}`"), hint.as_deref())

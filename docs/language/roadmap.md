@@ -15,7 +15,7 @@ So every step below ends the same way: **its cases lose their `gap:` line, the r
 loses its note, and this file loses the step.** When this file is empty and the suite has no
 gap, the language is where this document wanted it.
 
-As written, the suite has 564 cases: 485 hold and 79 are gaps.
+As written, the suite has 574 cases: 503 hold and 71 are gaps.
 
 ```sh
 cargo test -p byard-cli --test it conformance -- --nocapture
@@ -82,25 +82,11 @@ This part closes that. Nothing here adds syntax.
 from `[project]` or `[package]`, a manifest without it is `2026`, and `byard fix` moves a
 project to `2027`, rewriting its sources through the formatter and naming the edition in the
 manifest. The two editions differ by nothing yet. What is left is the first rewrite: step 6's
-`equality-ignores-field-order` or step 12's ternary, whichever comes first, adds a migration to
+`equality-ignores-field-order` shipped in every edition, since no rewrite can tell which programs
+relied on reordered records being unequal, so step 12's ternary is the one that adds a migration to
 `Edition::migrations` in `byard-compiler/src/edition.rs`, and the case that proves `byard fix`
 keeps a program's meaning. Until then `byard new` writes no edition, and a project without one
 stays on `2026`.
-
-### 6. Records
-
-*Cases:* `declared-type-literal-with-a-wrong-field-type`,
-`declared-type-literal-with-an-extra-field`,
-`declared-type-literal-missing-a-required-field`, `missing-field-on-a-literal-is-an-error`,
-`duplicate-field-in-a-literal`, `lambda-field-typo-on-a-typed-list`,
-`lambda-field-typo-on-an-inferred-list`, `equality-ignores-field-order` **(edition)**.
-
-- A literal given to something with a record type is checked field by field.
-- A literal with no declared type has the type its fields give it, so `u.nmae` on
-  `let u = { name: "Ada" }` is `UnknownField`. Only a value from JSON or from a controller
-  with no types is still "anything".
-- A lambda's parameter takes the item type of the list its method is called on.
-- Equality compares fields by name.
 
 ### 7. Conditions, and what can be written to
 

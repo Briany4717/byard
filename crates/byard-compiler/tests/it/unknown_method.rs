@@ -235,8 +235,9 @@ fn a_call_on_a_controller_handle_is_not_checked() {
 #[test]
 fn a_call_on_a_record_or_an_untyped_value_is_not_checked() {
     assert_clean(
+        // A record is not asked about its methods. (The type of a field of a
+        // literal is known, so `r.b.whatever(1)` is told: see the list tests.)
         "let r = { a: 1, b: [1, 2] }\n\
-         let x = r.b.whatever(1)\n\
          let y = r.helper(2)",
     );
 }

@@ -126,6 +126,8 @@ pub enum Ty {
     Optional(Box<Ty>),
     /// A named type the checker does not model further (e.g. `AppEnvironment`).
     Named(Symbol),
+    /// The type a record literal has: its fields and their types, by name.
+    Shape(Vec<(Symbol, Ty)>),
     /// A type Phase 2 cannot determine; permitted, never an error by itself.
     Unknown,
 }
@@ -226,6 +228,20 @@ pub fn check_views(views: &[ViewDecl]) -> Inference {
         .iter()
         .filter_map(|c| consts.get(&c.name).map(|ty| (c.name.clone(), ty.clone())))
         .collect();
+    let optional_fields: HashSet<(Symbol, Symbol)> = views
+        .first()
+        .map(|v| {
+            v.records
+                .iter()
+                .flat_map(|r| {
+                    r.fields
+                        .iter()
+                        .filter(|f| f.optional)
+                        .map(|f| (r.name.clone(), f.name.clone()))
+                })
+                .collect()
+        })
+        .unwrap_or_default();
     let names: HashSet<Symbol> = views.iter().map(|v| v.name.clone()).collect();
     let records: HashMap<Symbol, Vec<(Symbol, Type)>> = views
         .first()
@@ -280,6 +296,7 @@ pub fn check_views(views: &[ViewDecl]) -> Inference {
             type_names,
             top_sigs: top_sigs.clone(),
             local_sigs: Sigs::new(),
+            lenient_fields: false,
             view: Symbol::intern(""),
             env: HashMap::new(),
             undo: Vec::new(),
@@ -289,6 +306,7 @@ pub fn check_views(views: &[ViewDecl]) -> Inference {
             views: &names,
             view_params: &view_params,
             records: &records,
+            optional_fields: &optional_fields,
             consts: &consts,
             enums: &enums,
             strict: true,
@@ -313,6 +331,7 @@ pub fn check_views(views: &[ViewDecl]) -> Inference {
             type_names,
             top_sigs: top_sigs.clone(),
             local_sigs: Sigs::new(),
+            lenient_fields: false,
             view: Symbol::intern(""),
             env: HashMap::new(),
             undo: Vec::new(),
@@ -322,6 +341,7 @@ pub fn check_views(views: &[ViewDecl]) -> Inference {
             views: &names,
             view_params: &view_params,
             records: &records,
+            optional_fields: &optional_fields,
             consts: &consts,
             enums: &enums,
             strict: true,
@@ -360,6 +380,7 @@ fn check_top_fns(
         .collect();
     let no_views = HashSet::new();
     let no_view_params = HashMap::new();
+    let no_optional = HashSet::new();
     let no_records = HashMap::new();
     let no_consts = HashMap::new();
     let no_contexts = HashMap::new();
@@ -369,6 +390,7 @@ fn check_top_fns(
         type_names,
         top_sigs: top_sigs.clone(),
         local_sigs: Sigs::new(),
+        lenient_fields: false,
         view: Symbol::intern(""),
         env: HashMap::new(),
         undo: Vec::new(),
@@ -380,6 +402,7 @@ fn check_top_fns(
         views: &no_views,
         view_params: &no_view_params,
         records: &no_records,
+        optional_fields: &no_optional,
         consts: &no_consts,
         enums,
         // A name a shared function cannot reach is reported below, as
@@ -508,6 +531,7 @@ fn check_consts(
         .collect();
     let no_views = HashSet::new();
     let no_view_params = HashMap::new();
+    let no_optional = HashSet::new();
     let no_records = HashMap::new();
     let no_contexts = HashMap::new();
     for i in sequence {
@@ -519,6 +543,7 @@ fn check_consts(
                 type_names,
                 top_sigs: top_sigs.clone(),
                 local_sigs: Sigs::new(),
+                lenient_fields: false,
                 view: Symbol::intern(""),
                 env: HashMap::new(),
                 undo: Vec::new(),
@@ -528,6 +553,7 @@ fn check_consts(
                 views: &no_views,
                 view_params: &no_view_params,
                 records: &no_records,
+                optional_fields: &no_optional,
                 consts: &types,
                 enums,
                 // A name a shared constant cannot reach is reported below, as
@@ -660,6 +686,11 @@ struct Checker<'a> {
     local_sigs: Sigs,
     /// The view being checked, for the errors that name it.
     view: Symbol,
+    /// Whether a field a record literal lacks is let through: it is the left of
+    /// a `??`.
+    lenient_fields: bool,
+    /// The fields of declared records that may be left out: `(record, field)`.
+    optional_fields: &'a HashSet<(Symbol, Symbol)>,
     bindings: &'a mut Vec<(Symbol, Ty)>,
     /// Known binding types in scope (params, vars, lets).
     env: HashMap<Symbol, Ty>,
@@ -1794,6 +1825,7 @@ impl Checker<'_> {
                     Ty::Named(n) if self.records.contains_key(n) || n.as_str() == "Screen" => {
                         item.clone()
                     }
+                    Ty::Shape(_) => item.clone(),
                     _ => Ty::Unknown,
                 };
                 if let Some(key) = key {
@@ -1853,15 +1885,17 @@ impl Checker<'_> {
             match (init, &expected) {
                 // A list is judged item by item, so the one that does not fit
                 // is the one the error points at.
-                (Expr::Array(elems, _), Ty::List(item)) if judged(&expected) => {
+                (Expr::Array(elems, _), Ty::List(item))
+                    if judged(&expected) || matches!(**item, Ty::Named(_)) =>
+                {
                     for elem in elems {
                         let found = self.value(elem);
-                        self.must_fit(item, &found, elem.span());
+                        self.must_fit_expr(item, elem, &found, elem.span());
                     }
                 }
                 _ => {
                     let found = self.value(init);
-                    self.must_fit(&expected, &found, init.span());
+                    self.must_fit_expr(&expected, init, &found, init.span());
                 }
             }
             return expected;
@@ -1908,18 +1942,39 @@ impl Checker<'_> {
         matches!(self.origins.get(name), Some(Origin::Var | Origin::Param))
             .then(|| self.env.get(name).cloned())
             .flatten()
-            .filter(judged)
+            .filter(|ty| judged(ty) || matches!(ty, Ty::Shape(_)) || self.is_record(ty))
+    }
+
+    /// Whether `ty` is a record the program declares.
+    fn is_record(&self, ty: &Ty) -> bool {
+        matches!(ty, Ty::Named(name) if self.records.contains_key(name))
     }
 
     /// `x = e`, `x += e`, `x -= e` against the type of `x`: what is written
     /// has to be a value `x` can hold. `+=` and `-=` are for numbers, and a
     /// `Float` is not kept in an `Int`.
-    fn check_assignment(&mut self, var: &Ty, op: AssignOp, found: &Ty, span: Span) {
+    fn check_assignment(&mut self, var: &Ty, op: AssignOp, value: &Expr, found: &Ty, span: Span) {
         if !is_concrete(found) {
             return;
         }
         match op {
-            AssignOp::Assign => self.must_fit(var, found, span),
+            AssignOp::Assign => match (var, found) {
+                // A record literal keeps the fields it began with.
+                (Ty::Shape(a), Ty::Shape(b)) => {
+                    let names = |fields: &[(Symbol, Ty)]| {
+                        fields.iter().map(|(n, _)| n.clone()).collect::<Vec<_>>()
+                    };
+                    if names(a) != names(b) {
+                        self.errors.push(CompileError::TypeMismatch {
+                            span,
+                            op: "=".to_string(),
+                            lhs_ty: ty_name(var),
+                            rhs_ty: ty_name(found),
+                        });
+                    }
+                }
+                _ => self.must_fit_expr(var, value, found, span),
+            },
             AssignOp::Add | AssignOp::Sub => {
                 let number = |t: &Ty| matches!(t, Ty::Int | Ty::Float);
                 if !(number(var) && number(found)) || (*var == Ty::Int && *found == Ty::Float) {
@@ -2042,7 +2097,12 @@ impl Checker<'_> {
                 let (l, r) = match op {
                     BinOp::Otherwise => {
                         let safe: Vec<String> = self.optional_path(lhs).into_iter().collect();
+                        // What is written to the left of a default may not be
+                        // there: that is what the default is for, so a field a
+                        // record literal lacks is not told here.
+                        let was = std::mem::replace(&mut self.lenient_fields, true);
                         let l = self.narrowed_in(safe, |s| s.value(lhs));
+                        self.lenient_fields = was;
                         (l, self.value(rhs))
                     }
                     BinOp::And | BinOp::Or => {
@@ -2115,15 +2175,7 @@ impl Checker<'_> {
                     _ => Ty::Unknown,
                 }
             }
-            Expr::Record { fields, spread, .. } => {
-                if let Some(s) = spread {
-                    self.value(s);
-                }
-                for (_, v) in fields {
-                    self.value(v);
-                }
-                Ty::Unknown
-            }
+            Expr::Record { fields, spread, .. } => self.check_record(fields, spread.as_deref()),
             Expr::Member { base, field, span } => {
                 if let Some(ty) = self.enum_case(base, field, *span) {
                     return ty;
@@ -2131,6 +2183,8 @@ impl Checker<'_> {
                 let b = self.value(base);
                 if field.as_str() == "len" && matches!(b, Ty::List(_) | Ty::Str) {
                     Ty::Int
+                } else if let Ty::Shape(known) = &b {
+                    self.shape_field(known, field, *span)
                 } else if let Ty::Named(record) = &b {
                     let ty = self.record_field(record, field, *span);
                     match (ty, self.optional_path(expr)) {
@@ -2215,7 +2269,7 @@ impl Checker<'_> {
                 self.value(target);
                 let found = self.value(value);
                 if let Some(var) = self.written_ty(target) {
-                    self.check_assignment(&var, *op, &found, value.span());
+                    self.check_assignment(&var, *op, value, &found, value.span());
                 }
                 Ty::Unknown
             }
@@ -2324,6 +2378,139 @@ impl Checker<'_> {
     /// The type of `record.field`, for a record type the program declares;
     /// an `UnknownField` for a field it does not have. Any other named type
     /// (a controller, a theme) is not modelled, so nothing is claimed.
+    /// The type a record literal has: the fields it writes, over the ones the
+    /// record it spreads has. A field written twice is told once. A spread of
+    /// something whose fields are not known makes the whole thing unknown.
+    fn check_record(&mut self, fields: &[(Symbol, Expr)], spread: Option<&Expr>) -> Ty {
+        let mut known = true;
+        let mut out: Vec<(Symbol, Ty)> = Vec::new();
+        if let Some(spread) = spread {
+            match self.value(spread) {
+                Ty::Shape(base) => out = base,
+                Ty::Named(name) if self.records.contains_key(&name) => {
+                    out = self.records[&name]
+                        .iter()
+                        .map(|(field, ty)| (field.clone(), plain_ty(ty)))
+                        .collect();
+                }
+                _ => known = false,
+            }
+        }
+        let mut written: Vec<&Symbol> = Vec::new();
+        for (name, value) in fields {
+            let ty = self.value(value);
+            if written.contains(&name) {
+                self.errors.push(CompileError::DuplicateField {
+                    span: value.span(),
+                    name: name.as_str().to_string(),
+                });
+                continue;
+            }
+            written.push(name);
+            match out.iter_mut().find(|(field, _)| field == name) {
+                Some(slot) => slot.1 = ty,
+                None => out.push((name.clone(), ty)),
+            }
+        }
+        if !known {
+            return Ty::Unknown;
+        }
+        out.sort_by(|a, b| a.0.as_str().cmp(b.0.as_str()));
+        Ty::Shape(out)
+    }
+
+    /// A field of a record literal's type.
+    fn shape_field(&mut self, known: &[(Symbol, Ty)], field: &Symbol, span: Span) -> Ty {
+        if let Some((_, ty)) = known.iter().find(|(name, _)| name == field) {
+            return ty.clone();
+        }
+        if self.lenient_fields {
+            return Ty::Unknown;
+        }
+        let hint =
+            crate::util::closest_match(field.as_str(), known.iter().map(|(name, _)| name.as_str()))
+                .map(str::to_string);
+        let len = u32::try_from(field.as_str().len()).unwrap_or(0);
+        self.errors.push(CompileError::UnknownField {
+            span: Span::new(span.end.saturating_sub(len).max(span.start), span.end),
+            record: ty_name(&Ty::Shape(known.to_vec())),
+            name: field.as_str().to_string(),
+            hint,
+        });
+        Ty::Unknown
+    }
+
+    /// A record literal where a declared record is wanted: each field it
+    /// writes is one the record has, of the type it has, and each field the
+    /// record needs is written, or comes from what the literal spreads.
+    fn check_record_literal(&mut self, record: &Symbol, literal: &Expr, found: &Ty) {
+        let Expr::Record { fields, spread, .. } = literal else {
+            return;
+        };
+        let Some(declared) = self.records.get(record).cloned() else {
+            return;
+        };
+        for (name, value) in fields {
+            let Some((_, ty)) = declared.iter().find(|(field, _)| field == name) else {
+                let hint = crate::util::closest_match(
+                    name.as_str(),
+                    declared.iter().map(|(field, _)| field.as_str()),
+                )
+                .map(str::to_string);
+                self.errors.push(CompileError::UnknownField {
+                    span: value.span(),
+                    record: record.as_str().to_string(),
+                    name: name.as_str().to_string(),
+                    hint,
+                });
+                continue;
+            };
+            let expected = plain_ty(ty);
+            let given = self.infer_expr(value);
+            self.must_fit(&expected, &given, value.span());
+        }
+        if spread.is_some() {
+            return;
+        }
+        let missing: Vec<&str> = declared
+            .iter()
+            .filter(|(field, _)| {
+                !fields.iter().any(|(name, _)| name == field)
+                    && !self
+                        .optional_fields
+                        .contains(&(record.clone(), field.clone()))
+            })
+            .map(|(field, _)| field.as_str())
+            .collect();
+        if !missing.is_empty() {
+            self.errors.push(CompileError::TypeMismatch {
+                span: literal.span(),
+                op: "=".to_string(),
+                lhs_ty: record.as_str().to_string(),
+                rhs_ty: format!(
+                    "{} without {}",
+                    ty_name(found),
+                    missing
+                        .iter()
+                        .map(|m| format!("`{m}`"))
+                        .collect::<Vec<_>>()
+                        .join(", ")
+                ),
+            });
+        }
+    }
+
+    /// [`Self::must_fit`] for the value an expression writes: a record literal
+    /// given where a declared record is wanted is judged field by field.
+    fn must_fit_expr(&mut self, expected: &Ty, init: &Expr, found: &Ty, span: Span) {
+        match (init, expected) {
+            (Expr::Record { .. }, Ty::Named(record)) if self.records.contains_key(record) => {
+                self.check_record_literal(record, init, found);
+            }
+            _ => self.must_fit(expected, found, span),
+        }
+    }
+
     fn record_field(&mut self, record: &Symbol, field: &Symbol, span: Span) -> Ty {
         // RFC-0063: the value of a pointer or drag handler, unless the
         // program declares a record of the same name.
@@ -2590,7 +2777,10 @@ impl Checker<'_> {
                 // the next step's.
                 let item = match recv {
                     Ty::List(item)
-                        if matches!(**item, Ty::Int | Ty::Float | Ty::Str | Ty::Bool) =>
+                        if matches!(
+                            **item,
+                            Ty::Int | Ty::Float | Ty::Str | Ty::Bool | Ty::Shape(_) | Ty::Named(_)
+                        ) =>
                     {
                         (**item).clone()
                     }
@@ -2732,12 +2922,13 @@ impl Checker<'_> {
             self.errors.push(CompileError::CannotInfer { span });
             return Ty::Unknown;
         }
-        for e in elems {
-            self.check_expr(e);
-        }
+        let checked: Vec<Ty> = elems.iter().map(|e| self.check_expr(e)).collect();
         let mut element_ty: Option<Ty> = None;
-        for e in elems {
-            let t = self.infer_expr(e);
+        for (e, checked) in elems.iter().zip(checked) {
+            let t = match (self.infer_expr(e), checked) {
+                (Ty::Unknown, shape @ Ty::Shape(_)) => shape,
+                (t, _) => t,
+            };
             if t == Ty::Unknown {
                 // Can't confirm homogeneity from an unknown element; stay lenient.
                 continue;
@@ -2975,6 +3166,13 @@ fn ty_name(t: &Ty) -> String {
         Ty::Fn(..) => "Fn".to_string(),
         Ty::Optional(t) => format!("{}?", ty_name(t)),
         Ty::Named(n) => n.as_str().to_string(),
+        Ty::Shape(fields) => {
+            let inner: Vec<String> = fields
+                .iter()
+                .map(|(name, ty)| format!("{}: {}", name.as_str(), ty_name(ty)))
+                .collect();
+            format!("{{ {} }}", inner.join(", "))
+        }
         Ty::Unknown => "?".to_string(),
     }
 }
@@ -3008,7 +3206,11 @@ fn eq_compatible(l: &Ty, r: &Ty) -> bool {
         return true;
     }
     match (l, r) {
-        (Ty::Str, Ty::Str) | (Ty::Bool, Ty::Bool) => true,
+        // A record literal is compared with a record, a literal or a declared one.
+        (Ty::Str, Ty::Str)
+        | (Ty::Bool, Ty::Bool)
+        | (Ty::Shape(_), Ty::Shape(_) | Ty::Named(_))
+        | (Ty::Named(_), Ty::Shape(_)) => true,
         (Ty::List(a), Ty::List(b)) => {
             a == b || matches!(**a, Ty::Unknown) || matches!(**b, Ty::Unknown)
         }

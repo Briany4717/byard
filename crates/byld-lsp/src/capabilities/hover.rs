@@ -257,6 +257,13 @@ pub(crate) fn format_ty(ty: &Ty) -> String {
         }
         Ty::Optional(inner) => format!("{}?", format_ty(inner)),
         Ty::Named(sym) => sym.as_str().to_string(),
+        Ty::Shape(fields) => {
+            let fields: Vec<String> = fields
+                .iter()
+                .map(|(name, ty)| format!("{}: {}", name.as_str(), format_ty(ty)))
+                .collect();
+            format!("{{ {} }}", fields.join(", "))
+        }
         Ty::Unknown => "Unknown".to_string(),
     }
 }

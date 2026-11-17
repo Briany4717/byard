@@ -188,12 +188,14 @@ pub(super) fn structural_eq(a: &Value, b: &Value) -> bool {
         (Value::List(xs), Value::List(ys)) => {
             xs.len() == ys.len() && xs.iter().zip(ys).all(|(x, y)| structural_eq(x, y))
         }
+        // Fields are compared by name, in whatever order they were written.
         (Value::Record(xs), Value::Record(ys)) => {
             xs.len() == ys.len()
-                && xs
-                    .iter()
-                    .zip(ys)
-                    .all(|((kx, vx), (ky, vy))| kx == ky && structural_eq(vx, vy))
+                && xs.iter().all(|(kx, vx)| {
+                    ys.iter()
+                        .find(|(ky, _)| ky == kx)
+                        .is_some_and(|(_, vy)| structural_eq(vx, vy))
+                })
         }
         _ => false,
     }

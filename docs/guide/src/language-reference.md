@@ -184,6 +184,9 @@ another, and the only thing that changes is which value a `var` holds.
   parameter and one given to `reduce` two, and what `filter` and `find` give back is a `Bool`
   (`PredicateNotBool`). The parameter of such a lambda is of the item's type when the list is
   of numbers, text or truth;
+- a record literal given where a declared record is wanted (a `var`'s first value or a later
+  one, an item of a list) writes only fields the record has (`UnknownField`), of the types it
+  has (`TypeMismatch`), and all the fields it needs, the ones not marked `?`;
 - every type written is one: built in (`Int`, `Float`, `Str`, `Bool`, `Color`, `List<T>`,
   `Fn(…)`, `Slot`, and the `Screen` and `Window` the language provides) or declared by the
   program as a `type`, an `enum` or a `context`, or another package's as `package.Name`. Any
@@ -205,7 +208,6 @@ else converts.
 > `07_operators.byd`). The types judged so far are the scalars and lists of them; a record,
 > an enum or an optional is let through until its own step:
 >
-> - a record literal against its declared type;
 > - the condition of `when`, `if` and `? :`, which should be a `Bool`;
 > - writing to a `let`, a parameter, a loop variable or a literal;
 > - two `var`s of one name in a view.
@@ -398,18 +400,23 @@ Text("{u.score} {v.score} {v.name}")
 
 That draws `3 10 Ada`.
 
-A field a record does not have is nothing, and so is a field of nothing: `u.a.b.c` is
-nothing as soon as one step is missing. With a [declared type](#record-types), a field the
-type does not have is `UnknownField` instead.
+A record literal has the type its fields give it, and a field it does not have is
+`UnknownField`, with the nearest one: `u.nmae` on `{ name: "Ada" }`. So has a record with a
+[declared type](#record-types). A field read to the left of a `??` may be missing, which is
+what the default is for: `u.email ?? "none"` is `none`, and so is `u.a.b.c ?? "none"` as soon
+as one step is missing. Only a value that came from outside, such as a reply from a server,
+has fields the checker cannot know, and reading one is as free as it ever was.
 
-Two records are equal when they have the same fields, with equal values, in the same order.
+A field written twice in one literal is `DuplicateField`. The type of `{ ..u, k: v }` is that
+of `u` with `k` set, and a `var` that began as one record holds records with those fields.
+
+Two records are equal when they have the same fields, with equal values, whatever order the
+fields were written in: `{ a: 1, b: 2 } == { b: 2, a: 1 }`.
 
 `{}` alone is an empty action, not an empty record.
 
 > **Not yet.** `u.score = 10` is accepted and changes nothing; write
-> `u = { ..u, score: 10 }`. A field misspelt on a record with no declared type is nothing,
-> silently. The same field twice in a literal is accepted. Two records with the same fields
-> in another order are not equal. (`05_records.byd`)
+> `u = { ..u, score: 10 }`. (`05_records.byd`)
 
 ### A value or a default: `??`
 

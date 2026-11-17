@@ -162,7 +162,6 @@ let x = 9
 Text("{[1, 2].map(x => x).join(",")} {x}")
 
 //# case: lambda-field-typo-on-a-typed-list
-//# gap: a lambda parameter does not take the item type of a typed list
 //# error: UnknownField
 type P = { name: Str }
 View Main() {
@@ -171,7 +170,6 @@ View Main() {
 }
 
 //# case: lambda-field-typo-on-an-inferred-list
-//# gap: the item type of a literal list of records is not carried into the lambda
 //# fragment
 //# error: UnknownField
 let ps = [{ name: "a" }]

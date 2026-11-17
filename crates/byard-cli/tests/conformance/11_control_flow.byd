@@ -46,7 +46,6 @@ View Main() {
 }
 
 //# case: when-condition-must-be-bool
-//# gap: `when 5 { }` is accepted
 //# fragment
 //# error: TypeMismatch
 when 5 { Text("x") }
@@ -251,7 +250,6 @@ on mount => { for i in [1, 2, 3] { n += i } }
 Text("{n}")
 
 //# case: action-if-condition-must-be-bool
-//# gap: `if 5 { }` is accepted
 //# fragment
 //# error: TypeMismatch
 var n = 0
@@ -293,3 +291,31 @@ Text(t)
 //# error: ImpureFunction
 fn stamp() -> Str => now()
 View Main() { Text(stamp()) }
+
+//# case: when-with-a-comparison-is-fine
+//# fragment
+//# text: shown
+var n = 2
+when n > 1 { Text("shown") }
+
+//# case: if-else-condition-a-text-is-an-error
+//# fragment
+//# error: TypeMismatch
+//# diagnostics: 1
+var n = 0
+on mount => {
+    if "a" {
+        n = 1
+    } else {
+        n = 2
+    }
+}
+Text("{n}")
+
+//# case: for-over-a-text-is-an-error
+//# fragment
+//# error: TypeMismatch
+//# diagnostics: 1
+for c in "abc" {
+    Text("x")
+}

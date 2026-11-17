@@ -2111,8 +2111,8 @@ impl CompileError {
                  rather than the signal holding it"
             ),
             Self::EffectInPureContext { context, .. } => format!(
-                "a controller call is an effect and cannot appear in {context}; \
-                 call it from an action and write the result to a `var`"
+                "an effect (a controller call, an assignment, `++`) cannot appear in {context}; \
+                 do it from an action, and write what it gives to a `var`"
             ),
             Self::ClockOutsideAction { name, .. } => format!(
                 "`{name}()` reads the clock once, when an action runs; to show the time, \
@@ -2128,7 +2128,10 @@ impl CompileError {
             Self::ReservedControllerName { name, .. } => {
                 format!("`{name}` is a built-in capability and cannot be provided by an app")
             }
-            Self::NotAssignable { .. } => "this is not an assignable `var`".to_string(),
+            Self::NotAssignable { .. } => "this cannot be written to: only a `var`, or a `bind` \
+                 parameter, can be assigned, not a `let`, a parameter, a loop variable or a \
+                 literal"
+                .to_string(),
             Self::UnknownThemeToken {
                 field,
                 declared_by: Some(package),
@@ -2856,6 +2859,18 @@ impl CompileError {
                     "`{op}` takes a number and keeps it in a number, and a `{rhs_ty}` does not fit a `{lhs_ty}`"
                 ),
                 "++" | "--" => format!("`{op}` needs a number, and this is a `{lhs_ty}`"),
+                "cond" => format!(
+                    "a condition is a `Bool`, and this is a `{lhs_ty}`: compare it, as in `x != 0`"
+                ),
+                "for" => format!(
+                    "`for` goes over a list, and this is a `{lhs_ty}`: write a list, or `List<…>` of what it holds"
+                ),
+                "?:" => format!(
+                    "the two arms of `? :` are of one type, and these are a `{lhs_ty}` and a `{rhs_ty}`"
+                ),
+                "&&" | "||" | "!" if lhs_ty == rhs_ty => format!(
+                    "`{op}` takes `Bool`s, and this is a `{lhs_ty}`: compare it, as in `x != 0`"
+                ),
                 "()" => format!(
                     "this is a `{lhs_ty}`, not a function: only a `fn`, a named action or a callback can be called"
                 ),

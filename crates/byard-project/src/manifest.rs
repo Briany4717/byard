@@ -188,6 +188,9 @@ pub struct Manifest {
     /// the baseline edition, the language as it was before editions, and
     /// stays that until `byard fix` moves it.
     pub edition: Edition,
+    /// The kinds of warning `[lints]` switches off (`name = "allow"`), as the
+    /// diagnostics name them (`UnusedVariable`). Empty when every lint is on.
+    pub allowed_lints: Vec<String>,
 }
 
 /// The `[bundle]` table: how the app is named to the operating system once
@@ -250,6 +253,13 @@ pub struct HttpConfig {
 }
 
 impl Manifest {
+    /// Whether `[lints]` switches this diagnostic off: a warning of a kind it
+    /// sets to `"allow"`. An error is never one, whatever the table says.
+    #[must_use]
+    pub fn allows(&self, diagnostic: &byard_compiler::CompileError) -> bool {
+        diagnostic.is_warning() && self.allowed_lints.iter().any(|k| k == diagnostic.kind())
+    }
+
     /// An error for the commands that run an app, when this is a library
     /// package: it has views but nothing to open.
     pub fn require_app(&self, command: &str) -> Result<(), ProjectError> {
@@ -331,6 +341,7 @@ impl Manifest {
                 icon: None,
                 bundle: BundleConfig::default(),
                 edition: Edition::BASELINE,
+                allowed_lints: Vec::new(),
             });
         }
 
@@ -363,6 +374,7 @@ impl Manifest {
             icon: None,
             bundle: BundleConfig::default(),
             edition: Edition::BASELINE,
+            allowed_lints: Vec::new(),
         }
     }
 
@@ -452,6 +464,7 @@ impl Manifest {
         let icon = parse_icon(project, &project_root).map_err(in_manifest)?;
         let bundle = parse_bundle(&table).map_err(in_manifest)?;
         let edition = parse_edition(&table).map_err(in_manifest)?;
+        let allowed_lints = parse_lints(&table).map_err(in_manifest)?;
 
         Ok(Self {
             project_root,
@@ -469,8 +482,42 @@ impl Manifest {
             icon,
             bundle,
             edition,
+            allowed_lints,
         })
     }
+}
+
+/// `[lints]`: each lint by its name, set to `"warn"` (as it is without the
+/// table) or `"allow"` (off). Returns the diagnostics that are off.
+fn parse_lints(table: &toml::Table) -> Result<Vec<String>, String> {
+    let mut allowed = Vec::new();
+    let Some(lints) = table.get("lints") else {
+        return Ok(allowed);
+    };
+    let Some(lints) = lints.as_table() else {
+        return Err("byard.toml: [lints] is a table of lint names".to_string());
+    };
+    let names: Vec<&str> = byard_compiler::names::LINTS.iter().map(|l| l.0).collect();
+    reject_unknown_keys(lints, "[lints]", &names)?;
+    for (name, value) in lints {
+        match value.as_str() {
+            Some("allow") => {
+                if let Some((_, kind)) = byard_compiler::names::LINTS
+                    .iter()
+                    .find(|l| l.0 == name.as_str())
+                {
+                    allowed.push((*kind).to_string());
+                }
+            }
+            Some("warn") => {}
+            _ => {
+                return Err(format!(
+                    "byard.toml: [lints] `{name}` is `\"warn\"` or `\"allow\"`"
+                ));
+            }
+        }
+    }
+    Ok(allowed)
 }
 
 /// `edition = "2027"` in `[project]` (or `[package]`): the edition the sources
@@ -557,6 +604,7 @@ fn reject_unknown_manifest_keys(table: &toml::Table) -> Result<(), String> {
             "http",
             "native_views",
             "bundle",
+            "lints",
         ],
     )?;
     for (section, keys) in [
@@ -2638,6 +2686,23 @@ mod tests {
             err.contains("[theme.color]") && err.contains("`darker`"),
             "{err}"
         );
+    }
+
+    fn lints_of(text: &str) -> Result<Vec<String>, String> {
+        parse_lints(&text.parse::<toml::Table>().expect("toml"))
+    }
+
+    #[test]
+    fn lints_are_switched_off_by_name_and_only_by_a_known_name() {
+        assert_eq!(lints_of("[project]\nname = \"x\"\n"), Ok(vec![]));
+        assert_eq!(
+            lints_of("[lints]\nunused-variable = \"allow\"\nunused-view = \"warn\"\n"),
+            Ok(vec!["UnusedVariable".to_string()])
+        );
+        let err = lints_of("[lints]\nunused-varible = \"allow\"\n").expect_err("a typo");
+        assert!(err.contains("did you mean `unused-variable`"), "{err}");
+        let err = lints_of("[lints]\nunused-view = \"deny\"\n").expect_err("not a level");
+        assert!(err.contains("`\"warn\"` or `\"allow\"`"), "{err}");
     }
 
     fn edition_of(text: &str) -> Result<Edition, String> {

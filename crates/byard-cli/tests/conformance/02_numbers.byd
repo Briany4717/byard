@@ -74,6 +74,7 @@ Text("{big + 1}")
 //# case: int-overflow-mul-does-not-panic
 //# fragment
 //# text: ok
+//# warning: UnusedVariable
 let big = 9223372036854775807
 let x = big * big
 Text("ok")
@@ -81,6 +82,7 @@ Text("ok")
 //# case: int-min-negate-and-divide-do-not-panic
 //# fragment
 //# text: ok
+//# warning: UnusedVariable
 let big = 9223372036854775807
 let min = 0 - big - 1
 let a = min / (0 - 1)
@@ -132,6 +134,7 @@ Text("{0.5.round()} {1.5.round()} {(-0.5).round()} {(-1.5).round()}")
 //# case: round-of-huge-float-does-not-panic
 //# fragment
 //# text: ok
+//# warning: UnusedVariable
 let h = 1000000000000000000000.0
 let r = h.round()
 Text("ok")
@@ -144,6 +147,7 @@ Text("{0.sin():.2} {0.cos():.2} {4.sqrt():.2} {1.atan2(1):.2}")
 //# case: sqrt-of-negative-does-not-panic
 //# fragment
 //# text: ok
+//# warning: UnusedVariable
 let r = (-1).sqrt()
 Text("ok")
 

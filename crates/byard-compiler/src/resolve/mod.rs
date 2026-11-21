@@ -733,6 +733,7 @@ impl Resolver<'_> {
                         v.insert(target);
                     }
                     Entry::Occupied(o) => self.errors.push(CompileError::NameCollision {
+                        local: false,
                         span: import.span,
                         name: alias.as_str().to_string(),
                         first: pkg_display(o.get()),
@@ -1285,6 +1286,7 @@ impl Resolver<'_> {
         }
         if local_exports.iter().any(|(name, _)| name == sym) {
             self.errors.push(CompileError::NameCollision {
+                local: false,
                 span,
                 name: sym.as_str().to_string(),
                 first: pkg_display(target),
@@ -1299,6 +1301,7 @@ impl Resolver<'_> {
             Entry::Occupied(o) => {
                 if o.get() != target {
                     self.errors.push(CompileError::NameCollision {
+                        local: false,
                         span,
                         name: sym.as_str().to_string(),
                         first: pkg_display(o.get()),

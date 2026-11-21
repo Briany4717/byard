@@ -690,6 +690,9 @@ impl<'a> Parser<'a> {
             cases.push((case, self.span_from(at)));
             self.eat(&Token::Comma);
         }
+        if cases.is_empty() && matches!(self.cur(), Some(Token::RBrace)) {
+            self.error("a case name: an enum has at least one, as in `enum Mode { light, dark }`");
+        }
         self.expect(&Token::RBrace, "'}'");
         EnumDecl {
             name,
@@ -740,9 +743,28 @@ impl<'a> Parser<'a> {
     fn parse_view(&mut self) -> ViewDecl {
         let start = self.cur_span();
         self.advance(); // View
+        let name_at = self.cur_span();
+        let said = self.errors.len();
         let name = self
             .expect_decl_name("a view", "a view name")
             .unwrap_or_else(|| Symbol::intern(""));
+        // A view is drawn by writing its name where an element goes, and an
+        // element is told from a name by its capital letter. Leading `_`s are
+        // how the dev runner names its own views (`__ByardDevHud`) so that no
+        // view of yours can collide with them.
+        if self.errors.len() == said
+            && name
+                .as_str()
+                .trim_start_matches('_')
+                .chars()
+                .next()
+                .is_some_and(|c| !c.is_uppercase())
+        {
+            self.error_at(
+                name_at,
+                "a view name that starts with a capital letter, as in `Card`",
+            );
+        }
         self.expect(&Token::LParen, "'('");
         let params = self.parse_params();
         self.expect(&Token::RParen, "')'");

@@ -601,12 +601,16 @@ pub enum CompileError {
     /// The same callee parameter was bound twice, positional + named, or named
     /// twice (RFC-0007 §6).
     DuplicateParam {
-        /// Source range of the offending argument.
+        /// Source range of the offending argument, or of the second
+        /// parameter when `declared`.
         span: Span,
         /// The doubly-bound parameter name.
         name: String,
         /// The callee view name.
         callee: String,
+        /// Whether the view declares the parameter twice, rather than a call
+        /// binding it twice.
+        declared: bool,
     },
     /// A user-view call carries an action the view cannot receive: a trailing
     /// `=> action`, or an event handler in its `#[...]`. A view's behaviour
@@ -753,6 +757,9 @@ pub enum CompileError {
         first: String,
         /// The second origin.
         second: String,
+        /// Whether both bindings are in one view (a `var`, a `let`, a
+        /// parameter), rather than two imports.
+        local: bool,
     },
     /// The package dependency graph contains a cycle (RFC-0008 Pillar A,
     /// module-graph cycle detection, one level above RFC-0007 §4's intra-file
@@ -1032,6 +1039,41 @@ pub enum CompileError {
         /// The field.
         name: String,
     },
+    /// An element's `#[ … ]` writes one attribute twice: `#[size: 12, size: 14]`.
+    DuplicateAttribute {
+        /// Source range of the second one.
+        span: Span,
+        /// The attribute, with its axis when it has one (`translate.y`).
+        name: String,
+    },
+    /// A `var` or `let` that nothing reads. A warning, `unused-variable` in
+    /// `[lints]`.
+    UnusedVariable {
+        /// Source range of the declaration.
+        span: Span,
+        /// The name.
+        name: String,
+        /// `var` or `let`.
+        keyword: String,
+    },
+    /// A parameter that its view never reads. A warning, `unused-parameter` in
+    /// `[lints]`.
+    UnusedParam {
+        /// Source range of the parameter.
+        span: Span,
+        /// The name.
+        name: String,
+        /// The view it belongs to.
+        view: String,
+    },
+    /// A `private View` that nothing in its package draws. A warning,
+    /// `unused-view` in `[lints]`.
+    UnusedView {
+        /// Source range of the view's name.
+        span: Span,
+        /// The view.
+        name: String,
+    },
     /// An expression read a name nothing declares: a misspelt `var`, a
     /// parameter that was renamed. At runtime such a name is its own text,
     /// which is how an enum word like `center` works and why a typo in a
@@ -1297,8 +1339,10 @@ pub enum CompileError {
     /// A `let` written inside an element's braces. A `let` goes at the top of the
     /// view, or inside a `when` or `for` body.
     LetInElementBody {
-        /// Source range of the `let`.
+        /// Source range of the `let` or `var`.
         span: Span,
+        /// `let` or `var`.
+        keyword: String,
         /// The name it declares.
         name: String,
         /// The element it is in.
@@ -1722,6 +1766,10 @@ impl CompileError {
             | Self::EnumShorthand { span, .. }
             | Self::UnknownField { span, .. }
             | Self::DuplicateField { span, .. }
+            | Self::DuplicateAttribute { span, .. }
+            | Self::UnusedVariable { span, .. }
+            | Self::UnusedParam { span, .. }
+            | Self::UnusedView { span, .. }
             | Self::ShapeMismatch { span, .. } => *span,
         }
     }
@@ -1877,6 +1925,10 @@ impl CompileError {
             | Self::EnumShorthand { span, .. }
             | Self::UnknownField { span, .. }
             | Self::DuplicateField { span, .. }
+            | Self::DuplicateAttribute { span, .. }
+            | Self::UnusedVariable { span, .. }
+            | Self::UnusedParam { span, .. }
+            | Self::UnusedView { span, .. }
             | Self::ShapeMismatch { span, .. } => {
                 span.start = (i64::from(span.start) + delta).max(0) as u32;
                 span.end = (i64::from(span.end) + delta).max(0) as u32;
@@ -2035,6 +2087,10 @@ impl CompileError {
             Self::EnumShorthand { .. } => "EnumShorthand",
             Self::ShapeMismatch { .. } => "ShapeMismatch",
             Self::UnknownField { .. } => "UnknownField",
+            Self::DuplicateAttribute { .. } => "DuplicateAttribute",
+            Self::UnusedVariable { .. } => "UnusedVariable",
+            Self::UnusedParam { .. } => "UnusedParam",
+            Self::UnusedView { .. } => "UnusedView",
         }
     }
 
@@ -2063,6 +2119,9 @@ impl CompileError {
                 | Self::PanelTakesNoKeys { .. }
                 | Self::SizeOnStretchedAxis { .. }
                 | Self::RecreatesSurface { .. }
+                | Self::UnusedVariable { .. }
+                | Self::UnusedParam { .. }
+                | Self::UnusedView { .. }
         )
     }
 
@@ -2418,6 +2477,12 @@ impl CompileError {
             }
             Self::NotAnimatable {
                 prop, use_instead, ..
+            } if use_instead.is_empty() => format!(
+                "a `with` curve only moves an attribute's value, so on `{prop}` it does nothing: \
+                 write it on the attribute that shows it, as in `#[opacity: {prop} with anim.spring()]`"
+            ),
+            Self::NotAnimatable {
+                prop, use_instead, ..
             } => {
                 format!(
                     "`{prop}` has no value between one step and the next, so it                      cannot be animated; use `{use_instead}` to change shape over time"
@@ -2462,6 +2527,15 @@ impl CompileError {
             ),
             Self::UnknownParam {
                 name, callee, hint, ..
+            } if crate::interp::intrinsics::lookup(callee).is_some() => with_hint(
+                format!(
+                    "`{callee}` has no argument `{name}`: its attributes go in `#[ … ]`, as in \
+                     `{callee}(…) #[{name}: …]`"
+                ),
+                hint.as_deref(),
+            ),
+            Self::UnknownParam {
+                name, callee, hint, ..
             } => format!(
                 "{}; a view call also takes the layout attributes {}",
                 with_hint(
@@ -2472,6 +2546,17 @@ impl CompileError {
             ),
             Self::MissingParam { name, callee, .. } => {
                 format!("missing required argument `{name}` for view `{callee}`")
+            }
+            Self::DuplicateParam {
+                name,
+                callee,
+                declared: true,
+                ..
+            } => {
+                format!(
+                    "view `{callee}` declares the parameter `{name}` more than once: rename or \
+                     remove one of them"
+                )
             }
             Self::DuplicateParam { name, callee, .. } => {
                 format!("parameter `{name}` of view `{callee}` is bound more than once")
@@ -2486,6 +2571,12 @@ impl CompileError {
                     Some(e) => format!("takes no `{e}` handler"),
                     None => "takes no trailing action".to_string(),
                 };
+                if crate::interp::intrinsics::lookup(callee).is_some() {
+                    return format!(
+                        "`{callee}` cannot be pressed, so `=> action` after it would never run: \
+                         use a `Button`, or put the action on a `Box` or `Row` as `#[tap => …]`"
+                    );
+                }
                 match callback {
                     Some(cb) => format!("`{callee}` {what}; pass it as `{cb}: {{ … }}`"),
                     None => format!(
@@ -2546,6 +2637,16 @@ impl CompileError {
             } => with_hint(
                 format!("package `{package}` does not export a view `{name}`"),
                 hint.as_deref(),
+            ),
+            Self::NameCollision {
+                name,
+                first,
+                second,
+                local: true,
+                ..
+            } => format!(
+                "`{name}` is declared twice in this view, as {first} and as {second}: the \
+                 second would hide the first, so give one of them another name"
             ),
             Self::NameCollision {
                 name,
@@ -2750,10 +2851,24 @@ impl CompileError {
                 ),
                 hint.as_deref(),
             ),
-            Self::LetInElementBody { name, element, .. } => format!(
-                "`let {name}` is written inside `{element}`, where it would be ignored: put it \
-                 at the top of the view, or inside a `when` or `for` body"
-            ),
+            Self::LetInElementBody {
+                keyword,
+                name,
+                element,
+                ..
+            } => {
+                if keyword == "var" {
+                    format!(
+                        "`var {name}` is written inside `{element}`, where it would not be a \
+                         variable: put it at the top of the view"
+                    )
+                } else {
+                    format!(
+                        "`let {name}` is written inside `{element}`, where it would be ignored: \
+                         put it at the top of the view, or inside a `when` or `for` body"
+                    )
+                }
+            }
             Self::UnknownStateTarget { name, hint, .. } => with_hint(
                 format!(
                     "no element in this view is tagged `as {name}`: tag the element \
@@ -2918,7 +3033,7 @@ impl CompileError {
                 format!("enum `{enum_name}` lists the case `{name}` more than once")
             }
             Self::ConstantCycle { path, .. } => {
-                format!("constants cannot read each other in a circle: {path}")
+                format!("constants and `let`s cannot read each other in a circle: {path}")
             }
             Self::ImpureConstant { name, .. } => format!(
                 "constant `{name}` must be pure: it may read only other constants and call \
@@ -2961,6 +3076,21 @@ impl CompileError {
             Self::DuplicateField { name, .. } => format!(
                 "this record writes `{name}` twice: the last one wins, so remove the one that does not count"
             ),
+            Self::DuplicateAttribute { name, .. } => format!(
+                "`{name}` is written twice in this `#[ … ]`: the last one wins, so remove the one \
+                 that does not count"
+            ),
+            Self::UnusedVariable { name, keyword, .. } => format!(
+                "`{keyword} {name}` is never read: use it, delete it, or start its name with `_` \
+                 to say it is meant to be unused"
+            ),
+            Self::UnusedParam { name, view, .. } => format!(
+                "parameter `{name}` of view `{view}` is never read: use it, delete it, or start \
+                 its name with `_` to say it is meant to be unused"
+            ),
+            Self::UnusedView { name, .. } => {
+                format!("`private View {name}` is never drawn: use it, or delete it")
+            }
             Self::UnknownName { name, hint, .. } => {
                 with_hint(format!("nothing here is named `{name}`"), hint.as_deref())
             }

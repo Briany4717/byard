@@ -72,13 +72,17 @@ impl Interpreter {
     /// `known_views` are user `ViewDecl` names in scope.
     pub fn lower_element(&mut self, el: &ElementNode, known_views: &[&str]) -> RenderNode {
         for m in &el.children {
-            if let Member::Let { name, span, .. } = m {
-                self.errors.push(CompileError::LetInElementBody {
-                    span: *span,
-                    name: name.as_str().to_string(),
-                    element: el.name.as_str().to_string(),
-                });
-            }
+            let (keyword, name, span) = match m {
+                Member::Let { name, span, .. } => ("let", name, span),
+                Member::Var { name, span, .. } => ("var", name, span),
+                _ => continue,
+            };
+            self.errors.push(CompileError::LetInElementBody {
+                span: *span,
+                keyword: keyword.to_string(),
+                name: name.as_str().to_string(),
+                element: el.name.as_str().to_string(),
+            });
         }
         // RFC-0016: expand `..style` spreads into a flat attribute set *before*
         // validating or lowering, so everything downstream sees ordinary
@@ -563,8 +567,23 @@ impl Interpreter {
             // reply path as a lifecycle effect, which is the point: a timer
             // *is* a repeating mount-scoped effect.
             Member::Timer {
-                every, dur, action, ..
+                every,
+                dur,
+                action,
+                span,
             } => {
+                // A duration written as nothing never comes: said here, where
+                // it is written, and not by a timer that is never armed.
+                if matches!(dur, crate::parser::ast::Expr::IntLit(0, _)) {
+                    let word = if *every { "every" } else { "after" };
+                    self.errors.push(CompileError::InvalidAnimation {
+                        span: *span,
+                        message: format!(
+                            "`{word} 0ms` never fires: a timer needs a duration above zero, \
+                             such as `{word} 1s`"
+                        ),
+                    });
+                }
                 if let Ok(lowered) = self.lower_action(action, None) {
                     let compute = self.lower_expr(dur, None);
                     let dur = self.ctx.open_memo(compute);

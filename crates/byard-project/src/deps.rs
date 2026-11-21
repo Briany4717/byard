@@ -1436,6 +1436,7 @@ mod tests {
             icon: None,
             bundle: crate::manifest::BundleConfig::default(),
             edition: byard_compiler::edition::Edition::BASELINE,
+            allowed_lints: Vec::new(),
         };
         let (program, provider) = resolve_project(&manifest).unwrap();
         assert!(program.errors.is_empty(), "{:?}", program.errors);

@@ -79,5 +79,7 @@ pub fn check_views_where(
             errors.push(e.clone());
         }
     }
+    // The lints: warnings about names, which no run depends on.
+    errors.extend(byard_compiler::names::lints(&program.views, |v| wanted(v)));
     errors
 }

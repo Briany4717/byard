@@ -294,6 +294,7 @@ impl Interpreter {
                     binds[i] = Some(self.resolve_binding_arg(value));
                 } else {
                     self.errors.push(CompileError::DuplicateParam {
+                        declared: false,
                         span: value.span(),
                         name: params[i].name.as_str().to_string(),
                         callee: callee.to_string(),
@@ -308,6 +309,7 @@ impl Interpreter {
                 slots[i] = Some(self.param_arg(&params[i], value));
             }
             Some(_) => self.errors.push(CompileError::DuplicateParam {
+                declared: false,
                 span: value.span(),
                 name: name.as_str().to_string(),
                 callee: callee.to_string(),
@@ -317,6 +319,7 @@ impl Interpreter {
             None if crate::interp::intrinsics::VIEW_CALL_LAYOUT.contains(&name.as_str()) => {
                 if layout.iter().any(|(n, ..)| n == name) {
                     self.errors.push(CompileError::DuplicateParam {
+                        declared: false,
                         span: value.span(),
                         name: name.as_str().to_string(),
                         callee: callee.to_string(),
@@ -405,6 +408,7 @@ impl Interpreter {
                     let scope = self.param_arg(&params[i], &arg.value);
                     if slots[i].is_some() {
                         self.errors.push(CompileError::DuplicateParam {
+                            declared: false,
                             span: arg.value.span(),
                             name: params[i].name.as_str().to_string(),
                             callee: callee_name.clone(),

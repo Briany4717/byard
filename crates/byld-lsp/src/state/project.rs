@@ -414,7 +414,9 @@ fn analyze_in(project: &Project, index: usize, doc: &Document, open: &[Arc<Docum
     let mut notices = Vec::new();
     let mut mine = Vec::new();
     for mut error in errors {
-        if inside(error.span().start) {
+        // `[lints]` in `byard.toml` switches a warning off here as it does in
+        // `byard check`, so the editor and the command say the same.
+        if inside(error.span().start) && !project.manifest.allows(&error) {
             error.shift_span(-i64::from(base));
             mine.push(error);
         }

@@ -25,6 +25,7 @@ pub mod icons;
 pub mod infer;
 pub mod interp;
 pub mod lexer;
+pub mod names;
 pub mod parser;
 pub mod resolve;
 pub mod surfaces;

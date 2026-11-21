@@ -28,10 +28,27 @@ Column #[align: centre] { Text("x") }
 Text("a") #[size: "big"]
 
 //# case: attribute-written-twice
-//# gap: the same attribute twice is accepted; the last wins
 //# fragment
 //# error: DuplicateAttribute
 Text("a") #[size: 12, size: 14]
+
+//# case: attribute-axis-written-twice
+//# fragment
+//# error: DuplicateAttribute
+//# diagnostics: 1
+Box #[width: 10, height: 10, translate.y: 1, translate.y: 2] { Text("a") }
+
+//# case: attribute-axes-are-two-attributes
+//# fragment
+//# text: a
+Box #[width: 10, height: 10, translate.x: 1, translate.y: 2] { Text("a") }
+
+//# case: event-written-twice
+//# fragment
+//# error: DuplicateAttribute
+//# diagnostics: 1
+var n = 0
+Box #[width: 10, height: 10, tap => n++, tap => n--] { Text("{n}") }
 
 //# case: attribute-with-equals
 //# fragment
@@ -96,11 +113,23 @@ Box #[key_down => n++] {}
 Text("a") { Text("b") }
 
 //# case: trailing-action-on-an-element-that-takes-none
-//# gap: `Text("a") => n++` is accepted and never runs
 //# fragment
 //# error: ViewCallAction
 var n = 0
 Text("a") => n++
+
+//# case: trailing-action-on-an-image
+//# fragment
+//# error: ViewCallAction
+//# diagnostics: 1
+var n = 0
+Image("a.png") => n++
+
+//# case: trailing-action-on-a-button-runs
+//# fragment
+//# text: go
+var n = 0
+Button("go") => n++
 
 //# case: style-value-and-spread
 //# fragment
@@ -166,12 +195,30 @@ Box #[bg: 0x222222] {
 Box { on hovr { bg: 0x333333 } }
 
 //# case: state-block-twice
-//# gap: the same state twice in an element is accepted, though it is an error in a `style`
 //# fragment
 //# error: DuplicateStateBlock
 Box {
     on hover { bg: 0x333333 }
     on hover { bg: 0x444444 }
+}
+
+//# case: state-block-of-a-compound-twice
+//# fragment
+//# error: DuplicateStateBlock
+//# diagnostics: 1
+Box {
+    on focused + hover { bg: 0x333333 }
+    on hover + focused { bg: 0x444444 }
+}
+
+//# case: state-blocks-of-different-sets-are-fine
+//# fragment
+//# text: a
+Box {
+    on hover { bg: 0x333333 }
+    on focused + hover { bg: 0x444444 }
+    on pressed { bg: 0x555555 }
+    Text("a")
 }
 
 //# case: state-block-with-layout
@@ -225,11 +272,32 @@ Box #[grow: on ? 1 : 0 with anim.spring()] { Text("a") }
 Box #[opacity: 1.0 with anim.sprang()] { Text("a") }
 
 //# case: with-outside-an-attribute
-//# gap: `with` on a plain `let` is accepted and does nothing
 //# fragment
 //# error: NotAnimatable
 let x = 1 with anim.spring()
 Text("{x}")
+
+//# case: with-in-a-var
+//# fragment
+//# error: NotAnimatable
+//# diagnostics: 1
+var y = 1 with anim.spring()
+Text("{y}")
+
+//# case: with-in-a-condition
+//# fragment
+//# error: NotAnimatable
+//# diagnostics: 1
+var on = true
+when on with anim.spring() {
+    Text("a")
+}
+
+//# case: with-in-an-attribute-is-still-fine
+//# fragment
+//# text: a
+var on = true
+Box #[width: 10, height: 10, opacity: on ? 1.0 : 0.5 with anim.spring()] { Text("a") }
 
 //# case: keyframes
 //# fragment
@@ -257,10 +325,15 @@ Text(5)
 Text()
 
 //# case: intrinsic-unknown-named-argument
-//# gap: a named argument an element does not have is accepted
 //# fragment
 //# error: UnknownParam
 Text("a", nope: 1)
+
+//# case: intrinsic-two-unknown-named-arguments
+//# fragment
+//# error: UnknownParam
+//# diagnostics: 2
+Text("a", nope: 1, other: 2)
 
 //# case: tuple-spacing-forms
 //# fragment

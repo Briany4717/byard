@@ -44,10 +44,14 @@ enum A { y }
 View Main() { Text("a") }
 
 //# case: enum-empty
-//# gap: an enum with no cases is accepted
 //# error: UnexpectedToken
 enum A { }
 View Main() { Text("a") }
+
+//# case: enum-with-one-case
+//# text: only
+enum One { only }
+View Main() { Text("{One.only}") }
 
 //# case: enum-parameter-and-shorthand
 //# text: tonal | filled | outlined

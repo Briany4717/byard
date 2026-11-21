@@ -15,7 +15,7 @@ So every step below ends the same way: **its cases lose their `gap:` line, the r
 loses its note, and this file loses the step.** When this file is empty and the suite has no
 gap, the language is where this document wanted it.
 
-As written, the suite has 584 cases: 525 hold and 59 are gaps.
+As written, the suite has 613 cases: 570 hold and 43 are gaps.
 
 ```sh
 cargo test -p byard-cli --test it conformance -- --nocapture
@@ -90,22 +90,26 @@ stays on `2026`.
 
 ### 8. Names
 
-*Cases:* `var-declared-twice`, `var-and-let-of-one-name`, `var-named-like-a-parameter`,
-`view-duplicate-parameter`, `var-inside-an-element-body`, `let-cycle`,
-`attribute-written-twice`, `state-block-twice`, `intrinsic-unknown-named-argument`,
-`trailing-action-on-an-element-that-takes-none`, `with-outside-an-attribute`,
-`view-named-before-positional`, `view-lowercase-name`, `enum-empty`, `timer-of-zero`,
-`var-unused`.
+*Left:* three bullets, with no case yet. The sixteen cases (`var-declared-twice`,
+`var-and-let-of-one-name`, `var-named-like-a-parameter`, `view-duplicate-parameter`,
+`var-inside-an-element-body`, `let-cycle`, `attribute-written-twice`, `state-block-twice`,
+`intrinsic-unknown-named-argument`, `trailing-action-on-an-element-that-takes-none`,
+`with-outside-an-attribute`, `view-named-before-positional`, `view-lowercase-name`,
+`enum-empty`, `timer-of-zero`, `var-unused`) hold, and so do the twenty-nine added with them.
+Eleven older cases that declare a name and never use it (the `…-does-not-panic` ones, and
+two that test scope) now name the warning they get, `//# warning: UnusedVariable`, and
+nothing else of them changed.
 
-- Two declarations of one name in a view, or a declaration over a parameter, is
-  `NameCollision`.
-- A `var` in an element's braces is refused (`LetInElementBody` exists for `let`) until
-  block-scoped state is designed; today it is accepted and then reads as the text `n`.
-- `let`s in a view that read each other in a circle are the error constants already get.
-- An attribute or a state block written twice, a named argument an element lacks, and an
-  action after an element that has no press are errors, not silence.
-- Lints, as warnings with names, each switchable in `byard.toml` under `[lints]`: a name
-  never read, a view never used, a parameter never read.
+- A name that is only written, `n++` and nothing else, counts as used. "Never read" is the
+  stricter test the lint is called for, and the suite's `timer-of-zero` and `timers-are-accepted`
+  both keep such a `var` and expect no warning, so it wants those cases to say what they mean
+  first.
+- A circle of `let`s is an error only when something reads it (`let-cycle-does-not-hang`
+  pins that a circle nobody reads draws), and only in the view's own body: in a `when` or a
+  `for` a name below is `UnknownName`, once, which is the right error for it.
+- `UnusedView` is for a `private View` nothing draws. A view of an app that is not `Main`
+  and that nothing draws is not reported, because nothing here says which view an app runs
+  but the name.
 
 ## Part 2: stop failing quietly
 

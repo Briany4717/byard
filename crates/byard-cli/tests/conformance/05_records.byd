@@ -16,6 +16,7 @@ Text("{v.name} {v.score} {v.on}")
 //# case: spread-does-not-change-the-source
 //# fragment
 //# text: 3
+//# warning: UnusedVariable
 let u = { name: "Ada", score: 3 }
 let v = { ..u, score: 10 }
 Text("{u.score}")
@@ -156,6 +157,7 @@ Text("{r.xs.len} {r.names[1]}")
 //# case: empty-braces-are-an-action-not-a-record
 //# fragment
 //# text: ok
+//# warning: UnusedVariable
 let nothing = {}
 Text("ok")
 

@@ -1042,6 +1042,7 @@ impl Parser<'_> {
     /// trailing comma is allowed.
     pub(super) fn parse_arg_list(&mut self, close: &Token) -> Vec<Arg> {
         let mut args = Vec::new();
+        let mut named_before = false;
         while self.cur().is_some() && self.cur() != Some(close) {
             // A keyframe step `50%: value easeOut` (RFC-0025 §4). Any call may
             // *carry* one; only `anim.keyframes(…)` gives it meaning (D6).
@@ -1065,6 +1066,7 @@ impl Parser<'_> {
                     self.advance(); // bind
                     self.advance(); // name
                     self.advance(); // :
+                    named_before = true;
                     let value = self.parse_expr(0);
                     args.push(Arg {
                         name: Some(sym),
@@ -1087,6 +1089,14 @@ impl Parser<'_> {
             } else {
                 None
             };
+            // Once an argument has a name, the rest have to: which parameter a
+            // bare value is for is no longer what its position says.
+            if name.is_none() && named_before {
+                self.error(
+                    "a name for this argument, as in `name: value`, since one before it has one",
+                );
+            }
+            named_before |= name.is_some();
             let value = self.parse_arg_value();
             args.push(Arg {
                 name,

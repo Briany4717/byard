@@ -353,6 +353,7 @@ pub fn check_views(views: &[ViewDecl]) -> Inference {
         checker.check_view(view);
     }
     out.surfaces = crate::surfaces::check_surfaces(views, &mut out.errors);
+    crate::names::check(views, &mut out.errors);
     out
 }
 

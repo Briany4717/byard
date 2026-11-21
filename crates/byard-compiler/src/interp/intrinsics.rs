@@ -1444,6 +1444,27 @@ fn member_span(m: &Member) -> crate::diagnostics::Span {
     }
 }
 
+/// Whether lowering hands `Name(…) => action` to the element. A `Text` is
+/// drawn and not pressed (a `Button` is the one that is), and an image, a
+/// spacer, an overlay and a navigation container have nothing to press either,
+/// so the action written after one is dropped; it is refused instead.
+fn takes_a_trailing_action(element: &str) -> bool {
+    !matches!(
+        element,
+        "Text" | "Spacer" | "Image" | "VectorIcon" | "Overlay" | "NavStack" | "NavHost"
+    )
+}
+
+/// The one name an element's `( … )` argument can be given, for the elements
+/// whose argument is named at all: `NavStack(path: stack)`, `NavHost(active: tab)`.
+fn content_param_name(element: &str) -> Option<&'static str> {
+    match element {
+        "NavStack" => Some("path"),
+        "NavHost" => Some("active"),
+        _ => None,
+    }
+}
+
 /// Validates `el` against the §5 contract, returning every diagnostic it
 /// produces (possibly several). `known_views` are the user `ViewDecl` names in
 /// scope, so a non-intrinsic element that resolves to a view is not an error.
@@ -1499,15 +1520,49 @@ pub fn validate_element_in(
         return errs;
     };
 
+    // A named argument the element has no parameter of that name for. It is
+    // that one mistake: it is not also one too many.
+    let accepted = content_param_name(name);
+    let mut unknown_names = 0;
+    for arg in &el.content {
+        if let Some(given) = &arg.name {
+            if accepted != Some(given.as_str()) {
+                unknown_names += 1;
+                errs.push(CompileError::UnknownParam {
+                    span: arg.value.span(),
+                    name: given.as_str().to_string(),
+                    callee: name.to_string(),
+                    hint: accepted
+                        .and_then(|a| closest_match(given.as_str(), std::iter::once(a)))
+                        .map(str::to_string),
+                });
+            }
+        }
+    }
+
+    // A trailing `=> action` is the element's `tap`; one that is not pressed
+    // would never run it.
+    if let Some(action) = &el.action {
+        if !takes_a_trailing_action(name) {
+            errs.push(CompileError::ViewCallAction {
+                span: action.span(),
+                callee: name.to_string(),
+                event: None,
+                callback: None,
+            });
+        }
+    }
+
     // Rule 2, content arity.
-    if el.content.len() != info.arity {
+    let found = el.content.len() - unknown_names;
+    if found != info.arity {
         errs.push(CompileError::ArityMismatch {
             span: el.span,
             name: name.to_string(),
             expected: info.arity,
-            found: el.content.len(),
+            found,
         });
-    } else if let Some(ty) = info.content {
+    } else if let Some(ty) = info.content.filter(|_| unknown_names == 0) {
         // Rule 3, content type.
         for arg in &el.content {
             if let Some(err) = check_value_type(ty, &arg.value) {

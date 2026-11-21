@@ -531,8 +531,10 @@ View Main() {
 ```
 
 ```text
-enum := "enum" NAME "{" (NAME ","?)* "}"
+enum := "enum" NAME "{" NAME ","? (NAME ","?)* "}"
 ```
+
+An enum has at least one case: `enum Size { }` is a syntax error.
 
 A case is written `Size.large`. Cases are compared with `==` and `!=` and are not ordered.
 A case is a different type from text and from the cases of another enum. In a text, to a
@@ -569,7 +571,8 @@ params := param ("," param)*
 param  := "bind"? NAME (":" type "?"?)? ("=" expr)?
 ```
 
-The view named `Main` is the one a program runs.
+The view named `Main` is the one a program runs. A view's name starts with a capital letter,
+which is how `Card(…)` is told from a name in an expression; `View card()` is a syntax error.
 
 ### Parameters
 
@@ -587,9 +590,13 @@ View Main() {
 }
 ```
 
-A call gives arguments by position, by name, or positions first and then names. An unknown
-name is `UnknownParam`, too many arguments `ViewArityMismatch`, an argument given twice
-`DuplicateParam`, and one of the wrong type `ArgumentTypeMismatch`.
+A call gives arguments by position, by name, or positions first and then names: once an
+argument has a name the rest have to, and a bare value after a named one is a syntax error.
+An unknown name is `UnknownParam`, too many arguments `ViewArityMismatch`, an argument given
+twice `DuplicateParam`, and one of the wrong type `ArgumentTypeMismatch`. A view that declares
+a parameter twice, `View Card(a: Int, a: Int)`, is `DuplicateParam` too. An element of the
+engine takes no argument by name, `Text("a", size: 3)` is `UnknownParam` (an attribute goes in
+`#[ … ]`), except the one `NavStack(path: …)` and `NavHost(active: …)` name.
 
 A parameter is a copy of what the caller gave, and follows it: when the caller's value
 changes, so does everything in the view that read the parameter.
@@ -719,8 +726,23 @@ Text("{c}")
 
 That draws `22`.
 
-> **Not yet.** Two `let`s that read each other are accepted. Nothing warns about a name
-> that is never read, or one that hides another. (`12_state.byd`)
+Two declarations of one name in one body, or one over a parameter, are `NameCollision`: the
+second would hide the first. A body inside a `when`, a `for` or a `route` is a scope of its
+own, and may reuse a name of the view's. `let`s of a view that read each other in a circle are
+`ConstantCycle`, once one of them is read. A `var` or `let` that nothing in its view mentions is
+the warning `UnusedVariable`, a parameter its view never mentions `UnusedParam`, and a
+`private View` no view draws `UnusedView`. A name that starts with `_` says it is meant to be
+unused, and `[lints]` in `byard.toml` switches a lint off, by its name:
+
+```text
+[lints]
+unused-variable  = "allow"
+unused-parameter = "allow"
+unused-view      = "allow"
+```
+
+> **Not yet.** A `var` that is only ever written, `n++` and nothing else, counts as used, and
+> so does a name another view of a package never reads. (`12_state.byd`)
 
 ### Functions in a view
 
@@ -749,6 +771,8 @@ An element is one of the engine's, a view of yours, or `package.View`. An unknow
 - Braces hold children, and the element's `on state { … }` blocks. An element that takes no
   children is `UnexpectedChildren`.
 - `=> action` after an element that has a press of its own, such as `Button`, is its `tap`.
+  After one that is only drawn (`Text`, `Image`, `VectorIcon`, `Spacer`, `Overlay`,
+  `NavStack`, `NavHost`) it is `ViewCallAction`: the action would never run.
 
 An event names what it is told with a word in parentheses, `input(text) => …`,
 `pointer_down(e) => …`. An event that tells nothing takes none (`EventHasNoValue`).
@@ -756,9 +780,10 @@ An event names what it is told with a word in parentheses, `input(text) => …`,
 [Layout](layout.md), [styling](styling.md), [controls](controls.md) and
 [events](events-and-actions.md) list the elements, their attributes and their events.
 
-> **Not yet.** An attribute written twice is accepted, and the last wins. A `var` in an
-> element's braces is accepted and then reads as its own name; declare state at the top of
-> the view. (`13_elements_styles.byd`, `12_state.byd`)
+An attribute written twice in one `#[ … ]` is `DuplicateAttribute`, and so is `translate.y`
+twice; `translate.x` and `translate.y` are two. A state block twice in one element, with the
+same states, is `DuplicateStateBlock`. A `var` or a `let` in an element's braces is
+`LetInElementBody`: declare state at the top of the view.
 
 ### `when`
 
@@ -808,7 +833,8 @@ timer     := ("every" | "after") expr "=>" action
   `it.height`, `it.x` and `it.y`.
 - `after d` runs once, `d` milliseconds after the block it is in appears. `every d` runs
   each `d` milliseconds, first after one interval. Both stop when their block goes: a
-  timer inside a `when` lives while that `when` holds.
+  timer inside a `when` lives while that `when` holds. A duration written as `0ms` is
+  `InvalidAnimation`: it would never fire.
 
 ### `provide` and `inject`
 
@@ -853,7 +879,9 @@ After a spread, an attribute written later wins. States are `hover`, `pressed`, 
 
 `value with curve` after an attribute's value animates each change of it:
 `opacity: on ? 1.0 : 0.4 with anim.spring()`. An attribute that cannot move is
-`LayoutPropNotAnimatable` or `NotAnimatable`, and an unknown curve `UnknownAnimation`. See
+`LayoutPropNotAnimatable` or `NotAnimatable`, and an unknown curve `UnknownAnimation`. A
+`with` anywhere but on an attribute's value, in a `var`, a `let` or a condition, is
+`NotAnimatable` too. See
 [motion](motion.md).
 
 ## Actions

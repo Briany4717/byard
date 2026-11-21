@@ -140,7 +140,7 @@ pub fn order(consts: &[ConstDecl], fns: &[FnDecl]) -> Ordered {
 
 /// Every name an expression reads, in order, except lambda parameters and the
 /// names in `bound`.
-fn names_read(expr: &Expr, bound: &HashSet<Symbol>) -> Vec<Symbol> {
+pub(crate) fn names_read(expr: &Expr, bound: &HashSet<Symbol>) -> Vec<Symbol> {
     let mut copy = expr.clone();
     let mut bound = bound.clone();
     let mut used: Vec<Symbol> = Vec::new();

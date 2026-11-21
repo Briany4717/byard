@@ -72,7 +72,6 @@ View Bar(w: Int) { Text("{w}") }
 View Main() { Bar(3.5) }
 
 //# case: view-named-before-positional
-//# gap: a positional argument after a named one is accepted
 //# error: UnexpectedToken
 View Card(label: Str, n: Int) { Text("{label} {n}") }
 View Main() { Card(label: "a", 1) }
@@ -83,10 +82,20 @@ View Card(label: Str) { Text(label) }
 View Main() { Card("a", label: "b") }
 
 //# case: view-duplicate-parameter
-//# gap: two parameters of one name are accepted in the declaration
 //# error: DuplicateParam
 View Card(a: Int, a: Int) { Text("{a}") }
 View Main() { Card(1, 2) }
+
+//# case: view-parameter-declared-twice-among-others
+//# error: DuplicateParam
+//# diagnostics: 1
+View Card(a: Int, b: Int, a: Int) { Text("{a} {b}") }
+View Main() { Card(1, 2, 3) }
+
+//# case: view-named-after-positional-is-fine
+//# text: a 1
+View Card(label: Str, n: Int) { Text("{label} {n}") }
+View Main() { Card("a", n: 1) }
 
 //# case: view-duplicate-name
 //# error: DuplicateViewName
@@ -100,6 +109,7 @@ View Main() { Colum { Text("hi") } }
 
 //# case: view-shadows-an-element
 //# error: IntrinsicShadowed
+//# warning: UnusedParam
 View Text(s: Str) { Box {} }
 View Main() { Text("a") }
 
@@ -118,7 +128,6 @@ View B() { A() }
 View Main() { A() }
 
 //# case: view-lowercase-name
-//# gap: a view named in lower case is accepted, against the guide
 //# error: UnexpectedToken
 View card() { Text("a") }
 View Main() { card() }
@@ -178,6 +187,7 @@ View Main() { Callout(kind: "tip") { Text("Save often.") } }
 
 //# case: content-slot-sees-the-callers-names
 //# text: 5
+//# warning: UnusedVariable
 View Wrap(content) {
     var n = 99
     Column { content }
@@ -259,6 +269,7 @@ View Main() {
 
 //# case: callback-runs-in-the-callers-scope
 //# text: go | 1
+//# warning: UnusedVariable
 View Go(on_tap: Fn() = {}) {
     var count = 50
     on mount => on_tap()

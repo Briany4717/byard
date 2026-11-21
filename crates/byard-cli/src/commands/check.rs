@@ -31,7 +31,9 @@ pub fn run(file: Option<&Path>, short: bool) -> Result<(), String> {
         style::info(&format!("{n_files} file(s), {n_pkgs} package(s)"));
     }
 
-    let diagnostics = check_program_with_theme(&program, manifest.theme);
+    let mut diagnostics = check_program_with_theme(&program, manifest.theme.clone());
+    // `[lints]` in `byard.toml` can switch a warning off by name.
+    diagnostics.retain(|d| !manifest.allows(d));
     // A warning is printed and does not fail the check (RFC-0031 §Q5: failing a
     // build over an inert attribute is disproportionate). It is still printed
     // in full, with its caret block, because a diagnostic nobody sees is one

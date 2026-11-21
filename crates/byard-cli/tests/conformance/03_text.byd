@@ -29,6 +29,7 @@ Text("{"héllo".slice(1, 3)}")
 //# case: slice-negative-does-not-panic
 //# fragment
 //# text: ok
+//# warning: UnusedVariable
 let a = "hello".slice(-2, 3)
 let b = "hello".slice(2, -1)
 let c = "".slice(0, 0)
@@ -92,6 +93,7 @@ Text("{"2026-11-05T14:03:12".formatDate("YYYY-MM-DD HH:mm")}")
 //# case: format-date-of-nonsense-does-not-panic
 //# fragment
 //# text: ok
+//# warning: UnusedVariable
 let a = "not a date".formatDate("YYYY")
 let b = "".formatDate("")
 let c = "2026-99-99T99:99:99".formatDate("dddd D MMMM")

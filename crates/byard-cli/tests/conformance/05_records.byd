@@ -128,7 +128,6 @@ on mount => { u = { ..u, score: 10 } }
 Text("{u.score}")
 
 //# case: field-assignment
-//# gap: `u.score = 10` checks clean and changes nothing
 //# fragment
 //# text: 10
 var u = { name: "Ada", score: 3 }
@@ -136,12 +135,81 @@ on mount => { u.score = 10 }
 Text("{u.score}")
 
 //# case: nested-field-assignment
-//# gap: `u.a.b = 2` checks clean and changes nothing
 //# fragment
 //# text: 2
 var u = { a: { b: 1 } }
 on mount => { u.a.b = 2 }
 Text("{u.a.b}")
+
+//# case: field-assignment-keeps-the-other-fields
+//# fragment
+//# text: Ada 10
+var u = { name: "Ada", score: 3 }
+on mount => { u.score = 10 }
+Text("{u.name} {u.score}")
+
+//# case: field-compound-assignment
+//# fragment
+//# text: 5 | 2
+var u = { score: 3, lives: 3 }
+on mount => { u.score += 2 u.lives-- }
+Text("{u.score}")
+Text("{u.lives}")
+
+//# case: field-increment
+//# fragment
+//# text: 4
+var u = { score: 3 }
+on mount => { u.score++ }
+Text("{u.score}")
+
+//# case: nested-field-assignment-keeps-its-siblings
+//# fragment
+//# text: 2 7
+var u = { a: { b: 1, c: 7 } }
+on mount => { u.a.b = 2 }
+Text("{u.a.b} {u.a.c}")
+
+//# case: field-assignment-of-a-field-that-is-not-there
+//# fragment
+//# error: TypeMismatch
+//# diagnostics: 1
+var u = { name: "Ada" }
+on mount => { u.score = 10 }
+Text("{u.name}")
+
+//# case: field-assignment-of-the-wrong-type
+//# fragment
+//# error: TypeMismatch
+//# diagnostics: 1
+var u = { score: 3 }
+on mount => { u.score = "ten" }
+Text("{u.score}")
+
+//# case: field-assignment-to-a-let
+//# fragment
+//# error: NotAssignable
+//# diagnostics: 1
+let u = { score: 3 }
+on mount => { u.score = 10 }
+Text("{u.score}")
+
+//# case: field-assignment-reaches-a-declared-record
+//# text: 7
+type Player = { name: Str, score: Int }
+View Main() {
+    var p: Player = { name: "Ada", score: 1 }
+    on mount => { p.score = 7 }
+    Text("{p.score}")
+}
+
+//# case: index-assignment
+//# gap: `xs[0] = 9` checks clean and changes nothing
+//# fragment
+//# text: 9
+var xs = [1, 2]
+on mount => { xs[0] = 9 }
+Text("{xs[0]}")
 
 //# case: tuple-named-and-positional
 //# fragment

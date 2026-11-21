@@ -414,8 +414,12 @@ fields were written in: `{ a: 1, b: 2 } == { b: 2, a: 1 }`.
 
 `{}` alone is an empty action, not an empty record.
 
-> **Not yet.** `u.score = 10` is accepted and changes nothing; write
-> `u = { ..u, score: 10 }`. (`05_records.byd`)
+`u.score = 10` writes a field. It means `u = { ..u, score: 10 }`, and `u.a.b = 2` the same one
+level down, so the other fields are kept and `u` has to be a `var` (`NotAssignable` for a `let`
+or a loop variable). `+=`, `-=`, `++` and `--` work on a field too. A field the record does not
+have, or a value it cannot hold, is `TypeMismatch`.
+
+> **Not yet.** `xs[i] = v` is accepted and changes nothing. (`05_records.byd`)
 
 ### A value or a default: `??`
 

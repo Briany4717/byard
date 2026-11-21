@@ -733,6 +733,17 @@ impl Interpreter {
                 let s = format!(".{class}");
                 Box::new(move |_| Value::Str(s.clone()))
             }
+            // `u.score = 10` is `u = { ..u, score: 10 }`.
+            Expr::Assign { target, .. } | Expr::Postfix { target, .. }
+                if matches!(**target, Expr::Member { .. })
+                    && self.resolve_theme_scheme_target(target).is_none()
+                    && expr.field_write().is_some() =>
+            {
+                match expr.field_write() {
+                    Some(whole) => self.lower_expr(&whole, payload_name),
+                    None => Box::new(|_| Value::Unit),
+                }
+            }
             Expr::Postfix { target, op, span } => {
                 if let Some(noop) = self.refuse_write_here(target, *span) {
                     return noop;
@@ -2128,6 +2139,15 @@ impl Interpreter {
     /// Returns [`CompileError::NotAssignable`] if a mutation targets something
     /// other than a `var`.
     pub fn eval_action(&mut self, expr: &Expr) -> Result<Value, CompileError> {
+        if let Expr::Assign { target, .. } | Expr::Postfix { target, .. } = expr {
+            if matches!(**target, Expr::Member { .. })
+                && self.resolve_theme_scheme_target(target).is_none()
+            {
+                if let Some(whole) = expr.field_write() {
+                    return self.eval_action(&whole);
+                }
+            }
+        }
         match expr {
             Expr::Postfix { target, op, span } => {
                 let sig = self.resolve_var(target, *span)?;

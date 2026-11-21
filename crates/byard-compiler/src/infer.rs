@@ -1959,6 +1959,32 @@ impl Checker<'_> {
     /// What an assignment writes is a `var`, a binding, or a field or an item
     /// of one. A `let`, a parameter, a loop variable, a lambda's parameter or
     /// a literal is [`CompileError::NotAssignable`].
+    /// Whether `expr` writes a field of a name the checker knows is a `var`, a
+    /// parameter or a `let`, which is what `field_write` can rebuild. (A
+    /// loop variable or an `inject`, `theme.dark = …`, is left as it was.)
+    fn writes_a_field(&self, expr: &Expr) -> bool {
+        let (Expr::Assign { target, .. } | Expr::Postfix { target, .. }) = expr else {
+            return false;
+        };
+        let mut at: &Expr = target;
+        while let Expr::Member { base, .. } = at {
+            at = base;
+        }
+        matches!(
+            at,
+            Expr::Ident(name, _) if matches!(
+                self.origins.get(name),
+                Some(Origin::Var | Origin::Param | Origin::Let)
+            )
+        ) && matches!(
+            **match expr {
+                Expr::Assign { target, .. } | Expr::Postfix { target, .. } => target,
+                _ => return false,
+            },
+            Expr::Member { .. }
+        )
+    }
+
     fn check_write_target(&mut self, target: &Expr) {
         let refused = match target {
             Expr::Ident(name, _) => !matches!(self.origins.get(name), Some(Origin::Var) | None),
@@ -2003,7 +2029,12 @@ impl Checker<'_> {
                     let names = |fields: &[(Symbol, Ty)]| {
                         fields.iter().map(|(n, _)| n.clone()).collect::<Vec<_>>()
                     };
-                    if names(a) != names(b) {
+                    // The same fields, each holding what it began with.
+                    let kinds_differ = a.len() == b.len()
+                        && a.iter()
+                            .zip(b.iter())
+                            .any(|((_, held), (_, written))| !fits(held, written));
+                    if names(a) != names(b) || kinds_differ {
                         self.errors.push(CompileError::TypeMismatch {
                             span,
                             op: "=".to_string(),
@@ -2332,6 +2363,15 @@ impl Checker<'_> {
                 self.bind_from(name.clone(), bound, Origin::Let);
                 self.note_signature(name, value, true);
                 Ty::Unknown
+            }
+            // `u.score = 10` is `u = { ..u, score: 10 }`, and is checked as that:
+            // `u` has to be a `var`, `score` a field it has, and 10 a value
+            // that field can hold.
+            Expr::Assign { .. } | Expr::Postfix { .. } if self.writes_a_field(expr) => {
+                match expr.field_write() {
+                    Some(whole) => self.value(&whole),
+                    None => Ty::Unknown,
+                }
             }
             Expr::Assign {
                 target, op, value, ..

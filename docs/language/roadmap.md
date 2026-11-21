@@ -15,7 +15,7 @@ So every step below ends the same way: **its cases lose their `gap:` line, the r
 loses its note, and this file loses the step.** When this file is empty and the suite has no
 gap, the language is where this document wanted it.
 
-As written, the suite has 613 cases: 570 hold and 43 are gaps.
+As written, the suite has 622 cases: 580 hold and 42 are gaps.
 
 ```sh
 cargo test -p byard-cli --test it conformance -- --nocapture
@@ -115,12 +115,11 @@ nothing else of them changed.
 
 ### 9. Writing a field
 
-*Cases:* `field-assignment`, `nested-field-assignment`.
+*Left:* one bullet, with a case, `index-assignment`. `field-assignment` and `nested-field-assignment` hold,
+and so do the eight cases added with them.
 
-`u.score = 10` means `u = { ..u, score: 10 }`, and `u.a.b = 2` the same, one level down;
-`xs[i] = v` likewise for a list. The root has to be a `var` or a binding. This is sugar
-over what the language already does, and it is the one place where today's behaviour is
-worst: it checks clean and does nothing.
+- `xs[i] = v` is still accepted and changes nothing. It wants a list update to rebuild the
+  list with (`updateAt`, step 17).
 
 ### 10. Faults a developer can see
 

@@ -1193,6 +1193,83 @@ pub enum Expr {
 }
 
 impl Expr {
+    /// `u.score = 10`, `u.a.b += 1` and `u.n++` as the write to the whole
+    /// record they mean: `u = { ..u, score: 10 }`, one level down for each
+    /// field of the path. `None` for anything else, and for a path with an
+    /// index in it, which is not a record to rebuild.
+    #[must_use]
+    pub fn field_write(&self) -> Option<Expr> {
+        let (target, op, value, span) = match self {
+            Self::Assign {
+                target,
+                op,
+                value,
+                span,
+            } => (target, *op, (**value).clone(), *span),
+            Self::Postfix { target, op, span } => {
+                let one = Self::IntLit(1, *span);
+                let op = match op {
+                    PostfixOp::Inc => AssignOp::Add,
+                    PostfixOp::Dec => AssignOp::Sub,
+                };
+                (target, op, one, *span)
+            }
+            _ => return None,
+        };
+        // The path from the root: `u.a.b` is `u` and [`a`, `b`].
+        let mut fields: Vec<Symbol> = Vec::new();
+        let mut at: &Self = target;
+        while let Self::Member { base, field, .. } = at {
+            fields.push(field.clone());
+            at = base;
+        }
+        let Self::Ident(root, root_span) = at else {
+            return None;
+        };
+        if fields.is_empty() {
+            return None;
+        }
+        fields.reverse();
+        // What the innermost field becomes.
+        let read = |depth: usize| {
+            let mut e = Self::Ident(root.clone(), *root_span);
+            for f in &fields[..depth] {
+                e = Self::Member {
+                    base: Box::new(e),
+                    field: f.clone(),
+                    span,
+                };
+            }
+            e
+        };
+        let mut new = match op {
+            AssignOp::Assign => value,
+            AssignOp::Add | AssignOp::Sub => Self::Binary {
+                op: if op == AssignOp::Add {
+                    BinOp::Add
+                } else {
+                    BinOp::Sub
+                },
+                lhs: Box::new(read(fields.len())),
+                rhs: Box::new(value),
+                span,
+            },
+        };
+        for depth in (0..fields.len()).rev() {
+            new = Self::Record {
+                fields: vec![(fields[depth].clone(), new)],
+                spread: Some(Box::new(read(depth))),
+                span,
+            };
+        }
+        Some(Self::Assign {
+            target: Box::new(Self::Ident(root.clone(), *root_span)),
+            op: AssignOp::Assign,
+            value: Box::new(new),
+            span,
+        })
+    }
+
     /// The source span of this expression.
     #[must_use]
     pub fn span(&self) -> Span {

@@ -46,6 +46,13 @@ enum NoneTest<'e> {
 /// a non-numeric operand yields [`Value::Unit`], the logic thread never
 /// panics on user expressions. Pure and unit-testable.
 pub(super) fn eval_binary(op: BinOp, lhs: Value, rhs: Value) -> Value {
+    eval_binary_in(op, lhs, rhs, false)
+}
+
+/// [`eval_binary`], with the overflow of an `Int` either wrapping (the
+/// baseline edition) or stopping at the largest and smallest (`saturate`, from
+/// edition 2027).
+pub(super) fn eval_binary_in(op: BinOp, lhs: Value, rhs: Value, saturate: bool) -> Value {
     match op {
         // Comparison (RFC-0027 §1) → Bool.
         BinOp::Eq | BinOp::Ne | BinOp::Lt | BinOp::Le | BinOp::Gt | BinOp::Ge => {
@@ -62,12 +69,17 @@ pub(super) fn eval_binary(op: BinOp, lhs: Value, rhs: Value) -> Value {
         BinOp::Add | BinOp::Sub | BinOp::Mul | BinOp::Div | BinOp::Rem | BinOp::And | BinOp::Or => {
             match (lhs, rhs) {
                 (Value::Int(a), Value::Int(b)) => Value::Int(match op {
+                    BinOp::Add if saturate => a.saturating_add(b),
+                    BinOp::Sub if saturate => a.saturating_sub(b),
+                    BinOp::Mul if saturate => a.saturating_mul(b),
                     BinOp::Add => a.wrapping_add(b),
                     BinOp::Sub => a.wrapping_sub(b),
                     BinOp::Mul => a.wrapping_mul(b),
                     BinOp::Div => {
                         if b == 0 {
                             0
+                        } else if saturate {
+                            a.saturating_div(b)
                         } else {
                             a.wrapping_div(b)
                         }
@@ -640,7 +652,10 @@ impl Interpreter {
                         Value::Unit => rc(ctx),
                         value => value,
                     }),
-                    _ => Box::new(move |ctx| eval_binary(op, lc(ctx), rc(ctx))),
+                    _ => {
+                        let saturate = self.saturates();
+                        Box::new(move |ctx| eval_binary_in(op, lc(ctx), rc(ctx), saturate))
+                    }
                 }
             }
             // Prefix unary (`!b`, `-x`), RFC-0027 §2. `!` negates a `Bool`;
@@ -649,8 +664,10 @@ impl Interpreter {
             Expr::Unary { op, rhs, .. } => {
                 let op = *op;
                 let mut rc = self.lower_expr(rhs, payload_name);
+                let saturate = self.saturates();
                 Box::new(move |ctx| match (op, rc(ctx)) {
                     (UnOp::Not, Value::Bool(b)) => Value::Bool(!b),
+                    (UnOp::Neg, Value::Int(n)) if saturate => Value::Int(n.saturating_neg()),
                     (UnOp::Neg, Value::Int(n)) => Value::Int(n.wrapping_neg()),
                     (UnOp::Neg, Value::Float(f)) => Value::Float(-f),
                     _ => Value::Unit,
@@ -750,12 +767,10 @@ impl Interpreter {
                 }
                 if let Ok(sig) = self.resolve_var(target, *span) {
                     let op = *op;
+                    let saturate = self.saturates();
                     Box::new(move |ctx| {
                         let cur = ctx.peek_signal(sig).as_int().unwrap_or(0);
-                        let new = match op {
-                            PostfixOp::Inc => cur + 1,
-                            PostfixOp::Dec => cur - 1,
-                        };
+                        let new = stepped(op, cur, saturate);
                         ctx.write_signal(sig, Value::Int(new));
                         Value::Unit
                     })
@@ -775,6 +790,7 @@ impl Interpreter {
                 if let Ok(sig) = self.resolve_var(target, *span) {
                     let op = *op;
                     let mut rhs = self.lower_expr(value, payload_name);
+                    let saturate = self.saturates();
                     // A `var` of a record type: what arrives is compared with
                     // the type, and the first difference is reported, once
                     // for this assignment.
@@ -790,7 +806,7 @@ impl Interpreter {
                     });
                     Box::new(move |ctx| {
                         let val = rhs(ctx);
-                        let new = assigned(op, &ctx.peek_signal(sig), val);
+                        let new = assigned(op, &ctx.peek_signal(sig), val, saturate);
                         if let Some((ty, records, diagnostics, told, var, span)) = &shape {
                             let at = (span.start, span.end);
                             if !told.borrow().contains(&at) {
@@ -1987,11 +2003,15 @@ impl Interpreter {
                     }
                 }))
             }
-            "abs" => Some(Box::new(move |ctx| match base_c(ctx) {
-                Value::Int(n) => Value::Int(n.wrapping_abs()),
-                Value::Float(f) => Value::Float(f.abs()),
-                _ => Value::Unit,
-            })),
+            "abs" => {
+                let saturate = self.saturates();
+                Some(Box::new(move |ctx| match base_c(ctx) {
+                    Value::Int(n) if saturate => Value::Int(n.saturating_abs()),
+                    Value::Int(n) => Value::Int(n.wrapping_abs()),
+                    Value::Float(f) => Value::Float(f.abs()),
+                    _ => Value::Unit,
+                }))
+            }
             // `a.min(b)` on two numbers; `xs.min()` on a list.
             "min" | "max" if !args.is_empty() => {
                 let is_max = name.as_str() == "max";
@@ -2152,10 +2172,7 @@ impl Interpreter {
             Expr::Postfix { target, op, span } => {
                 let sig = self.resolve_var(target, *span)?;
                 let cur = self.ctx.peek_signal(sig).as_int().unwrap_or(0);
-                let new = match op {
-                    PostfixOp::Inc => cur + 1,
-                    PostfixOp::Dec => cur - 1,
-                };
+                let new = stepped(*op, cur, self.saturates());
                 self.ctx.write_signal(sig, Value::Int(new));
                 Ok(Value::Unit)
             }
@@ -2167,7 +2184,7 @@ impl Interpreter {
             } => {
                 let sig = self.resolve_var(target, *span)?;
                 let rhs = self.eval_pure(value);
-                let new = assigned(*op, &self.ctx.peek_signal(sig), rhs);
+                let new = assigned(*op, &self.ctx.peek_signal(sig), rhs, self.saturates());
                 self.ctx.write_signal(sig, new);
                 Ok(Value::Unit)
             }
@@ -2354,7 +2371,18 @@ fn clock_calls(expr: &Expr, params: &[Symbol], out: &mut Vec<(Span, String)>) {
 /// What a `var` holding `cur` holds after `var op= value`. A `Float` keeps
 /// being one: an `Int` written to it is converted, and `+=` and `-=` add as
 /// `Float`s when either side is.
-fn assigned(op: AssignOp, cur: &Value, value: Value) -> Value {
+/// `n++` and `n--`: one more or one less, wrapping or stopping at the end of
+/// the range, as `+` does.
+fn stepped(op: PostfixOp, cur: i64, saturate: bool) -> i64 {
+    match (op, saturate) {
+        (PostfixOp::Inc, true) => cur.saturating_add(1),
+        (PostfixOp::Inc, false) => cur.wrapping_add(1),
+        (PostfixOp::Dec, true) => cur.saturating_sub(1),
+        (PostfixOp::Dec, false) => cur.wrapping_sub(1),
+    }
+}
+
+fn assigned(op: AssignOp, cur: &Value, value: Value, saturate: bool) -> Value {
     #[allow(clippy::cast_precision_loss)]
     let float = |v: &Value| match v {
         Value::Float(f) => Some(*f),
@@ -2375,10 +2403,11 @@ fn assigned(op: AssignOp, cur: &Value, value: Value) -> Value {
                 );
             }
             let (cur, value) = (cur.as_int().unwrap_or(0), value.as_int().unwrap_or(0));
-            Value::Int(if op == AssignOp::Add {
-                cur + value
-            } else {
-                cur - value
+            Value::Int(match (op == AssignOp::Add, saturate) {
+                (true, true) => cur.saturating_add(value),
+                (true, false) => cur.wrapping_add(value),
+                (false, true) => cur.saturating_sub(value),
+                (false, false) => cur.wrapping_sub(value),
             })
         }
     }

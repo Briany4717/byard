@@ -155,6 +155,7 @@ impl SpanEq for ViewDecl {
             consts: _,
             enums: _,
             private,
+            edition: _,
         } = self;
         *name == other.name
             && *private == other.private

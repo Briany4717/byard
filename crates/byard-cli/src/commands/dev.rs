@@ -2118,6 +2118,7 @@ mod tests {
 
     fn views(name: &str) -> Vec<ViewDecl> {
         vec![ViewDecl {
+            edition: byard_compiler::edition::Edition::BASELINE,
             helpers: std::sync::Arc::default(),
             records: std::sync::Arc::default(),
             consts: std::sync::Arc::default(),

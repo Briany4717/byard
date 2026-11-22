@@ -301,6 +301,8 @@ pub fn check_views(views: &[ViewDecl]) -> Inference {
             env: HashMap::new(),
             undo: Vec::new(),
             origins: HashMap::new(),
+            list_lens: HashMap::new(),
+            guarded: false,
             fns: top_fns.clone(),
             declared: HashSet::new(),
             views: &names,
@@ -336,6 +338,8 @@ pub fn check_views(views: &[ViewDecl]) -> Inference {
             env: HashMap::new(),
             undo: Vec::new(),
             origins: HashMap::new(),
+            list_lens: HashMap::new(),
+            guarded: false,
             fns: top_fns.clone(),
             declared: HashSet::new(),
             views: &names,
@@ -396,6 +400,8 @@ fn check_top_fns(
         env: HashMap::new(),
         undo: Vec::new(),
         origins: HashMap::new(),
+        list_lens: HashMap::new(),
+        guarded: false,
         fns: HashMap::new(),
         // The constants are names a function may read, public or private;
         // their types are not known yet (they may call these functions).
@@ -549,6 +555,8 @@ fn check_consts(
                 env: HashMap::new(),
                 undo: Vec::new(),
                 origins: HashMap::new(),
+                list_lens: HashMap::new(),
+                guarded: false,
                 fns: fns.clone(),
                 declared: untyped.clone(),
                 views: &no_views,
@@ -701,6 +709,13 @@ struct Checker<'a> {
     undo: Vec<(Symbol, Option<Ty>, Option<Origin>)>,
     /// Where each name in `env` came from.
     origins: HashMap<Symbol, Origin>,
+    /// How many items each `let` bound to a list written out has, for telling
+    /// that a number written as an index is past the end.
+    list_lens: HashMap<Symbol, usize>,
+    /// Whether the expression being checked is only evaluated when something
+    /// before it allows (the right of `&&`, an arm of `? :`, the left of
+    /// `??`): an index past the end there is what the guard is for.
+    guarded: bool,
     /// Declared return types of named `fn`s, for call inference.
     fns: HashMap<Symbol, Option<Ty>>,
     /// Every name the view declares at its top level, whatever the order: a
@@ -819,6 +834,7 @@ impl Checker<'_> {
 
     /// [`bind`](Self::bind), saying where the name came from.
     fn bind_from(&mut self, name: Symbol, ty: Ty, origin: Origin) {
+        self.list_lens.remove(&name);
         let previous = self.env.insert(name.clone(), ty);
         let previous_origin = self.origins.insert(name.clone(), origin);
         self.undo.push((name, previous, previous_origin));
@@ -1231,7 +1247,9 @@ impl Checker<'_> {
     fn narrowed_in<T>(&mut self, paths: Vec<String>, check: impl FnOnce(&mut Self) -> T) -> T {
         let mark = self.narrowed.len();
         self.narrowed.extend(paths);
+        let was = std::mem::replace(&mut self.guarded, true);
         let out = check(self);
+        self.guarded = was;
         self.narrowed.truncate(mark);
         out
     }
@@ -1700,6 +1718,9 @@ impl Checker<'_> {
                     Origin::Let
                 };
                 self.bind_from(name.clone(), inferred.clone(), origin);
+                if let (Origin::Let, Expr::Array(items, _)) = (origin, init) {
+                    self.list_lens.insert(name.clone(), items.len());
+                }
                 self.note_signature(name, init, origin == Origin::Let);
                 if top_level {
                     self.bindings.push((name.clone(), inferred));
@@ -2162,6 +2183,14 @@ impl Checker<'_> {
             Expr::Binary {
                 op, lhs, rhs, span, ..
             } => {
+                let zero = matches!(**rhs, Expr::IntLit(0, _))
+                    || matches!(**rhs, Expr::FloatLit(f, _) if f == 0.0);
+                if zero && matches!(op, BinOp::Div | BinOp::Rem) {
+                    self.errors.push(CompileError::DivisionByZero {
+                        span: *span,
+                        op: if *op == BinOp::Div { "/" } else { "%" }.to_string(),
+                    });
+                }
                 // `x ?? d` is the way to read an optional `x`; the right of
                 // `x != none && …` and of `x == none || …` may read it.
                 let (l, r) = match op {
@@ -2173,7 +2202,7 @@ impl Checker<'_> {
                         let was = std::mem::replace(&mut self.lenient_fields, true);
                         let l = self.narrowed_in(safe, |s| s.value(lhs));
                         self.lenient_fields = was;
-                        (l, self.value(rhs))
+                        (l, self.narrowed_in(Vec::new(), |s| s.value(rhs)))
                     }
                     BinOp::And | BinOp::Or => {
                         let (when_true, when_false) = self.narrowing(lhs);
@@ -2262,6 +2291,30 @@ impl Checker<'_> {
             Expr::Index { base, index, span } => {
                 let b = self.value(base);
                 let at = self.value(index);
+                let len = match &**base {
+                    Expr::Array(items, _) => Some(items.len()),
+                    Expr::Ident(name, _) => self.list_lens.get(name).copied(),
+                    _ => None,
+                };
+                let written = match &**index {
+                    Expr::IntLit(n, _) => Some(*n),
+                    Expr::Unary {
+                        op: UnOp::Neg, rhs, ..
+                    } => match **rhs {
+                        Expr::IntLit(n, _) => n.checked_neg(),
+                        _ => None,
+                    },
+                    _ => None,
+                };
+                if let (Some(len), Some(index), false) = (len, written, self.guarded) {
+                    if usize::try_from(index).map_or(true, |i| i >= len) {
+                        self.errors.push(CompileError::IndexOutOfRange {
+                            span: *span,
+                            index,
+                            len,
+                        });
+                    }
+                }
                 // An item is found by a whole number.
                 if matches!(b, Ty::List(_)) && is_concrete(&at) && at != Ty::Int {
                     self.errors.push(CompileError::TypeMismatch {

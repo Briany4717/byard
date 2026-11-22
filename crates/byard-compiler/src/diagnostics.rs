@@ -1039,6 +1039,26 @@ pub enum CompileError {
         /// The field.
         name: String,
     },
+    /// `x / 0` or `x % 0`, with the zero written: the answer is 0, which is
+    /// almost never what was meant. A warning: a divisor that is only zero while
+    /// the program runs stays 0, as it was.
+    DivisionByZero {
+        /// Source range of the operation.
+        span: Span,
+        /// `/` or `%`.
+        op: String,
+    },
+    /// An index written as a number that no item of the list written beside it
+    /// has: `xs[5]` where `xs` is a `let` of one item. Reads as nothing. A
+    /// warning.
+    IndexOutOfRange {
+        /// Source range of the index expression.
+        span: Span,
+        /// The index.
+        index: i64,
+        /// How many items the list has.
+        len: usize,
+    },
     /// An element's `#[ … ]` writes one attribute twice: `#[size: 12, size: 14]`.
     DuplicateAttribute {
         /// Source range of the second one.
@@ -1767,6 +1787,8 @@ impl CompileError {
             | Self::UnknownField { span, .. }
             | Self::DuplicateField { span, .. }
             | Self::DuplicateAttribute { span, .. }
+            | Self::DivisionByZero { span, .. }
+            | Self::IndexOutOfRange { span, .. }
             | Self::UnusedVariable { span, .. }
             | Self::UnusedParam { span, .. }
             | Self::UnusedView { span, .. }
@@ -1926,6 +1948,8 @@ impl CompileError {
             | Self::UnknownField { span, .. }
             | Self::DuplicateField { span, .. }
             | Self::DuplicateAttribute { span, .. }
+            | Self::DivisionByZero { span, .. }
+            | Self::IndexOutOfRange { span, .. }
             | Self::UnusedVariable { span, .. }
             | Self::UnusedParam { span, .. }
             | Self::UnusedView { span, .. }
@@ -2088,6 +2112,8 @@ impl CompileError {
             Self::ShapeMismatch { .. } => "ShapeMismatch",
             Self::UnknownField { .. } => "UnknownField",
             Self::DuplicateAttribute { .. } => "DuplicateAttribute",
+            Self::DivisionByZero { .. } => "DivisionByZero",
+            Self::IndexOutOfRange { .. } => "IndexOutOfRange",
             Self::UnusedVariable { .. } => "UnusedVariable",
             Self::UnusedParam { .. } => "UnusedParam",
             Self::UnusedView { .. } => "UnusedView",
@@ -2119,6 +2145,8 @@ impl CompileError {
                 | Self::PanelTakesNoKeys { .. }
                 | Self::SizeOnStretchedAxis { .. }
                 | Self::RecreatesSurface { .. }
+                | Self::DivisionByZero { .. }
+                | Self::IndexOutOfRange { .. }
                 | Self::UnusedVariable { .. }
                 | Self::UnusedParam { .. }
                 | Self::UnusedView { .. }
@@ -3079,6 +3107,14 @@ impl CompileError {
             Self::DuplicateAttribute { name, .. } => format!(
                 "`{name}` is written twice in this `#[ … ]`: the last one wins, so remove the one \
                  that does not count"
+            ),
+            Self::DivisionByZero { op, .. } => format!(
+                "`{op} 0` answers 0, since a number cannot be divided by nothing: check the divisor \
+                 before dividing, as in `d != 0 ? n / d : 0`"
+            ),
+            Self::IndexOutOfRange { index, len, .. } => format!(
+                "index {index} is not in a list of {len} item(s), so this reads as nothing: use \
+                 `xs[i] ?? fallback`, or check `xs.len` first"
             ),
             Self::UnusedVariable { name, keyword, .. } => format!(
                 "`{keyword} {name}` is never read: use it, delete it, or start its name with `_` \

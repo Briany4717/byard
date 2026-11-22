@@ -566,7 +566,8 @@ pub(crate) fn announced(error: ByardError) -> ByardError {
 pub(crate) fn load_program(entry: &Path) -> Result<Program, ByardError> {
     let manifest = byard_project::manifest::Manifest::discover(Some(entry))?;
     let (program, _) = byard_project::deps::resolve_project(&manifest)?;
-    if !program.errors.is_empty() {
+    // A warning is told by `byard check`; it does not stop an app from opening.
+    if program.errors.iter().any(|e| !e.is_warning()) {
         return Err(ByardError::compile(CompileReport::new(
             program.errors,
             program.source_map,

@@ -885,6 +885,8 @@ pub struct Interpreter {
     /// The program's top-level functions (RFC-0002), by canonical name, as
     /// entries of `fn_table`. Rebuilt by [`Self::load_views`].
     top_fns: std::collections::HashMap<Symbol, super::env::AstId>,
+    /// The edition the loaded program is written in (from its first view).
+    edition: crate::edition::Edition,
     /// The program's top-level constants (RFC-0055), by canonical name, each
     /// evaluated once by [`Self::load_views`]. A read is a clone of the value.
     consts: std::collections::HashMap<Symbol, Value>,
@@ -1343,6 +1345,12 @@ impl Interpreter {
         self.expanded_calls = on.then(Default::default);
     }
 
+    /// Whether an `Int` that overflows stops at the end of its range, as the
+    /// edition the program is written in says (2027), and not wraps.
+    pub(super) fn saturates(&self) -> bool {
+        self.edition >= crate::edition::Edition::E2027
+    }
+
     /// Builds the user-`View` registry (RFC-0007 §1) from a whole file's
     /// views and stores it on the interpreter, so subsequent `lower_view`/
     /// `lower_element` calls can recognize and expand user-view calls.
@@ -1353,6 +1361,9 @@ impl Interpreter {
         // Every view carries the same program-wide function table; register
         // it once, fresh, so a reload replaces rather than accumulates names.
         self.top_fns.clear();
+        self.edition = views
+            .first()
+            .map_or(crate::edition::Edition::BASELINE, |v| v.edition);
         self.window_sites = surfaces::index_windows(views);
         if let Some(first) = views.first() {
             self.records = std::rc::Rc::new(

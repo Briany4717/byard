@@ -1159,13 +1159,15 @@ fn interpolation_node_spans_cover_their_source() {
             "{spec}: {parts:?}"
         );
     }
-    // Not specs: `.2,` is no spec, and a ternary's colon is never one.
-    for src in ["{a:.2,}", "{a ? 1 : 2}", "{a:,x}"] {
-        let src = format!("View Main() {{\n    Text(\"{src}\")\n}}\n");
-        assert!(
-            matches!(&text_parts(&src)[0], StrPart::Interp(_, None)),
-            "{src}"
-        );
+    // Not specs: a ternary's colon is never one.
+    let src = "View Main() {\n    Text(\"{a ? 1 : 2}\")\n}\n";
+    assert!(matches!(&text_parts(src)[0], StrPart::Interp(_, None)));
+    // `.2,` and `,x` are no spec either, and what follows `a` is junk the
+    // parser says so about, instead of dropping it.
+    for junk in ["{a:.2,}", "{a:,x}"] {
+        let src = format!("View Main() {{\n    Text(\"{junk}\")\n}}\n");
+        let parsed = parse(&src);
+        assert_eq!(parsed.errors.len(), 1, "{src}: {:?}", parsed.errors);
     }
 }
 

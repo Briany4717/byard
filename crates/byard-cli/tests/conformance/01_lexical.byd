@@ -135,10 +135,21 @@ Text("a-{"b-{"c"}"}")
 Text("a {} b")
 
 //# case: string-interpolation-trailing-junk
-//# gap: what follows the expression inside `{ }` is dropped without a word
 //# fragment
 //# error: UnexpectedToken
 Text("{1 2 3}")
+
+//# case: string-interpolation-trailing-junk-is-one-error
+//# fragment
+//# error: UnexpectedToken
+//# diagnostics: 1
+Text("a {1 2} b")
+
+//# case: string-interpolation-with-a-format-and-a-ternary-still-parses
+//# fragment
+//# text: 1.50 yes
+var on = true
+Text("{1.5:.2} {on ? "yes" : "no"}")
 
 //# case: string-interpolation-unclosed
 //# fragment
@@ -171,10 +182,14 @@ Text("{1234567.891:,} {1234567.891:,.2}")
 Text("{0.125:.2} {2.675:.2}")
 
 //# case: format-too-many-decimals
-//# gap: more than nine decimals is accepted without a word
 //# fragment
 //# error: UnexpectedToken
 Text("{1.0:.10}")
+
+//# case: format-with-nine-decimals-is-fine
+//# fragment
+//# text: 0.500000000
+Text("{0.5:.9}")
 
 //# case: format-on-text-is-ignored
 //# fragment

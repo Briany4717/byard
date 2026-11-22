@@ -196,7 +196,7 @@ inject Json as json
 var parsed = 0
 var text = ""
 let go = () => {
-    json.parse("{\"a\": 1}")
+    json.parse("\{\"a\": 1\}")
         ok v => { parsed = v.a }
         err e => { text = e.message }
     json.stringify({ a: 1 })

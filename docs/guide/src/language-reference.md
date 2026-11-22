@@ -127,9 +127,10 @@ is ignored. Rounding is of the number as it is stored, so `{0.125:.2}` is `0.12`
 `{2.675:.2}` is `2.67`. There is no locale: the separator is always `,` and the point
 always `.`.
 
-> **Not yet.** What follows the expression inside the braces is dropped without a word:
-> `"{1 2 3}"` draws `1`. More than nine decimals is accepted and not honoured. There is no
-> padding or width. (`01_lexical.byd`)
+What follows the expression inside the braces is `UnexpectedToken`: `"{1 2 3}"` is an error, a
+`{ }` holds one expression. So is more than nine decimals.
+
+> **Not yet.** There is no padding or width. (`15_wanted_for_1_0.byd`)
 
 ## Types
 
@@ -225,12 +226,13 @@ What a value looks like in a text, `"{x}"`, and joined to one with `+`:
 | `Bool` | `true` or `false` |
 | `Str` | Itself |
 | An enum case | Its name: `medium` |
+| A list | From edition 2027, its items as written, `[1, 2, 3]`, a text in it bare: `[a, b]`. Before, nothing. |
+| A record | From edition 2027, its fields, `{ name: Ada, score: 3 }`. Before, nothing. |
 | Nothing | Nothing at all: an empty text |
 
-A list is shown with `join`. See [lists](#lists).
+A list is also shown with `join`. See [lists](#lists).
 
-> **Not yet.** A list written straight into a text draws nothing. A colour is shown as its
-> number. (`03_text.byd`, `15_wanted_for_1_0.byd`)
+> **Not yet.** A colour is shown as its number. (`15_wanted_for_1_0.byd`)
 
 ## Expressions
 
@@ -312,7 +314,10 @@ a number does not have is `UnknownMethod`.
 operator takes a text and a number. `==` and `!=` compare two texts exactly, and `<` and its
 kin order them by character code, so `"B" < "a"` and `"10" < "9"` are `true`.
 
-`len` is a field: the number of characters. A character is a Unicode code point.
+`len` is a field: the number of characters. In edition 2026 a character is a Unicode code
+point; from edition 2027 it is what a reader sees as one (a grapheme cluster), so a family
+emoji has a `len` of 1, and `slice`, `indexOf` and `split("")` count and cut the same way.
+`s[i]` is the character at `i`, or nothing past the end.
 
 | Method | Result |
 |--------|--------|
@@ -333,9 +338,6 @@ Text("{"héllo".len} {"héllo".slice(1, 3)} {"12".toInt() ?? 0} {"x".toInt() ?? 
 ```
 
 That draws `5 él 12 0`.
-
-> **Not yet.** A character is a code point and not what a reader sees as one, so a family
-> emoji has a `len` of 5. `s[i]` on a text is nothing. (`03_text.byd`)
 
 ### Truth
 
@@ -987,9 +989,10 @@ error that lists the ones it does. A library package names its edition under `[p
 sources so they mean what they meant, through the formatter, and then writes the new edition
 into the manifest.
 
-Today `2027` differs from `2026` in one thing: an `Int` that overflows stops at the largest or
-the smallest instead of wrapping. No rewrite can tell which programs relied on wrapping, so
-`byard fix` changes no source for it. The other changes marked *(edition)* in
+Today `2027` differs from `2026` in three things: an `Int` that overflows stops at the largest
+or the smallest instead of wrapping, a character of a text is a grapheme cluster and not a code
+point, and a list or a record in a text shows its contents instead of nothing. No rewrite can
+tell which programs relied on the old behaviour, so `byard fix` changes no source for them. The other changes marked *(edition)* in
 [the roadmap](https://github.com/Briany4717/byard/blob/main/docs/language/roadmap.md) will land
 in `2027` too.
 

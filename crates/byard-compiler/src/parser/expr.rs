@@ -1188,6 +1188,21 @@ impl Parser<'_> {
                 // expression: the expression ends at the colon, and its end
                 // offset is the colon's.
                 let (len, spec) = split_spec(&frag);
+                if spec
+                    .as_ref()
+                    .and_then(|s| s.decimals)
+                    .is_some_and(|d| d > 9)
+                {
+                    let at = cs[i].1;
+                    self.error_at(
+                        Span::new(at, cs.get(next).map_or(end, |c| c.1)),
+                        "at most nine decimals, as in `{x:.2}`",
+                    );
+                }
+                let spec = spec.map(|mut s| {
+                    s.decimals = s.decimals.map(|d| d.min(MAX_DECIMALS));
+                    s
+                });
                 offsets.truncate(len + 1);
                 let expr = self.parse_fragment_expr(&frag[..len], offsets);
                 parts.push(StrPart::Interp(Box::new(expr), spec));
@@ -1210,6 +1225,10 @@ impl Parser<'_> {
     fn parse_fragment_expr(&mut self, frag: &str, offsets: Vec<u32>) -> Expr {
         let mut sub = Parser::new_fragment(frag, offsets);
         let expr = sub.parse_expr(0);
+        // `{ }` holds one expression; what follows it would be dropped.
+        if sub.cur().is_some() && sub.errors.is_empty() {
+            sub.error("`}` after the expression: `{ }` holds one expression");
+        }
         self.errors.append(&mut sub.errors);
         expr
     }
@@ -1264,7 +1283,7 @@ fn split_spec(frag: &str) -> (usize, Option<NumFormat>) {
             i,
             Some(NumFormat {
                 group,
-                decimals: Some(n.min(MAX_DECIMALS)),
+                decimals: Some(n),
             }),
         ),
         _ => (frag.len(), None),

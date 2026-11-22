@@ -141,6 +141,10 @@ pub struct ViewDecl {
     /// Written `private View …`: a consumer of the package cannot name it
     /// (RFC-0055). Accepted, and without effect, in an app.
     pub private: bool,
+    /// The edition the program is written in, stamped on every view when the
+    /// project is resolved (`ResolvedProgram::with_edition`), so whatever loads
+    /// the views loads the edition with them. A lone file is the baseline.
+    pub edition: crate::edition::Edition,
 }
 
 /// A record type declared at file level: `type Place = { name: Str,
@@ -1356,6 +1360,7 @@ mod tests {
             anchor_name: None,
         };
         let view = ViewDecl {
+            edition: crate::edition::Edition::BASELINE,
             helpers: std::sync::Arc::default(),
             records: std::sync::Arc::default(),
             consts: std::sync::Arc::default(),

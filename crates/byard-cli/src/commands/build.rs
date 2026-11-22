@@ -30,12 +30,10 @@ pub fn run(file: Option<&Path>) -> Result<(), String> {
     style::fact("Entry", &manifest.entry.display().to_string());
 
     let (program, _provider) = resolve_project(&manifest).map_err(|e| e.to_string())?;
-    if !program.errors.is_empty() {
+    let errors = program.errors.iter().filter(|e| !e.is_warning()).count();
+    if errors > 0 {
         crate::commands::check::print_diagnostics(&program.errors, &program.source_map, false);
-        return Err(format!(
-            "{} error(s), fix them before building",
-            program.errors.len()
-        ));
+        return Err(format!("{errors} error(s), fix them before building"));
     }
 
     // `byard build` bakes assets and does not compile the app, so it cannot turn

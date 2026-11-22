@@ -34,7 +34,9 @@ pub fn check_views_where(
     theme: Theme,
     wanted: impl Fn(&ViewDecl) -> bool,
 ) -> Vec<CompileError> {
-    if !program.errors.is_empty() {
+    // Held back by an error, not by a warning: one that is only advice must
+    // not hide what lowering would find.
+    if program.errors.iter().any(|e| !e.is_warning()) {
         return program.errors.clone();
     }
 
@@ -71,7 +73,7 @@ pub fn check_views_where(
         // them. Lower each once more, offline (nothing is mounted).
         interp.lower_every_branch();
     }
-    let mut errors: Vec<CompileError> = Vec::new();
+    let mut errors: Vec<CompileError> = program.errors.clone();
     for e in interp.errors() {
         // The same branch of a view reached through two callers reports the
         // same error twice.

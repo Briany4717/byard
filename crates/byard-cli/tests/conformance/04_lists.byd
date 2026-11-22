@@ -14,16 +14,42 @@ Text("{xs[0]} {xs[xs.len - 1]}")
 
 //# case: index-out-of-range-is-nothing-today
 //# fragment
+//# warning: IndexOutOfRange
 //# text: [] [] 9
 let xs = [1]
 Text("[{xs[5]}] [{xs[-1]}] {xs[5] ?? 9}")
 
 //# case: index-out-of-range-is-reported
-//# gap: an index past the end reads as nothing, silently, and arithmetic on it joins text
 //# fragment
 //# warning: IndexOutOfRange
 let xs = [1]
 Text("{xs[5] + 1}")
+
+//# case: index-past-a-list-written-in-place
+//# fragment
+//# warning: IndexOutOfRange
+//# diagnostics: 1
+Text("{[1, 2][2]}")
+
+//# case: index-inside-the-list-is-not-warned
+//# fragment
+//# text: 2 1
+let xs = [1, 2]
+Text("{xs[1]} {xs[0]}")
+
+//# case: index-past-a-var-is-not-warned-because-it-can-grow
+//# fragment
+//# text: ok | 2
+var xs = [1]
+on mount => { xs = xs.push(2) }
+Text("ok")
+Text("{xs[1] ?? 0}")
+
+//# case: index-past-in-a-branch-that-checks-is-not-warned
+//# fragment
+//# text: none
+let xs = [1]
+Text(xs.len > 3 ? "{xs[5]}" : "none")
 
 //# case: index-with-float-is-an-error
 //# fragment

@@ -198,12 +198,10 @@ fn load(path: Option<&Path>) -> Result<(Manifest, crate::deps::FsProvider), Stri
     let manifest = Manifest::discover(path).map_err(|e| e.to_string())?;
     manifest.require_app("bundle").map_err(|e| e.to_string())?;
     let (program, provider) = resolve_project(&manifest).map_err(|e| e.to_string())?;
-    if !program.errors.is_empty() {
+    let errors = program.errors.iter().filter(|e| !e.is_warning()).count();
+    if errors > 0 {
         crate::commands::check::print_diagnostics(&program.errors, &program.source_map, false);
-        return Err(format!(
-            "{} error(s), fix them before bundling",
-            program.errors.len()
-        ));
+        return Err(format!("{errors} error(s), fix them before bundling"));
     }
     Ok((manifest, provider))
 }

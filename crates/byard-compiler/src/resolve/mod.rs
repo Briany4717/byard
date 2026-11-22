@@ -247,6 +247,18 @@ pub struct ResolvedProgram {
     pub packages: Vec<String>,
 }
 
+impl ResolvedProgram {
+    /// This program as written in `edition`: every view carries it, so the
+    /// interpreter that loads them behaves as that edition says.
+    #[must_use]
+    pub fn with_edition(mut self, edition: crate::edition::Edition) -> Self {
+        for view in &mut self.views {
+            view.edition = edition;
+        }
+        self
+    }
+}
+
 /// The names a view binds itself (its parameters and its top-level `var`,
 /// `let` and `fn` members), which shadow a package function of the same name.
 fn view_bindings(view: &ViewDecl) -> std::collections::HashSet<Symbol> {

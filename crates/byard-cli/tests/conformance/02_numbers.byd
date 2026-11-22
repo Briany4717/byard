@@ -47,7 +47,6 @@ let a = 2
 Text("{-a * 3} {-a * -3} {-a + 1}")
 
 //# case: division-by-zero-int
-//# gap: gives 0 with no diagnostic; should be reported while developing
 //# fragment
 //# text: 0
 //# warning: DivisionByZero
@@ -60,10 +59,62 @@ let z = 0
 Text("{1 / z} {1 % z} {1.5 / z} {0 / z}")
 
 //# case: int-overflow-add
-//# gap: wraps to the minimum; should saturate or be reported
+//# edition: 2027
 //# fragment
 //# text: 9223372036854775807
 Text("{9223372036854775807 + 1}")
+
+//# case: division-by-a-written-zero-warns-for-remainder-and-floats
+//# fragment
+//# text: 0 0 0
+//# warning: DivisionByZero
+//# diagnostics: 3
+Text("{1 % 0} {1.5 / 0.0} {7 / 0}")
+
+//# case: division-by-a-zero-that-is-computed-is-not-warned
+//# fragment
+//# text: 0 5
+let d = 1 - 1
+Text("{4 / d} {10 / 2}")
+
+//# case: compound-add-overflow-wraps-in-2026-and-does-not-panic
+//# fragment
+//# text: -9223372036854775808
+var n = 9223372036854775807
+on mount => { n += 1 }
+Text("{n}")
+
+//# case: overflow-saturates-in-2027-add-sub-mul
+//# edition: 2027
+//# fragment
+//# text: 9223372036854775807 -9223372036854775808 9223372036854775807
+let big = 9223372036854775807
+let small = -big - 1
+Text("{big + 1} {small - 1} {big * 2}")
+
+//# case: overflow-saturates-in-2027-negate-abs-and-divide
+//# edition: 2027
+//# fragment
+//# text: 9223372036854775807 9223372036854775807 9223372036854775807
+let big = 9223372036854775807
+let small = -big - 1
+Text("{-small} {small.abs()} {small / (0 - 1)}")
+
+//# case: overflow-saturates-in-2027-assignment-and-step
+//# edition: 2027
+//# fragment
+//# text: 9223372036854775807 9223372036854775807 -9223372036854775808
+var a = 9223372036854775807
+var b = 9223372036854775807
+var c = -9223372036854775807 - 1
+on mount => { a += 1 b++ c-- }
+Text("{a} {b} {c}")
+
+//# case: numbers-that-do-not-overflow-are-the-same-in-2027
+//# edition: 2027
+//# fragment
+//# text: 5 -1 12
+Text("{2 + 3} {2 - 3} {3 * 4}")
 
 //# case: int-overflow-wraps-today
 //# fragment

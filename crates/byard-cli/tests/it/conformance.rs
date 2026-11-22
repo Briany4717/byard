@@ -18,6 +18,7 @@
 //! | `//# wait: 300` | Lets that many milliseconds of the app clock pass before the frame is read, so timers run. |
 //! | `//# error: Kind` | `byard check` reports this error. One line per kind. |
 //! | `//# warning: Kind` | `byard check` reports this warning. One line per kind. |
+//! | `//# edition: 2027` | The edition the case is written in. Without it, the baseline. |
 //! | `//# diagnostics: 1` | How many diagnostics there are in all, for a case about one mistake being one error. |
 //! | `//# gap: why` | The lines above say what *should* happen; today it does not. |
 //!
@@ -59,6 +60,7 @@ struct Case {
     fragment: bool,
     text: Option<String>,
     wait: u32,
+    edition: byard_compiler::edition::Edition,
     diagnostics: Option<usize>,
     errors: BTreeSet<String>,
     warnings: BTreeSet<String>,
@@ -133,6 +135,10 @@ fn cases_of(file: &str, text: &str) -> Result<Vec<Case>, String> {
                         .parse()
                         .map_err(|_| format!("{file}:{number}: `diagnostics:` takes a count"))?,
                 );
+            }
+            "edition" => {
+                case.edition = byard_compiler::edition::Edition::parse(value)
+                    .map_err(|e| format!("{file}:{number}: {e}"))?;
             }
             "wait" => {
                 case.wait = value
@@ -237,8 +243,8 @@ fn drawn(program: &ResolvedProgram, wait: u32) -> Option<String> {
     Some(texts.join(" | "))
 }
 
-fn run(source: &str, wait: u32) -> Outcome {
-    let program = resolve(source);
+fn run(source: &str, wait: u32, edition: byard_compiler::edition::Edition) -> Outcome {
+    let program = resolve(source).with_edition(edition);
     let found = byard_project::check::check_program(&program, Theme::byard_base());
     let mut outcome = Outcome::default();
     for diagnostic in &found {
@@ -262,7 +268,8 @@ fn run(source: &str, wait: u32) -> Outcome {
 fn verdict(case: &Case) -> Option<String> {
     let source = case.program();
     let wait = case.wait;
-    let ran = std::panic::catch_unwind(|| run(&source, wait));
+    let edition = case.edition;
+    let ran = std::panic::catch_unwind(|| run(&source, wait, edition));
     let Ok(outcome) = ran else {
         return Some("the checker or the interpreter panicked".to_string());
     };

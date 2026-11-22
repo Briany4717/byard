@@ -1363,7 +1363,8 @@ pub fn resolve_project(
     } else {
         byard_compiler::resolve::resolve_program(files, &mut provider)
     };
-    Ok((program, provider))
+    // Every view carries the edition the manifest names.
+    Ok((program.with_edition(manifest.edition), provider))
 }
 
 #[cfg(test)]

@@ -771,6 +771,7 @@ impl<'a> Parser<'a> {
         self.expect(&Token::LBrace, "'{'");
         let body = self.parse_block_members();
         ViewDecl {
+            edition: crate::edition::Edition::BASELINE,
             records: std::sync::Arc::default(),
             consts: std::sync::Arc::default(),
             enums: std::sync::Arc::default(),

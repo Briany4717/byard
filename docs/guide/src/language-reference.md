@@ -275,12 +275,14 @@ parentheses.
 - **`%` is the remainder**, with the sign of the left side: `7 % 3` is `1`, `-7 % 3` is
   `-1`, `7 % -3` is `1`. On `Float`s too: `7.5 % 2` is `1.5`.
 - **Division and remainder by zero are `0`**, of an `Int` and of a `Float`, and the program
-  goes on.
-- **An `Int` that overflows wraps around**: one more than the largest `Int` is the
-  smallest. It never stops the program.
+  goes on. A zero written as the divisor, `n / 0`, is the warning `DivisionByZero`.
+- **An `Int` that overflows wraps around** in edition 2026: one more than the largest `Int`
+  is the smallest. In edition 2027 it **stops at the largest or the smallest** instead,
+  in `+`, `-`, `*`, `/`, `-x`, `abs()`, `+=`, `-=`, `++` and `--`. Neither stops the program.
 
 ```byld,fragment
-Text("{7 / 2} {-7 / 2} {7 / 2.0} {-7 % 3} {1 / 0}")
+let none = 0
+Text("{7 / 2} {-7 / 2} {7 / 2.0} {-7 % 3} {1 / none}")
 ```
 
 That draws `3 -3 3.5 -1 0`.
@@ -288,8 +290,8 @@ That draws `3 -3 3.5 -1 0`.
 `<`, `<=`, `>` and `>=` compare two numbers, an `Int` with a `Float` included: `1 == 1.0` is
 `true`.
 
-> **Not yet.** Dividing by zero and overflowing are silent. Both are to be reported while
-> developing. (`02_numbers.byd`)
+A zero divisor that is only known when the program runs, and an overflow, are not reported:
+only the written zero is. What the roadmap still has to do about them is under step 10.
 
 | Method | On | Result |
 |--------|----|--------|
@@ -383,8 +385,12 @@ Every method returns a new value and leaves the list as it was.
 A function given to one of these must be *pure*: it computes and returns, and assigns
 nothing (`EffectInPureLambda`).
 
-> **Not yet.** An index past the end is silent, and arithmetic on the nothing it gives joins
-> text. (`04_lists.byd`)
+An index written as a number that a list written beside it does not have, `xs[5]` where `xs`
+is a `let` of one item, reads as nothing and is the warning `IndexOutOfRange`; it is not told
+where something checks first (the right of `&&` and `??`, an arm of `? :`).
+
+An index that is only known to be past the end when the program runs is not reported, and
+arithmetic on the nothing it gives joins text.
 
 ### Records
 
@@ -981,9 +987,11 @@ error that lists the ones it does. A library package names its edition under `[p
 sources so they mean what they meant, through the formatter, and then writes the new edition
 into the manifest.
 
-Today there are two editions and they differ by nothing: `2027` is the one the changes marked
-*(edition)* in [the roadmap](https://github.com/Briany4717/byard/blob/main/docs/language/roadmap.md)
-will land in.
+Today `2027` differs from `2026` in one thing: an `Int` that overflows stops at the largest or
+the smallest instead of wrapping. No rewrite can tell which programs relied on wrapping, so
+`byard fix` changes no source for it. The other changes marked *(edition)* in
+[the roadmap](https://github.com/Briany4717/byard/blob/main/docs/language/roadmap.md) will land
+in `2027` too.
 
 ## One mistake, one error
 

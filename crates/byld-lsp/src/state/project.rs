@@ -397,6 +397,7 @@ fn analyze_in(project: &Project, index: usize, doc: &Document, open: &[Arc<Docum
         } else {
             resolve_program(files, &mut *packages)
         }
+        .with_edition(project.manifest.edition)
     };
     // The root project's files come first in the program's source map, in the
     // order they were given.

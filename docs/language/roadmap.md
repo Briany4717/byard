@@ -15,7 +15,7 @@ So every step below ends the same way: **its cases lose their `gap:` line, the r
 loses its note, and this file loses the step.** When this file is empty and the suite has no
 gap, the language is where this document wanted it.
 
-As written, the suite has 622 cases: 580 hold and 42 are gaps.
+As written, the suite has 633 cases: 594 hold and 39 are gaps.
 
 ```sh
 cargo test -p byard-cli --test it conformance -- --nocapture
@@ -123,19 +123,26 @@ and so do the eight cases added with them.
 
 ### 10. Faults a developer can see
 
-*Cases:* `division-by-zero-int`, `int-overflow-add`, `index-out-of-range-is-reported`.
+*Left:* the half that runs. `division-by-zero-int`, `int-overflow-add` and
+`index-out-of-range-is-reported` hold, and so do the eleven cases added with them: `byard
+check` warns of a written zero divisor (`DivisionByZero`) and of a number written as an index
+past a list written beside it (`IndexOutOfRange`, not where a `&&`, `??` or `? :` guards
+it), and edition `2027` saturates an `Int` (`+ - * /`, `-x`, `abs`, `+=`, `-=`, `++`, `--`)
+where `2026` wraps. The harness has an `//# edition:` header for it. `byard fix` rewrites
+nothing for the change, since no rewrite can tell which programs relied on wrapping.
 
 A *fault* is a division by zero, an overflow, an index past the end, or a field read from
-nothing. A fault never stops a shipped app, and that stays. What changes:
+nothing. A fault never stops a shipped app, and that stays. What is not done:
 
 - Under `byard dev`, `byard shot` and `byard test`, a fault is reported once per place,
-  with its line: in the status line, in the HUD, and as a failed step of a test.
-- `byard check` reports the ones it can see without running: a literal zero divisor, a
-  literal index past a literal list.
+  with its line: in the status line, in the HUD, and as a failed step of a test. Nothing
+  reports a fault that only happens while the program runs, and a field read from nothing is
+  not seen at all. The suite cannot hold a case for it, since it runs `byard check`; it
+  wants a harness that can run a frame and read what was reported.
 - In a shipped app a fault goes to the app's log, and to a hook `App::on_fault` gives a
   Rust half.
-- Overflow saturates instead of wrapping **(edition)**. A total that wraps to a negative
-  number is worse than one that stops at the largest.
+- `byard check` sees a literal zero divisor and a literal index; a `let` that is zero, or
+  an index in a `var`, it does not.
 
 Do not make these errors that stop the program. An interface that goes blank because a
 server sent an empty list is worse than one that shows a gap.

@@ -15,7 +15,7 @@ So every step below ends the same way: **its cases lose their `gap:` line, the r
 loses its note, and this file loses the step.** When this file is empty and the suite has no
 gap, the language is where this document wanted it.
 
-As written, the suite has 633 cases: 594 hold and 39 are gaps.
+As written, the suite has 645 cases: 611 hold and 34 are gaps.
 
 ```sh
 cargo test -p byard-cli --test it conformance -- --nocapture
@@ -149,14 +149,14 @@ server sent an empty list is worse than one that shows a gap.
 
 ### 11. Text
 
-*Cases:* `string-interpolation-trailing-junk`, `format-too-many-decimals`,
-`list-in-text-shows-its-items`, `len-of-grapheme-cluster` **(edition)**, `index-into-text`.
-
-- What follows the expression in `{ }` is an error, not dropped.
-- A list in a text shows as `[1, 2, 3]`, a record as `{ name: Ada }`. Never the debug form
-  of the Rust value, and never nothing.
-- `len`, `slice` and `indexOf` count what a reader sees as characters. `s[i]` is the
-  character at `i`, or nothing.
+*Left:* nothing, with a note. `string-interpolation-trailing-junk`, `format-too-many-decimals`,
+`list-in-text-shows-its-items`, `len-of-grapheme-cluster` and `index-into-text` hold, and so do
+the twelve cases added with them. Trailing junk in a `{ }` and a tenth decimal are
+`UnexpectedToken`; `s[i]` is the character at `i`, or nothing, in every edition. Counting by
+grapheme (`len`, `slice`, `indexOf`, `split("")`, `s[i]`) and showing a list or a record in a
+text are edition `2027`, because `len-counts-code-points-not-graphemes` and
+`list-in-text-is-nothing-today` pin the old behaviour in `2026`. `byard fix` rewrites nothing
+for either. A `Map` has no text form yet, since there is no `Map` (step 17).
 
 ### 12. Small things that parse wrongly
 

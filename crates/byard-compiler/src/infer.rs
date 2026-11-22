@@ -2316,7 +2316,7 @@ impl Checker<'_> {
                     }
                 }
                 // An item is found by a whole number.
-                if matches!(b, Ty::List(_)) && is_concrete(&at) && at != Ty::Int {
+                if matches!(b, Ty::List(_) | Ty::Str) && is_concrete(&at) && at != Ty::Int {
                     self.errors.push(CompileError::TypeMismatch {
                         span: *span,
                         op: "[]".to_string(),
@@ -2326,6 +2326,8 @@ impl Checker<'_> {
                 }
                 match b {
                     Ty::List(elem) => *elem,
+                    // The character at `i`.
+                    Ty::Str => Ty::Str,
                     _ => Ty::Unknown,
                 }
             }

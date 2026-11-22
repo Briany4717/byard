@@ -16,6 +16,7 @@ use crate::interp::events::Action;
 use crate::interp::reactive::untrack;
 use crate::parser::ast::{AssignOp, BinOp, Expr, NumFormat, PostfixOp, StrPart, UnOp};
 use crate::symbol::Symbol;
+use unicode_segmentation::UnicodeSegmentation;
 
 /// The value of a numeric literal, exactly as [`Interpreter::lower_expr`]
 /// would compute it, or `None` for any other expression. Literals need no
@@ -249,12 +250,12 @@ fn target_name(target: &Expr) -> String {
 /// Resolves a data member access (RFC-0027 §4/§6): `xs.len` (list/string
 /// length → `Int`) or `r.field` (record field → its value). Anything else
 /// degrades to `Unit` (the checker reports it; no panic).
-fn data_member(base: &Value, field: &Symbol) -> Value {
+fn data_member(base: &Value, field: &Symbol, graphemes: bool) -> Value {
     let f = field.as_str();
     match base {
         Value::List(xs) if f == "len" => Value::Int(i64::try_from(xs.len()).unwrap_or(i64::MAX)),
         Value::Str(s) if f == "len" => {
-            Value::Int(i64::try_from(s.chars().count()).unwrap_or(i64::MAX))
+            Value::Int(i64::try_from(text_len(s, graphemes)).unwrap_or(i64::MAX))
         }
         Value::Record(fields) => fields
             .iter()
@@ -321,8 +322,18 @@ fn with_item<F: FnOnce() -> Value>(named: Option<&Symbol>, elem: Value, f: F) ->
 /// Indexes `base[index]` (RFC-0027 §4): a `List` at an in-range integer index
 /// yields the element; out-of-range or non-list/non-int degrades to `Unit`
 /// (never a panic). Negative indices are out of range.
-pub(super) fn index_value(base: &Value, index: &Value) -> Value {
+/// [`index_value`], where a text is indexed by character: the one at `i`, or
+/// nothing past the end.
+pub(super) fn index_value(base: &Value, index: &Value, graphemes: bool) -> Value {
     match (base, index) {
+        (Value::Str(s), Value::Int(i)) => usize::try_from(*i)
+            .ok()
+            .and_then(|i| {
+                text_units(s, graphemes)
+                    .get(i)
+                    .map(|c| Value::Str((*c).to_string()))
+            })
+            .unwrap_or(Value::Unit),
         (Value::List(xs), Value::Int(i)) => usize::try_from(*i)
             .ok()
             .and_then(|i| xs.get(i))
@@ -365,9 +376,12 @@ fn format_scalar(v: &Value) -> String {
 /// `text.split(sep)` (RFC-0047 §2): every piece between occurrences of `sep`,
 /// empty ones kept. An empty `sep` splits into characters (Unicode scalar
 /// values, the unit `len` and `slice` count in), and an empty text into none.
-fn split_text(text: &str, sep: &str) -> Vec<Value> {
+fn split_text(text: &str, sep: &str, graphemes: bool) -> Vec<Value> {
     if sep.is_empty() {
-        return text.chars().map(|c| Value::Str(c.to_string())).collect();
+        return text_units(text, graphemes)
+            .into_iter()
+            .map(|c| Value::Str(c.to_string()))
+            .collect();
     }
     text.split(sep).map(|p| Value::Str(p.to_string())).collect()
 }
@@ -384,10 +398,32 @@ fn replace_text(text: &str, from: &str, to: &str) -> String {
 
 /// `text.indexOf(needle)` (RFC-0047 §2): the index in characters of the first
 /// occurrence, or `-1`.
-fn index_of_text(text: &str, needle: &str) -> i64 {
+fn index_of_text(text: &str, needle: &str, graphemes: bool) -> i64 {
     text.find(needle).map_or(-1, |at| {
-        i64::try_from(text[..at].chars().count()).unwrap_or(-1)
+        i64::try_from(text_len(&text[..at], graphemes)).unwrap_or(-1)
     })
+}
+
+/// What a text is made of, one piece for each thing `len`, `slice`, `indexOf`
+/// and `s[i]` count: a Unicode scalar value (edition 2026) or a grapheme
+/// cluster, what a reader sees as one character (edition 2027).
+fn text_units(text: &str, graphemes: bool) -> Vec<&str> {
+    if graphemes {
+        text.graphemes(true).collect()
+    } else {
+        text.char_indices()
+            .map(|(i, c)| &text[i..i + c.len_utf8()])
+            .collect()
+    }
+}
+
+/// How many [`text_units`] a text has.
+fn text_len(text: &str, graphemes: bool) -> usize {
+    if graphemes {
+        text.graphemes(true).count()
+    } else {
+        text.chars().count()
+    }
 }
 
 /// A number with exactly `decimals` decimals, for `{x:.N}` (RFC-0027).
@@ -678,7 +714,8 @@ impl Interpreter {
             Expr::Index { base, index, .. } => {
                 let mut bc = self.lower_expr(base, payload_name);
                 let mut ic = self.lower_expr(index, payload_name);
-                Box::new(move |ctx| index_value(&bc(ctx), &ic(ctx)))
+                let graphemes = self.counts_graphemes();
+                Box::new(move |ctx| index_value(&bc(ctx), &ic(ctx), graphemes))
             }
             // A record literal `{ ..spread, k: v }` (RFC-0027 §6): the spread's
             // fields seed the record, then written fields append/override, all
@@ -969,7 +1006,8 @@ impl Interpreter {
                 // the checker reports genuinely unknown ones.
                 let field = field.clone();
                 let mut base_c = self.lower_expr(base, payload_name);
-                Box::new(move |ctx| data_member(&base_c(ctx), &field))
+                let graphemes = self.counts_graphemes();
+                Box::new(move |ctx| data_member(&base_c(ctx), &field, graphemes))
             }
             Expr::Lambda { .. } | Expr::Error(_) => Box::new(|_| Value::Unit),
         }
@@ -1364,6 +1402,7 @@ impl Interpreter {
             Text(String),
             Interp(Lowered, Option<NumFormat>),
         }
+        let shows_collections = self.counts_graphemes();
         let mut lowered: Vec<Part> = parts
             .iter()
             .map(|p| match p {
@@ -1376,7 +1415,14 @@ impl Interpreter {
             for part in &mut lowered {
                 match part {
                     Part::Text(t) => s.push_str(t),
-                    Part::Interp(c, None) => s.push_str(&format_scalar(&c(ctx))),
+                    Part::Interp(c, None) => {
+                        let value = c(ctx);
+                        if shows_collections {
+                            s.push_str(&value.shown());
+                        } else {
+                            s.push_str(&format_scalar(&value));
+                        }
+                    }
                     Part::Interp(c, Some(spec)) => s.push_str(&format_spec(&c(ctx), *spec)),
                 }
             }
@@ -1788,6 +1834,7 @@ impl Interpreter {
                 // clamp: user data never panics.
                 let mut start = self.lower_expr(&args.first()?.value, payload_name);
                 let mut end = args.get(1).map(|a| self.lower_expr(&a.value, payload_name));
+                let graphemes = self.counts_graphemes();
                 Some(Box::new(move |ctx| {
                     let from = start(ctx).as_int();
                     let to = end.as_mut().map(|e| e(ctx).as_int());
@@ -1804,8 +1851,9 @@ impl Interpreter {
                     match base_c(ctx) {
                         Value::List(xs) => Value::List(xs[range(xs.len())].to_vec()),
                         Value::Str(s) => {
-                            let r = range(s.chars().count());
-                            Value::Str(s.chars().skip(r.start).take(r.len()).collect())
+                            let units = text_units(&s, graphemes);
+                            let r = range(units.len());
+                            Value::Str(units[r].concat())
                         }
                         other => other,
                     }
@@ -1891,11 +1939,14 @@ impl Interpreter {
                 }))
             }
             "split" => {
+                let graphemes = self.counts_graphemes();
                 let mut sep = self.lower_expr(&args.first()?.value, payload_name);
                 Some(Box::new(move |ctx| {
                     let sep = sep(ctx);
                     match (base_c(ctx), sep) {
-                        (Value::Str(s), Value::Str(sep)) => Value::List(split_text(&s, &sep)),
+                        (Value::Str(s), Value::Str(sep)) => {
+                            Value::List(split_text(&s, &sep, graphemes))
+                        }
                         _ => Value::List(Vec::new()),
                     }
                 }))
@@ -2036,13 +2087,14 @@ impl Interpreter {
                 }))
             }
             "indexOf" => {
+                let graphemes = self.counts_graphemes();
                 let mut arg = self.lower_expr(&args.first()?.value, payload_name);
                 Some(Box::new(move |ctx| {
                     let needle = arg(ctx);
                     let found = match (base_c(ctx), &needle) {
                         (Value::List(xs), _) => xs.iter().position(|x| structural_eq(x, &needle)),
                         (Value::Str(s), Value::Str(part)) => {
-                            return Value::Int(index_of_text(&s, part));
+                            return Value::Int(index_of_text(&s, part, graphemes));
                         }
                         _ => None,
                     };

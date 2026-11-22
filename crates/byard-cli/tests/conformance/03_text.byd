@@ -11,10 +11,33 @@ Text("{"hello".len} {"".len} {"héllo".len}")
 Text("{"👨‍👩‍👧".len}")
 
 //# case: len-of-grapheme-cluster
-//# gap: `len` counts code points, so one family emoji is 5
+//# edition: 2027
 //# fragment
 //# text: 1
 Text("{"👨‍👩‍👧".len}")
+
+//# case: slice-counts-graphemes-in-2027
+//# edition: 2027
+//# fragment
+//# text: éx ab
+Text("{"aéxab".slice(1, 3)} {"👨‍👩‍👧ab".slice(1, 3)}")
+
+//# case: index-of-counts-graphemes-in-2027
+//# edition: 2027
+//# fragment
+//# text: 2 -1
+Text("{"👨‍👩‍👧ab".indexOf("b")} {"ab".indexOf("z")}")
+
+//# case: split-by-nothing-keeps-a-cluster-whole-in-2027
+//# edition: 2027
+//# fragment
+//# text: 3
+Text("{"a👨‍👩‍👧b".split("").len}")
+
+//# case: split-by-nothing-cuts-a-cluster-in-2026
+//# fragment
+//# text: 7
+Text("{"a👨‍👩‍👧b".split("").len}")
 
 //# case: slice
 //# fragment
@@ -130,10 +153,26 @@ Text("{"a".reversed()}")
 Text("{"  ada ".trim().toUpper().slice(0, 3)}")
 
 //# case: index-into-text
-//# gap: `s[i]` on text is nothing; should be the character or an error
 //# fragment
 //# text: e
 Text("{"hello"[1]}")
+
+//# case: index-into-text-past-the-end-is-nothing
+//# fragment
+//# text: [] [] x
+let s = "ab"
+Text("[{s[5]}] [{s[-1]}] {s[5] ?? "x"}")
+
+//# case: index-into-text-by-grapheme-in-2027
+//# edition: 2027
+//# fragment
+//# text: b
+Text("{"👨‍👩‍👧b"[1]}")
+
+//# case: index-into-text-with-a-float-is-an-error
+//# fragment
+//# error: TypeMismatch
+Text("{"ab"[0.5]}")
 
 //# case: join-shows-each-item
 //# fragment
@@ -148,10 +187,23 @@ Text("[{[].join(",")}]")
 Text("<{[1, 2] + [3]}>")
 
 //# case: list-in-text-shows-its-items
-//# gap: a list written into a text draws nothing
+//# edition: 2027
 //# fragment
 //# text: [1, 2, 3]
 Text("{[1, 2] + [3]}")
+
+//# case: list-of-text-shows-bare
+//# edition: 2027
+//# fragment
+//# text: [a, b] [] [[1], [2, 3]]
+Text("{["a", "b"]} {[]} {[[1], [2, 3]]}")
+
+//# case: record-in-text-shows-its-fields
+//# edition: 2027
+//# fragment
+//# text: { name: Ada, score: 3 }
+let r = { name: "Ada", score: 3 }
+Text("{r}")
 
 //# case: record-in-text-is-not-debug-form
 //# fragment

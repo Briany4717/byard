@@ -1345,6 +1345,12 @@ impl Interpreter {
         self.expanded_calls = on.then(Default::default);
     }
 
+    /// Whether `len`, `slice`, `indexOf` and `s[i]` count what a reader sees as
+    /// a character (a grapheme cluster, from edition 2027) and not a code point.
+    pub(super) fn counts_graphemes(&self) -> bool {
+        self.edition >= crate::edition::Edition::E2027
+    }
+
     /// Whether an `Int` that overflows stops at the end of its range, as the
     /// edition the program is written in says (2027), and not wraps.
     pub(super) fn saturates(&self) -> bool {

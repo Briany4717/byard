@@ -17,6 +17,9 @@ use crate::diagnostics::{CompileError, Span};
 /// What sits between two tokens and is not one.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Trivia<'a> {
+    /// A `/* … */` comment, whole, whatever lines it spans. (Printed like a
+    /// line comment: the token after it starts a line.)
+    ///
     /// A `// …` comment, from the slashes to the end of the line, without the
     /// line break and without trailing whitespace (nor the `\r` of a CRLF).
     LineComment(&'a str),
@@ -74,6 +77,7 @@ pub fn lex_with_trivia(source: &str) -> TriviaFile<'_> {
             Err(err) => out.errors.push(match err {
                 LexError::StringNestingTooDeep => CompileError::StringNestingTooDeep { span },
                 LexError::UnterminatedString => CompileError::UnterminatedString { span },
+                LexError::UnterminatedComment => CompileError::UnterminatedComment { span },
                 LexError::Unexpected => CompileError::UnexpectedChar { span },
             }),
         }
@@ -156,6 +160,32 @@ fn push_gap<'a>(source: &'a str, from: usize, to: usize, pieces: &mut Vec<(Piece
                         Span::from(start..i),
                     ));
                 }
+            }
+            // A byte order mark: dropped, as the lexer drops it.
+            0xEF if source[i..].starts_with('\u{feff}') => i += '\u{feff}'.len_utf8(),
+            b'/' if bytes.get(i + 1) == Some(&b'*') => {
+                // `/* … */`, nesting, kept whole as one comment (it may span
+                // lines, and the printer writes it as it was).
+                let start = i;
+                let mut depth = 0usize;
+                while i < to {
+                    if bytes[i..to].starts_with(b"/*") {
+                        depth += 1;
+                        i += 2;
+                    } else if bytes[i..to].starts_with(b"*/") {
+                        depth -= 1;
+                        i += 2;
+                        if depth == 0 {
+                            break;
+                        }
+                    } else {
+                        i += 1;
+                    }
+                }
+                pieces.push((
+                    Piece::Trivia(Trivia::LineComment(&source[start..i])),
+                    Span::from(start..i),
+                ));
             }
             _ => {
                 // `//`: to the end of the line, the `\n` excluded.

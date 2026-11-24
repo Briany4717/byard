@@ -43,7 +43,7 @@ use std::path::{Path, PathBuf};
 use byard_compiler::interp::eval::Interpreter;
 use byard_compiler::interp::theme::Theme;
 use byard_compiler::parser::ast::root_view;
-use byard_compiler::resolve::{PackageProvider, ResolvedProgram, SourceFile, resolve_program};
+use byard_compiler::resolve::{PackageProvider, ResolvedProgram, SourceFile, resolve_program_in};
 use byard_core::frame::RenderFrame;
 
 fn cases_dir() -> PathBuf {
@@ -202,13 +202,14 @@ struct Outcome {
     text: Option<String>,
 }
 
-fn resolve(source: &str) -> ResolvedProgram {
-    resolve_program(
+fn resolve(source: &str, edition: byard_compiler::edition::Edition) -> ResolvedProgram {
+    resolve_program_in(
         vec![SourceFile {
             name: "main.byd".to_string(),
             source: source.to_string(),
         }],
         &mut NoPackages,
+        edition,
     )
 }
 
@@ -244,7 +245,7 @@ fn drawn(program: &ResolvedProgram, wait: u32) -> Option<String> {
 }
 
 fn run(source: &str, wait: u32, edition: byard_compiler::edition::Edition) -> Outcome {
-    let program = resolve(source).with_edition(edition);
+    let program = resolve(source, edition);
     let found = byard_project::check::check_program(&program, Theme::byard_base());
     let mut outcome = Outcome::default();
     for diagnostic in &found {

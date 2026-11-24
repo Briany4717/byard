@@ -232,11 +232,17 @@ View Item(leading: Slot) { Row { leading } }
 View Main() { Item(leading: 5) }
 
 //# case: slot-passed-on
-//# gap: a required `Slot` handed to another view is `MissingParam`; the guide says it can be passed on
 //# text: deep
 View Inner(icon: Slot) { Row { icon } }
 View Outer(icon: Slot) { Inner(icon: icon) }
 View Main() { Outer(icon: { Text("deep") }) }
+
+//# case: slot-passed-on-and-never-given-is-one-missing-param
+//# error: MissingParam
+//# diagnostics: 1
+View Inner(icon: Slot) { Row { icon } }
+View Outer(icon: Slot) { Inner(icon: icon) }
+View Main() { Outer() }
 
 //# case: slot-in-each-row-of-a-for
 //# text: s | s

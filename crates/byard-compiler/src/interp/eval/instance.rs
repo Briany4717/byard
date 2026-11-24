@@ -153,6 +153,9 @@ impl Interpreter {
             } else {
                 self.slot_argument(param, el)
             };
+            // A slot passed on that was not given to the caller is the caller's
+            // `MissingParam`, said once where it was left out.
+            let passed_on = matches!(wrote, Some(SlotArg::Forward(_)));
             let given = match wrote {
                 // A slot passed on keeps the source of the view that wrote it.
                 Some(SlotArg::Forward(source)) => source,
@@ -171,6 +174,7 @@ impl Interpreter {
                 None => None,
             };
             if given.is_none()
+                && !passed_on
                 && param.name.as_str() != RESERVED_CONTENT
                 && param_default(param).is_none()
             {
@@ -197,11 +201,14 @@ impl Interpreter {
             {
                 Some(SlotArg::Members(Vec::new()))
             }
-            Expr::Ident(name, _) => self
-                .slot_stack
-                .last()
-                .and_then(|f| f.get(name))
-                .map(|source| SlotArg::Forward(source.clone())),
+            Expr::Ident(name, _) => match self.slot_stack.last().and_then(|f| f.get(name)) {
+                Some(source) => Some(SlotArg::Forward(source.clone())),
+                // A view checked on its own has no call above it, so the slot
+                // it passes on has not been given anything: that is for the
+                // call of this view to say, not for this one.
+                None if self.env.lookup(name).is_none() => Some(SlotArg::Forward(None)),
+                None => None,
+            },
             _ => None,
         }
     }

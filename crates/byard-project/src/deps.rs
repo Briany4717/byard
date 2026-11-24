@@ -1359,12 +1359,17 @@ pub fn resolve_project(
     let files = project_source_files(manifest)?;
     declare_native_views(manifest);
     let program = if manifest.library {
-        byard_compiler::resolve::resolve_library(&manifest.name, files, &mut provider)
+        byard_compiler::resolve::resolve_library_in(
+            &manifest.name,
+            files,
+            &mut provider,
+            manifest.edition,
+        )
     } else {
-        byard_compiler::resolve::resolve_program(files, &mut provider)
+        byard_compiler::resolve::resolve_program_in(files, &mut provider, manifest.edition)
     };
     // Every view carries the edition the manifest names.
-    Ok((program.with_edition(manifest.edition), provider))
+    Ok((program, provider))
 }
 
 #[cfg(test)]

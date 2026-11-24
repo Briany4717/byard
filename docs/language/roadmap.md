@@ -15,7 +15,7 @@ So every step below ends the same way: **its cases lose their `gap:` line, the r
 loses its note, and this file loses the step.** When this file is empty and the suite has no
 gap, the language is where this document wanted it.
 
-As written, the suite has 645 cases: 611 hold and 34 are gaps.
+As written, the suite has 658 cases: 632 hold and 26 are gaps.
 
 ```sh
 cargo test -p byard-cli --test it conformance -- --nocapture
@@ -78,15 +78,16 @@ This part closes that. Nothing here adds syntax.
 
 ### 2. Editions, and `byard fix`
 
-*Done, except for what only the first **(edition)** change can show.* `edition = "…"` is read
-from `[project]` or `[package]`, a manifest without it is `2026`, and `byard fix` moves a
-project to `2027`, rewriting its sources through the formatter and naming the edition in the
-manifest. The two editions differ by nothing yet. What is left is the first rewrite: step 6's
-`equality-ignores-field-order` shipped in every edition, since no rewrite can tell which programs
-relied on reordered records being unequal, so step 12's ternary is the one that adds a migration to
-`Edition::migrations` in `byard-compiler/src/edition.rs`, and the case that proves `byard fix`
-keeps a program's meaning. Until then `byard new` writes no edition, and a project without one
-stays on `2026`.
+*Done.* `edition = "…"` is read from `[project]` or `[package]`, a manifest without it is
+`2026`, and `byard fix` moves a project to `2027`, rewriting its sources through the formatter
+and naming the edition in the manifest. The first rewrite is step 12's ternary: it writes the
+parentheses that keep `a || b ? x : y` meaning what it meant, and a unit test parses the old
+file in 2026 and the new one in 2027 and finds the same program. What `2027` changes that no
+rewrite can keep (step 10's saturation, step 11's graphemes and what a list shows in a text)
+changes no source, as step 6's `equality-ignores-field-order` shipped in every edition for the
+same reason. Left: a package is parsed in `2026` whatever the app that uses it says, since a
+provider does not tell its edition yet, and `byard new` writes no edition, so a project
+without one stays on `2026`.
 
 ### 8. Names
 
@@ -160,18 +161,12 @@ for either. A `Map` has no text form yet, since there is no `Map` (step 17).
 
 ### 12. Small things that parse wrongly
 
-*Cases:* `int-literal-with-separators`, `float-literal-exponent`, `int-literal-binary`,
-`block-comment`, `byte-order-mark-at-the-start`, `untrack`, `slot-passed-on`,
-`ternary-after-or-means-or-of-a-ternary` **(edition)**.
-
-- `1_000`, `1e3`, `1.5e-3` and `0b101` are numbers. A digit followed by a letter that
-  makes no literal is one lexing error, not a number and a name.
-- `/* … */`, nesting, and a byte order mark skipped.
-- `untrack(expr)` parses, as RFC-0004 has said since the start (#358).
-- A required `Slot` can be handed to another view, as the guide says.
-- `? :` becomes looser than `||`, as in every language people come from. `byard fix`
-  adds the parentheses that keep an old program meaning what it meant, and
-  `MixedTernaryPrecedence` goes.
+*Left:* nothing, with a note. All eight cases hold (`int-literal-with-separators`,
+`float-literal-exponent`, `int-literal-binary`, `block-comment`, `byte-order-mark-at-the-start`,
+`untrack`, `slot-passed-on`, `ternary-after-or-means-or-of-a-ternary`), and so do the fifteen
+added with them. `? :` is looser than `||` from edition `2027` and tighter in `2026`, so
+`MixedTernaryPrecedence` is still told in `2026` and never in `2027`; it goes when `2026` does.
+`///` is still an ordinary comment.
 
 ## Part 3: what a 1.0 language has
 

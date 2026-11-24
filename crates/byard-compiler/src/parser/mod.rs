@@ -45,7 +45,15 @@ pub struct ParsedFile {
 /// Parses `source` into a [`ParsedFile`].
 #[must_use]
 pub fn parse(source: &str) -> ParsedFile {
+    parse_in(source, crate::edition::Edition::BASELINE)
+}
+
+/// [`parse`] for a file written in `edition`: from 2027 the `? :` is looser than
+/// `||`, so `a || b ? x : y` is `(a || b) ? x : y`.
+#[must_use]
+pub fn parse_in(source: &str, edition: crate::edition::Edition) -> ParsedFile {
     let mut parser = Parser::new(source);
+    parser.loose_ternary = edition >= crate::edition::Edition::E2027;
     let Items {
         imports,
         mut views,
@@ -102,6 +110,8 @@ pub(crate) struct Parser<'a> {
     /// so a single base offset is not enough. `None` for a whole file, whose
     /// offsets are already the file's.
     offsets: Option<Vec<u32>>,
+    /// Whether `? :` binds looser than `||` (edition 2027), and not tighter.
+    loose_ternary: bool,
 }
 
 impl<'a> Parser<'a> {
@@ -116,6 +126,7 @@ impl<'a> Parser<'a> {
             errors: lexed.errors,
             gaps: lexed.gaps,
             offsets: None,
+            loose_ternary: false,
         }
     }
 
@@ -134,6 +145,7 @@ impl<'a> Parser<'a> {
             errors: lexed.errors,
             gaps: lexed.gaps,
             offsets: Some(offsets),
+            loose_ternary: false,
         }
     }
 

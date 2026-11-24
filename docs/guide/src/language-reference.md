@@ -30,9 +30,11 @@ var n = 1 let m = n + 2 Text("{m}")
 
 A comment starts at `//` and runs to the end of the line.
 
-> **Not yet.** There is no block comment `/* … */`, and `///` is an ordinary comment that no
-> tool reads. A file that starts with a byte order mark is refused. (`01_lexical.byd`,
-> `14_syntax_and_recovery.byd`)
+`/* … */` is a comment too, and nests, so a block of code can be commented out whatever
+comments it holds. One that is never closed is `UnterminatedComment`. A byte order mark at the
+start of a file is skipped.
+
+> **Not yet.** `///` is an ordinary comment that no tool reads.
 
 ## Words
 
@@ -63,8 +65,8 @@ Text("{on} {key} {type}")
 
 | Kind | Written | Value |
 |------|---------|-------|
-| Whole number | `42`, `007`, `0xFF`, `0xff` | An `Int`. Decimal or hexadecimal. |
-| Fraction | `0.5`, `12.25` | A `Float`. Digits on both sides of the point: `.5` and `5.` are errors. |
+| Whole number | `42`, `007`, `1_000`, `0xFF`, `0b101` | An `Int`. Decimal, hexadecimal or binary; `_` may separate digits. |
+| Fraction | `0.5`, `12.25`, `1e3`, `1.5e-3` | A `Float`. Digits on both sides of the point: `.5` and `5.` are errors. With an exponent it is a `Float` even when it is whole. |
 | Truth | `true`, `false` | A `Bool`. |
 | Text | `"hello"` | A `Str`. |
 | Angle | `90deg`, `1.5rad` | A `Float`, in radians. |
@@ -84,8 +86,8 @@ Text("{0xFF} {1.4s} {5min} {180deg:.2}")
 
 That draws `255 1400 300000 3.14`.
 
-> **Not yet.** `1_000`, `1e3` and `0b101` are not literals. `1_000` is the number `1`
-> followed by the name `_000`, and inside a text `{1e3}` draws `1`. (`01_lexical.byd`)
+A number that runs into letters and makes no literal, `12abc` or `1_000x`, is one
+`UnexpectedChar`, and not a number and a name.
 
 ### Text
 
@@ -245,7 +247,7 @@ except where noted.
 |-------|-----------|-------|
 | 1 | `=` `+=` `-=` | Assignment. Groups from the right. In an [action](#actions) only. |
 | 2 | `with` | Animation of an attribute's value |
-| 3 | `\|\|` | Or |
+| 3 | `\|\|` | Or. (In edition 2027 levels 3 and 4 swap: `? :` is looser than `\|\|`.) |
 | 4 | `? :` | Choice. Groups from the right. |
 | 5 | `&&` | And |
 | 6 | `==` `!=` `<` `<=` `>` `>=` | Comparison. Does not chain: `1 < 2 < 3` is an error. |
@@ -260,12 +262,11 @@ except where noted.
 So `1 + 2 * 3` is `7`, `-a * 3` is `(-a) * 3`, `!a && b` is `(!a) && b`, `a ?? 0 + 1` is
 `a ?? (0 + 1)`, and `a ?? 0 == 0` is `(a ?? 0) == 0`. Parentheses group as they do anywhere.
 
-`? :` binds tighter than `||`. `a || b ? x : y` is `a || (b ? x : y)`, which is not what C
-or JavaScript make of it, and the checker warns (`MixedTernaryPrecedence`). Write the
-parentheses.
-
-> **Not yet.** This precedence is a trap, and is to change so that `? :` is looser than
-> `||`. (`07_operators.byd`)
+In edition 2026 `? :` binds tighter than `||`: `a || b ? x : y` is `a || (b ? x : y)`, which
+is not what C or JavaScript make of it, and the checker warns (`MixedTernaryPrecedence`). In
+edition 2027 `? :` is looser than `||`, as it is there: `a || b ? x : y` is
+`(a || b) ? x : y`. `byard fix` writes the parentheses that keep an old program meaning what
+it meant.
 
 ### Numbers
 
@@ -674,9 +675,8 @@ View Main() {
 A block given to a view with no slot is `UnexpectedChildren`; a value given to a slot is
 `SlotArgument`.
 
-> **Not yet.** A required `Slot` handed on to another view, `Inner(icon: icon)`, is reported
-> as missing; give it a default of `none`. Two parameters of one name are accepted in a
-> declaration. (`09_views.byd`)
+A slot can be handed on to another view by name, `Inner(icon: icon)`, and is required there as
+it is where it was declared: leaving it out of the first call is the one `MissingParam`.
 
 ### Optional values
 
@@ -952,9 +952,8 @@ and only those, are evaluated again; what they changed is laid out and drawn. No
 evaluated because of a write that changed nothing. A program with nothing in flight
 evaluates nothing and draws nothing.
 
-`untrack(expr)` is meant to read without recording.
-
-> **Not yet.** `untrack(expr)` does not parse. (`08_functions.byd`)
+`untrack(expr)` reads without recording: a `let` that reads `untrack(a)` does not change when
+`a` does.
 
 ## Built-in names
 
@@ -989,10 +988,12 @@ error that lists the ones it does. A library package names its edition under `[p
 sources so they mean what they meant, through the formatter, and then writes the new edition
 into the manifest.
 
-Today `2027` differs from `2026` in three things: an `Int` that overflows stops at the largest
-or the smallest instead of wrapping, a character of a text is a grapheme cluster and not a code
-point, and a list or a record in a text shows its contents instead of nothing. No rewrite can
-tell which programs relied on the old behaviour, so `byard fix` changes no source for them. The other changes marked *(edition)* in
+Today `2027` differs from `2026` in four things: `? :` is looser than `||`, an `Int` that
+overflows stops at the largest or the smallest instead of wrapping, a character of a text is a
+grapheme cluster and not a code point, and a list or a record in a text shows its contents
+instead of nothing. `byard fix` writes the parentheses that keep the first one's meaning. For
+the other three no rewrite can tell which programs relied on the old behaviour, so it changes
+no source. The other changes marked *(edition)* in
 [the roadmap](https://github.com/Briany4717/byard/blob/main/docs/language/roadmap.md) will land
 in `2027` too.
 

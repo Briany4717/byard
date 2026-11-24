@@ -176,12 +176,21 @@ let ps = [{ name: "a" }]
 Text("{ps.map(p => p.nmae).len}")
 
 //# case: untrack
-//# gap: `untrack(expr)` does not parse (#358)
 //# fragment
 //# text: 1
 var a = 1
 let b = untrack(a)
 Text("{b}")
+
+//# case: untrack-does-not-follow-the-value
+//# fragment
+//# text: 1 | 1
+var a = 1
+let b = untrack(a)
+let c = untrack(a + 0)
+on mount => { a = 5 }
+Text("{b}")
+Text("{c}")
 
 //# case: calling-a-number
 //# fragment

@@ -78,8 +78,12 @@ impl Edition {
     /// The rewrites that take a program from this edition to the next.
     fn migrations(self) -> &'static [Migration] {
         match self {
-            // 2027 changes nothing yet.
-            Self::E2026 | Self::E2027 => &[],
+            // What 2027 changes that a rewrite can keep the meaning of: `a || b ? x : y`
+            // read `a || (b ? x : y)`, and still does with the parentheses
+            // written. (Overflow, graphemes and what a list shows in a text
+            // have no rewrite: nothing says which programs relied on them.)
+            Self::E2026 => &[parenthesise_ternary_after_or],
+            Self::E2027 => &[],
         }
     }
 
@@ -104,6 +108,71 @@ impl Edition {
         }
         format(&text).map(Some)
     }
+}
+
+/// `a || b ? x : y` was `a || (b ? x : y)` and is `(a || b) ? x : y` from 2027:
+/// the old meaning is written out, so the program keeps it.
+fn parenthesise_ternary_after_or(source: &str) -> Option<String> {
+    use crate::parser::ast::{BinOp, Expr, Member};
+    use crate::resolve::walk;
+
+    let parsed = crate::parser::parse(source);
+    if !parsed.errors.is_empty() {
+        return None;
+    }
+    let mut spans: Vec<(usize, usize)> = Vec::new();
+    let mut note = |e: &mut Expr| {
+        if let Expr::Binary {
+            op: BinOp::Or,
+            rhs,
+            span,
+            ..
+        } = e
+        {
+            if let Expr::Ternary { span: t, .. } = rhs.as_ref() {
+                if t.end == span.end {
+                    spans.push((t.start as usize, t.end as usize));
+                }
+            }
+        }
+    };
+    for view in &parsed.views {
+        for member in &view.body {
+            let mut copy: Member = member.clone();
+            walk::member_exprs(&mut copy, &mut note);
+        }
+        for param in &view.params {
+            if let Some(default) = &param.default {
+                let mut copy = default.clone();
+                walk::expr(&mut copy, &mut note);
+            }
+        }
+    }
+    for decl in &parsed.fns {
+        let mut copy = decl.body.clone();
+        walk::expr(&mut copy, &mut note);
+    }
+    for decl in &parsed.consts {
+        let mut copy = decl.init.clone();
+        walk::expr(&mut copy, &mut note);
+    }
+    if spans.is_empty() {
+        return None;
+    }
+    // Insert from the end, so the places before it do not move.
+    spans.sort_unstable();
+    spans.dedup();
+    let mut inserts: Vec<(usize, char)> = Vec::new();
+    for (start, end) in spans {
+        inserts.push((start, '('));
+        inserts.push((end, ')'));
+    }
+    inserts.sort_by(|a, b| b.0.cmp(&a.0).then(b.1.cmp(&a.1)));
+    let mut text = source.to_string();
+    for (at, c) in inserts {
+        text.insert(at, c);
+    }
+    Some(text)
 }
 
 impl fmt::Display for Edition {
@@ -132,6 +201,37 @@ mod tests {
         assert_eq!(Edition::BASELINE.next(), Some(Edition::E2027));
         assert_eq!(Edition::LATEST.next(), None);
         assert_eq!(Edition::default(), Edition::BASELINE);
+    }
+
+    #[test]
+    fn a_ternary_after_an_or_is_parenthesised_and_keeps_its_meaning() {
+        use crate::parser::span_eq::parsed_files_span_eq;
+        use crate::parser::{parse, parse_in};
+
+        let old = "View Main() {\n    var a = true\n    var b = false\n    Text(a || b ? \"on\" : \"off\")\n    Text(\"{a || b ? 1 : 2}\")\n}\n";
+        let moved = Edition::E2026
+            .migrate(old)
+            .expect("formats")
+            .expect("changes");
+        assert!(moved.contains("a || (b ? \"on\" : \"off\")"), "{moved}");
+        assert!(moved.contains("{a || (b ? 1 : 2)}"), "{moved}");
+        // What the old file meant in 2026 is what the new one means in 2027.
+        let before = parse_in(old, Edition::E2026);
+        let after = parse_in(&moved, Edition::E2027);
+        assert!(after.errors.is_empty(), "{:?}", after.errors);
+        assert!(parsed_files_span_eq(&before, &after));
+        // And the same text means something else in 2027, which is why it moves.
+        assert!(!parsed_files_span_eq(
+            &before,
+            &parse_in(old, Edition::E2027)
+        ));
+        // Moving again changes nothing; a file with no such ternary is left alone.
+        assert_eq!(Edition::E2026.migrate(&moved).expect("formats"), None);
+        assert_eq!(
+            Edition::E2026.migrate("View Main() { Text(\"a\") }"),
+            Ok(None)
+        );
+        let _ = parse(old);
     }
 
     #[test]

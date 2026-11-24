@@ -32,6 +32,8 @@ pub enum LexError {
     StringNestingTooDeep,
     /// A `"` opened a string that never closed before end of input.
     UnterminatedString,
+    /// A `/*` opened a comment that never closed before end of input.
+    UnterminatedComment,
 }
 
 /// Bit 32 of a [`Token::IntLit`], set at lex time on a hex literal written
@@ -53,6 +55,8 @@ pub const COLOR_HAS_ALPHA_TAG: i64 = 1 << 32;
 #[logos(error = LexError)]
 #[logos(skip r"[ \t\r\n]+")]
 #[logos(skip r"//[^\n]*")]
+// A byte order mark, which some editors put at the start of a file.
+#[logos(skip "\u{feff}")]
 pub enum Token {
     // ---- keywords (reserved) ----
     /// `View`
@@ -187,7 +191,9 @@ pub enum Token {
     PercentLit(f64),
     /// A floating-point literal. Listed before [`Token::IntLit`] because
     /// `logos` longest-match makes `3.14` a float, `3` an int.
-    #[regex(r"[0-9]+\.[0-9]+", |lex| lex.slice().parse::<f64>().ok())]
+    #[regex(r"[0-9]+(_[0-9]+)*\.[0-9]+(_[0-9]+)*", |lex| lex.slice().replace('_', "").parse::<f64>().ok())]
+    // With an exponent: `1e3`, `1.5e-3`, `2E+4`. Always a `Float`.
+    #[regex(r"[0-9]+(_[0-9]+)*(\.[0-9]+(_[0-9]+)*)?[eE][+-]?[0-9]+", |lex| lex.slice().replace('_', "").parse::<f64>().ok())]
     FloatLit(f64),
     /// An integer literal (`i64`; D9), decimal or hex (`0xRRGGBB` colors,
     /// RFC-0005 §1). Hex is listed first so `0x1E` is one hex int, not `0`
@@ -210,7 +216,12 @@ pub enum Token {
             .ok()
             .map(|v| if digits.len() > 6 { v | COLOR_HAS_ALPHA_TAG } else { v })
     })]
-    #[regex(r"[0-9]+", |lex| lex.slice().parse::<i64>().ok())]
+    #[regex(r"0b[01]+", |lex| i64::from_str_radix(&lex.slice()[2..], 2).ok())]
+    // Digits may be grouped with `_` between them: `1_000`.
+    #[regex(r"[0-9]+(_[0-9]+)*", |lex| lex.slice().replace('_', "").parse::<i64>().ok())]
+    // A digit run that runs into letters and makes no literal (`12abc`,
+    // `1_000x`) is one lexing error, and not a number and a name.
+    #[regex(r"[0-9][0-9a-zA-Z_]*", |_| None::<i64>, priority = 1)]
     IntLit(i64),
     /// A raw string literal (possibly interpolated). The slice (via its span)
     /// holds the source including quotes; interpolations are re-lexed by the
@@ -310,6 +321,8 @@ pub enum Token {
     /// `/`, binary division (see [`Token::Plus`]). A `//` comment still wins
     /// over two `/` tokens through the skip rule's longest match.
     #[token("/")]
+    // `/* … */`, which nests: skipped like a `//` comment.
+    #[token("/*", block_comment)]
     Slash,
     /// `%`, binary remainder (RFC-0047), binding like [`Token::Star`] and
     /// [`Token::Slash`].
@@ -364,6 +377,32 @@ const MAX_STRING_DEPTH: usize = 3;
 /// [`LexError::StringNestingTooDeep`]: stopping at the level that is too deep
 /// would leave the levels inside it to be lexed as strings of their own, one
 /// error each. [`LexError::UnterminatedString`] if input ends first.
+/// Skips a block comment after its `/*`, to the `*/` that closes it. They nest,
+/// so a block of code can be commented out whatever comments it holds.
+/// [`LexError::UnterminatedComment`] if input ends first.
+fn block_comment(lex: &mut Lexer<Token>) -> logos::FilterResult<(), LexError> {
+    let rest = lex.remainder().as_bytes();
+    let mut depth = 1usize;
+    let mut i = 0usize;
+    while i < rest.len() {
+        if rest[i..].starts_with(b"*/") {
+            depth -= 1;
+            i += 2;
+            if depth == 0 {
+                lex.bump(i);
+                return logos::FilterResult::Skip;
+            }
+        } else if rest[i..].starts_with(b"/*") {
+            depth += 1;
+            i += 2;
+        } else {
+            i += 1;
+        }
+    }
+    lex.bump(rest.len());
+    logos::FilterResult::Error(LexError::UnterminatedComment)
+}
+
 fn lex_string(lex: &mut Lexer<Token>) -> Result<(), LexError> {
     // stack[0] is the opening quote's `InString` frame.
     let mut stack = vec![StrState::InString];
@@ -488,6 +527,10 @@ pub(crate) fn lex_remapped(source: &str, remap: impl Fn(Span) -> Span) -> LexedF
                 // Everything after the quote is the string, so there is
                 // nothing left to read.
                 lexer.bump(lexer.remainder().len());
+            }
+            Err(LexError::UnterminatedComment) => {
+                out.errors.push(CompileError::UnterminatedComment { span });
+                out.gaps.push(span.end);
             }
             Err(LexError::Unexpected) => {
                 let text = &source[range.clone()];

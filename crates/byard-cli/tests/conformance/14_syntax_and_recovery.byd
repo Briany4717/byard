@@ -225,7 +225,6 @@ Text("{"{"{"{"{"{"{"{"{"{"{"{"{"{"{"{"{"{"{"{"{"{"{"{"{"{"{"{"{"{"{"{"x"}"}"}"}"
 Text("a") 
 
 //# case: byte-order-mark-at-the-start
-//# gap: a file that starts with a byte order mark is refused
 //# text: a
 ﻿View Main() { Text("a") }
 

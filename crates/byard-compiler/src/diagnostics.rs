@@ -71,6 +71,11 @@ pub enum CompileError {
         /// Source range at the point the limit was exceeded.
         span: Span,
     },
+    /// A `/*` comment was opened but never closed before end of input.
+    UnterminatedComment {
+        /// Source range of the `/*` and everything after it.
+        span: Span,
+    },
     /// A string literal was opened but never closed before end of input.
     UnterminatedString {
         /// Source range of the offending string literal.
@@ -1645,6 +1650,7 @@ impl CompileError {
             | Self::UnexpectedToken { span, .. }
             | Self::StringNestingTooDeep { span }
             | Self::UnterminatedString { span }
+            | Self::UnterminatedComment { span }
             | Self::MissingAnnotation { span, .. }
             | Self::CannotInfer { span }
             | Self::TextUsedAsType { span }
@@ -1806,6 +1812,7 @@ impl CompileError {
             | Self::UnexpectedToken { span, .. }
             | Self::StringNestingTooDeep { span }
             | Self::UnterminatedString { span }
+            | Self::UnterminatedComment { span }
             | Self::MissingAnnotation { span, .. }
             | Self::CannotInfer { span }
             | Self::TextUsedAsType { span }
@@ -1969,6 +1976,7 @@ impl CompileError {
             Self::UnexpectedToken { .. } => "UnexpectedToken",
             Self::StringNestingTooDeep { .. } => "StringNestingTooDeep",
             Self::UnterminatedString { .. } => "UnterminatedString",
+            Self::UnterminatedComment { .. } => "UnterminatedComment",
             Self::MissingAnnotation { .. } => "MissingAnnotation",
             Self::CannotInfer { .. } => "CannotInfer",
             Self::TextUsedAsType { .. } => "TextUsedAsType",
@@ -2165,6 +2173,9 @@ impl CompileError {
                 "string interpolation nested deeper than 3 levels".to_string()
             }
             Self::UnterminatedString { .. } => "unterminated string literal".to_string(),
+            Self::UnterminatedComment { .. } => {
+                "this `/*` comment is never closed: end it with `*/`".to_string()
+            }
             Self::MissingAnnotation { what, .. } => {
                 format!("missing type annotation on {what}")
             }

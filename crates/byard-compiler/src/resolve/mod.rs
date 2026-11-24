@@ -39,11 +39,12 @@ use std::collections::HashMap;
 use std::collections::hash_map::Entry;
 
 use crate::diagnostics::{CompileError, Span};
+use crate::edition::Edition;
 use crate::interp::intrinsics;
 use crate::parser::ast::{
     ConstDecl, ElementNode, EnumDecl, Expr, FnDecl, Member, Type, UseDecl, ViewDecl,
 };
-use crate::parser::parse;
+use crate::parser::parse_in;
 use crate::symbol::Symbol;
 use crate::util::closest_match;
 
@@ -417,6 +418,10 @@ struct Resolver<'p> {
     /// settled here, so that only the reading that was meant is resolved and
     /// reported on.
     callee_kinds: std::cell::RefCell<CalleeKinds>,
+    /// The edition the root project is written in. A package is parsed in the
+    /// baseline: it names an edition of its own, which a provider does not
+    /// tell yet.
+    edition: crate::edition::Edition,
 }
 
 impl Resolver<'_> {
@@ -438,7 +443,18 @@ pub fn resolve_program(
     root_files: Vec<SourceFile>,
     provider: &mut dyn PackageProvider,
 ) -> ResolvedProgram {
-    resolve_root(root_files, provider, None)
+    resolve_root(root_files, provider, None, Edition::BASELINE)
+}
+
+/// [`resolve_program`] for a project written in `edition`: the root files are
+/// parsed as that edition says, and every view carries it.
+#[must_use]
+pub fn resolve_program_in(
+    root_files: Vec<SourceFile>,
+    provider: &mut dyn PackageProvider,
+    edition: Edition,
+) -> ResolvedProgram {
+    resolve_root(root_files, provider, None, edition).with_edition(edition)
 }
 
 /// Resolves the files of library package `name` on their own, as `byard check`
@@ -451,15 +467,33 @@ pub fn resolve_library(
     root_files: Vec<SourceFile>,
     provider: &mut dyn PackageProvider,
 ) -> ResolvedProgram {
-    resolve_root(root_files, provider, Some(name.to_string()))
+    resolve_root(
+        root_files,
+        provider,
+        Some(name.to_string()),
+        Edition::BASELINE,
+    )
+}
+
+/// [`resolve_library`] for a package written in `edition`.
+#[must_use]
+pub fn resolve_library_in(
+    name: &str,
+    root_files: Vec<SourceFile>,
+    provider: &mut dyn PackageProvider,
+    edition: Edition,
+) -> ResolvedProgram {
+    resolve_root(root_files, provider, Some(name.to_string()), edition).with_edition(edition)
 }
 
 fn resolve_root(
     root_files: Vec<SourceFile>,
     provider: &mut dyn PackageProvider,
     root_library: Option<String>,
+    edition: Edition,
 ) -> ResolvedProgram {
     let mut r = Resolver {
+        edition,
         provider,
         map: SourceMap::default(),
         errors: Vec::new(),
@@ -548,7 +582,12 @@ impl Resolver<'_> {
         let mut dep_requests: Vec<(String, Span)> = Vec::new();
 
         for file in files {
-            let parsed = parse(&file.source);
+            let in_edition = if name == ROOT_PACKAGE {
+                self.edition
+            } else {
+                Edition::BASELINE
+            };
+            let parsed = parse_in(&file.source, in_edition);
             let base = self.map.add(file.name, file.source);
 
             for mut err in parsed.errors {
@@ -1474,6 +1513,7 @@ impl Resolver<'_> {
 mod tests {
     use super::*;
     use crate::interp::eval::Interpreter;
+    use crate::parser::parse;
     use std::collections::BTreeMap;
 
     /// An in-memory provider: package name → files.

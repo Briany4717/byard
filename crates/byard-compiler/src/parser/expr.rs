@@ -85,6 +85,12 @@ impl Parser<'_> {
                     Expr::Ident(sym, span)
                 }
             }
+            // `untrack(expr)`: reads without recording. Reserved, and called like
+            // a name, so it is the name of the call.
+            Some(Token::Untrack) if matches!(self.peek2(), Some(Token::LParen)) => {
+                self.advance();
+                Expr::Ident(Symbol::intern("untrack"), span)
+            }
             Some(Token::Minus) => self.parse_negative(),
             Some(Token::Bang) => self.parse_not(),
             Some(Token::Style) => self.parse_style_value(),
@@ -709,8 +715,13 @@ impl Parser<'_> {
             // Ternary (right-assoc): tighter than `||` (RFC-0027 §1 note), looser
             // than comparison. `right: 6` keeps the else-branch one power above
             // `with` (L3) so `a ? b : c with k` groups as `(a ? b : c) with k`.
+            //
+            // From edition 2027 it is looser than `||` too, as in the languages
+            // people come from: `a || b ? x : y` is `(a || b) ? x : y`.
+            Token::Question if self.loose_ternary => Some(Bp { left: 4, right: 4 }),
             Token::Question => Some(Bp { left: 6, right: 6 }),
             // `||` (RFC-0027 §2): short-circuit, lowest of the logic band.
+            Token::PipePipe if self.loose_ternary => Some(Bp { left: 5, right: 6 }),
             Token::PipePipe => Some(Bp { left: 4, right: 5 }),
             // `with` animation operator (RFC-0010): below the ternary, above
             // assignment, so `(cond ? a : b) with anim.spring()` is the value.
@@ -1224,6 +1235,7 @@ impl Parser<'_> {
     /// written, not at the file's start.
     fn parse_fragment_expr(&mut self, frag: &str, offsets: Vec<u32>) -> Expr {
         let mut sub = Parser::new_fragment(frag, offsets);
+        sub.loose_ternary = self.loose_ternary;
         let expr = sub.parse_expr(0);
         // `{ }` holds one expression; what follows it would be dropped.
         if sub.cur().is_some() && sub.errors.is_empty() {

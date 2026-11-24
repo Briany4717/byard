@@ -22,7 +22,9 @@ use std::time::SystemTime;
 use byard_compiler::CompileError;
 use byard_compiler::interp::theme::Theme;
 use byard_compiler::parser::ast::ViewDecl;
-use byard_compiler::resolve::{PackageProvider, SourceFile, resolve_library, resolve_program};
+use byard_compiler::resolve::{
+    PackageProvider, SourceFile, resolve_library_in, resolve_program, resolve_program_in,
+};
 use byard_project::check::check_views_where;
 use byard_project::deps::{FsProvider, Lockfile, declare_native_views, project_source_paths};
 use byard_project::manifest::Manifest;
@@ -393,11 +395,15 @@ fn analyze_in(project: &Project, index: usize, doc: &Document, open: &[Arc<Docum
             .unwrap_or_else(PoisonError::into_inner);
         let files = project.sources(doc, open);
         if project.manifest.library {
-            resolve_library(&project.manifest.name, files, &mut *packages)
+            resolve_library_in(
+                &project.manifest.name,
+                files,
+                &mut *packages,
+                project.manifest.edition,
+            )
         } else {
-            resolve_program(files, &mut *packages)
+            resolve_program_in(files, &mut *packages, project.manifest.edition)
         }
-        .with_edition(project.manifest.edition)
     };
     // The root project's files come first in the program's source map, in the
     // order they were given.

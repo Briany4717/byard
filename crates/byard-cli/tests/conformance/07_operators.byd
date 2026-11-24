@@ -66,8 +66,33 @@ var a = false
 var b = true
 Text(a || b ? "on" : "off")
 
+//# case: ternary-is-looser-than-or-in-2027-and-says-nothing
+//# edition: 2027
+//# fragment
+//# text: on | off
+var a = false
+var b = true
+Text(a || b ? "on" : "off")
+Text(a && b ? "on" : "off")
+
+//# case: ternary-in-2027-keeps-right-association-and-the-else-arm
+//# edition: 2027
+//# fragment
+//# text: B | x
+var n = 5
+Text(n > 9 ? "A" : n > 3 ? "B" : "C")
+Text(n > 9 || n < 0 ? "y" : n == 5 || n == 6 ? "x" : "z")
+
+//# case: ternary-in-2027-takes-a-whole-or-as-its-else
+//# edition: 2027
+//# fragment
+//# text: true
+var a = false
+var b = true
+Text("{a ? false : a || b}")
+
 //# case: ternary-after-or-means-or-of-a-ternary
-//# gap: `a || b ? x : y` is `a || (b ? x : y)`; every other language reads `(a || b) ? x : y`
+//# edition: 2027
 //# fragment
 //# text: on
 var a = true

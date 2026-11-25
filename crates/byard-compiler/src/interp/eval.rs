@@ -1657,7 +1657,8 @@ impl Interpreter {
                 // Resolve `inject T as name` from the ambient environment chain.
                 let ty_name = match ty {
                     crate::parser::ast::Type::Named { name: n, .. } => n.clone(),
-                    crate::parser::ast::Type::Function { .. } => Symbol::intern("?"),
+                    crate::parser::ast::Type::Function { .. }
+                    | crate::parser::ast::Type::Optional { .. } => Symbol::intern("?"),
                 };
                 // A context of the program (RFC-0065): the nearest provider
                 // among the views being drawn, or its defaults.
@@ -1705,7 +1706,11 @@ impl Interpreter {
     /// where a `Float` was written is a `Float`: `var w: Float = 3` holds `3.0`,
     /// so `w / 2` is `1.5`.
     fn define_typed_var(&mut self, name: Symbol, init: &Expr, ty: Option<&Type>) -> SignalId {
-        let mut initial = self.eval_pure(init);
+        let mut initial = if self.is_none_word(init) {
+            Value::Unit
+        } else {
+            self.eval_pure(init)
+        };
         if let Some(ty) = ty {
             initial = coerce_to(initial, ty);
         }
@@ -1893,7 +1898,7 @@ impl Interpreter {
 
     /// `let y = init` (and a `fn` with no parameters), open a computed memo.
     pub fn define_let(&mut self, name: Symbol, init: &Expr) -> ScopeId {
-        let compute = self.lower_expr(init, None);
+        let compute = self.lower_value(init, None);
         let scope = self.ctx.open_memo(compute);
         self.env.push(name, Value::Memo(scope));
         scope
@@ -2653,6 +2658,9 @@ pub(super) fn coerced_arg(
 /// `value` as the type written for it: an `Int` is a `Float` where a `Float` is
 /// wanted, and so is each item of a `List<Float>`. Anything else is as it was.
 fn coerce_to(value: Value, ty: &Type) -> Value {
+    if let Type::Optional { inner, .. } = ty {
+        return coerce_to(value, inner);
+    }
     let Type::Named { name, args, .. } = ty else {
         return value;
     };

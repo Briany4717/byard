@@ -163,11 +163,40 @@ View Main() {
 }
 
 //# case: optional-chaining
-//# gap: `a?.b` does not parse; the `?` is read as a ternary
 //# fragment
 //# text: none
 let u = { a: 1 }
 Text("{u.x?.y ?? "none"}")
+
+//# case: optional-chaining-follows-a-chain-and-stops-at-the-first-nothing
+//# text: Lima | unknown
+type Place = { city: Str }
+type User = { name: Str, home: Place? }
+View Main() {
+    var a: User = { name: "Ada", home: { city: "Lima" } }
+    var b: User = { name: "Bo" }
+    Text("{a.home?.city ?? "unknown"}")
+    Text("{b.home?.city ?? "unknown"}")
+}
+
+//# case: optional-chaining-on-an-optional-var
+//# text: 2 | 0
+type Box = { a: Int }
+View Main() {
+    var u: Box? = { a: 2 }
+    var v: Box? = none
+    Text("{u?.a ?? 0}")
+    Text("{v?.a ?? 0}")
+}
+
+//# case: optional-chaining-does-not-make-a-plain-read-safe
+//# error: NoneNotHandled
+//# diagnostics: 1
+type Box = { a: Int }
+View Main() {
+    var u: Box? = none
+    Text("{u.a}")
+}
 
 //# case: equality-across-types-is-an-error
 //# fragment

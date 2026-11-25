@@ -505,7 +505,7 @@ fn collect_expr_tokens(expr: &Expr, out: &mut Vec<RawToken>) {
                 collect_expr_tokens(&arg.value, out);
             }
         }
-        Expr::Member { base, field, span } => {
+        Expr::Member { base, field, span } | Expr::OptionalMember { base, field, span } => {
             collect_expr_tokens(base, out);
             let field_start = span.end as usize - field.as_str().len();
             out.push(RawToken {

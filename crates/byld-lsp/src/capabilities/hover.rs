@@ -174,6 +174,7 @@ fn type_text(ty: &byard_compiler::parser::ast::Type) -> String {
             let args: Vec<String> = args.iter().map(type_text).collect();
             format!("{name}<{}>", args.join(", "))
         }
+        Type::Optional { inner, .. } => format!("{}?", type_text(inner)),
         Type::Function { params, ret, .. } => {
             let params: Vec<String> = params.iter().map(type_text).collect();
             let ret = ret

@@ -26,9 +26,9 @@ use crate::symbol::Symbol;
 
 /// The closed set of list methods (RFC-0027 §4), used for the `UnknownMethod`
 /// suggestion.
-const LIST_METHODS: [&str; 15] = [
+const LIST_METHODS: [&str; 16] = [
     "push", "removeAt", "contains", "map", "filter", "slice", "sort", "sortBy", "reduce", "find",
-    "indexOf", "min", "max", "reverse", "join",
+    "indexOf", "min", "max", "reverse", "join", "get",
 ];
 
 /// The methods a `Str` has at runtime (`len` is a field). Any other call on a
@@ -1160,6 +1160,21 @@ impl Checker<'_> {
         }
     }
 
+    /// The type of an optional name bound to another name (`let v = n`,
+    /// `if let v = n`): it is passed on, not read, so `v` may be nothing too.
+    fn optional_passed_on(&self, written: Option<&Type>, init: &Expr) -> Option<Ty> {
+        if written.is_some() {
+            return None;
+        }
+        let Expr::Ident(name, _) = init else {
+            return None;
+        };
+        match self.env.get(name) {
+            Some(ty @ Ty::Optional(_)) => Some(ty.clone()),
+            _ => None,
+        }
+    }
+
     /// Checks `value`, an argument that may take an optional value: when it
     /// may, a bare optional name passed on is not a read.
     fn check_value_for(&mut self, value: &Expr, takes_optional: bool) -> Ty {
@@ -1329,6 +1344,7 @@ impl Checker<'_> {
     fn type_has_equality(&self, ty: &Type, depth: u32) -> bool {
         match ty {
             Type::Function { .. } => false,
+            Type::Optional { inner, .. } => self.type_has_equality(inner, depth),
             Type::Named { name, args, .. } => match name.as_str() {
                 "List" => false,
                 "Int" | "Color" | "Float" | "Str" | "Bool" => true,
@@ -1711,7 +1727,9 @@ impl Checker<'_> {
                 init,
                 span,
             } => {
-                let inferred = self.infer_binding(ty.as_ref(), init, *span);
+                let inferred = self
+                    .optional_passed_on(ty.as_ref(), init)
+                    .unwrap_or_else(|| self.infer_binding(ty.as_ref(), init, *span));
                 let origin = if matches!(member, Member::Var { .. }) {
                     Origin::Var
                 } else {
@@ -2354,6 +2372,34 @@ impl Checker<'_> {
                     Ty::Unknown
                 }
             }
+            // `a?.b`: reading `a` here is the point, so a `a` that may be nothing
+            // is not told. The field is of what `a` holds, and may be nothing.
+            Expr::OptionalMember { base, field, span } => {
+                let path = self.optional_path(base);
+                if let Some(path) = &path {
+                    self.narrowed.push(path.clone());
+                }
+                let held = self.value(base);
+                if path.is_some() {
+                    self.narrowed.pop();
+                }
+                let held = match held {
+                    Ty::Optional(inner) => *inner,
+                    other => other,
+                };
+                let found = match &held {
+                    Ty::Shape(known) => self.shape_field(known, field, *span),
+                    Ty::Named(record) => match self.record_field(record, field, *span) {
+                        Ty::Optional(inner) => *inner,
+                        ty => ty,
+                    },
+                    _ => Ty::Unknown,
+                };
+                match found {
+                    Ty::Unknown => Ty::Unknown,
+                    ty => Ty::Optional(Box::new(ty)),
+                }
+            }
             Expr::Call { callee, args, span } => self.check_call(callee, args, *span),
             // `(vertical: 8)`, `(kind: radial, …)`: a property's own shape.
             // A named field is a value (an offset, a colour, a length), so
@@ -2396,9 +2442,11 @@ impl Checker<'_> {
             // what holds the block (a lambda, an `if` branch, an arm) ends
             // the scope.
             Expr::Block(stmts, _) => {
+                let mark = self.undo.len();
                 for stmt in stmts {
                     self.value(stmt);
                 }
+                self.leave(mark);
                 Ty::Unknown
             }
             // The elements a call hands to a `Slot`, checked in the caller's
@@ -2414,7 +2462,9 @@ impl Checker<'_> {
                 value,
                 span,
             } => {
-                let bound = self.infer_binding(ty.as_ref(), value, *span);
+                let bound = self
+                    .optional_passed_on(ty.as_ref(), value)
+                    .unwrap_or_else(|| self.infer_binding(ty.as_ref(), value, *span));
                 self.bind_from(name.clone(), bound, Origin::Let);
                 self.note_signature(name, value, true);
                 Ty::Unknown
@@ -2432,7 +2482,17 @@ impl Checker<'_> {
                 target, op, value, ..
             } => {
                 self.check_write_target(target);
+                // Writing an optional is not reading it.
+                let path = (*op == AssignOp::Assign)
+                    .then(|| self.optional_path(target))
+                    .flatten();
+                if let Some(path) = &path {
+                    self.narrowed.push(path.clone());
+                }
                 self.value(target);
+                if path.is_some() {
+                    self.narrowed.pop();
+                }
                 let found = self.value(value);
                 if let Some(var) = self.written_ty(target) {
                     self.check_assignment(&var, *op, value, &found, value.span());
@@ -2981,6 +3041,17 @@ impl Checker<'_> {
                 if let (Ty::List(item), "push", 0) = (recv, name.as_str(), i) {
                     self.must_fit(item, &found, arg.value.span());
                 }
+                // An item is found by a whole number.
+                if let (Ty::List(_), "get", 0) = (recv, name.as_str(), i) {
+                    if is_concrete(&found) && found != Ty::Int {
+                        self.errors.push(CompileError::TypeMismatch {
+                            span: arg.value.span(),
+                            op: "[]".to_string(),
+                            lhs_ty: ty_name(recv),
+                            rhs_ty: ty_name(&found),
+                        });
+                    }
+                }
             }
         }
         match (recv, name.as_str()) {
@@ -2989,6 +3060,9 @@ impl Checker<'_> {
                 "push" | "removeAt" | "filter" | "slice" | "sort" | "sortBy" | "reverse",
             )
             | (Ty::Int | Ty::Float, "abs") => recv.clone(),
+            // `xs.get(i)` is the item, or nothing past the end: a `T?`, where
+            // `xs[i]` is a `T`.
+            (Ty::List(item), "get") => Ty::Optional(item.clone()),
             (Ty::List(_) | Ty::Str, "indexOf")
             | (Ty::Int, "alpha")
             | (Ty::Str, "toInt")
@@ -3200,6 +3274,7 @@ impl Checker<'_> {
                     self.check_type_names(arg);
                 }
             }
+            Type::Optional { inner, .. } => self.check_type_names(inner),
             Type::Function { params, ret, .. } => {
                 for param in params {
                     self.check_type_names(param);
@@ -3238,6 +3313,7 @@ impl Checker<'_> {
                     }
                 }
             }
+            Type::Optional { inner, .. } => Ty::Optional(Box::new(self.resolve_type(inner))),
             Type::Function { params, ret, .. } => {
                 let params = params.iter().map(|p| self.resolve_type(p)).collect();
                 let ret = ret.as_ref().map(|r| Box::new(self.resolve_type(r)));
@@ -3270,6 +3346,7 @@ fn plain_ty(ty: &Type) -> Ty {
             "List" => Ty::List(Box::new(args.first().map_or(Ty::Unknown, plain_ty))),
             _ => Ty::Named(name.clone()),
         },
+        Type::Optional { inner, .. } => Ty::Optional(Box::new(plain_ty(inner))),
         Type::Function { params, ret, .. } => Ty::Fn(
             params.iter().map(plain_ty).collect(),
             ret.as_deref().map(|r| Box::new(plain_ty(r))),

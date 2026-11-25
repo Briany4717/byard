@@ -45,11 +45,24 @@ var ages: Map<Str, Int> = ["ada": 36, "bo": 1]
 Text("{ages.len} {ages["bo"] ?? 0} {ages["zed"] ?? 0}")
 
 //# case: list-get-is-optional
-//# gap: no `get`; an index that may be missing has no checked form
 //# fragment
 //# text: 1 9
 let xs = [1]
 Text("{xs.get(0) ?? 9} {xs.get(5) ?? 9}")
+
+//# case: list-get-with-a-negative-index-or-on-an-empty-list
+//# fragment
+//# text: 9 | 9
+let none: List<Int> = []
+let xs = [1]
+Text("{xs.get(-1) ?? 9}")
+Text("{none.get(0) ?? 9}")
+
+//# case: list-get-with-a-text-index-is-an-error
+//# fragment
+//# error: TypeMismatch
+let xs = [1]
+Text("{xs.get("a") ?? 9}")
 
 //# case: list-helpers
 //# gap: no `first`, `last`, `any`, `all`, `count`, `sum`
@@ -115,7 +128,6 @@ View Main() { Card() }
 Text("[{7:3}] [{7:03}]")
 
 //# case: if-let-on-an-optional
-//# gap: an optional is unwrapped only by `??`, or by `when x != none` on a parameter
 //# text: 3
 View Pill(n: Int? = none) {
     var shown = 0

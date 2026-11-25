@@ -380,6 +380,7 @@ Every method returns a new value and leaves the list as it was.
 | `map(f)` | `f(item)` for each |
 | `filter(f)` | The items for which `f(item)` is `true` |
 | `find(f)` | The first of those, or nothing |
+| `get(i)` | The item at `i`, or nothing past either end: a `T?` |
 | `sort()` | Smallest first, numbers or texts |
 | `sortBy(f)` | Ordered by `f(item)`, smallest first. Items that tie stay in the order they had. |
 | `reduce(start, f)` | `f(acc, item)` over each, from `start`. `start` for an empty list. |
@@ -685,8 +686,22 @@ and the true arm of `name != none ? a : b`. Any other read is `NoneNotHandled`. 
 of a `T?` is `none` and nothing else (`BadOptionalDefault`), and `none` compared with a
 value that cannot be nothing is `NoneNeedsOptional`.
 
-> **Not yet.** Only a parameter can be optional. A `var` cannot start as nothing.
-> (`10_bind_context_optional.byd`)
+Any value can be optional, not only a parameter (and a parameter's own `T?` is the same): `var picked: Int? = none`, a `let`, a record's
+field (`email: Str?`), a result. `none` is a value of every `T?` and of nothing else. It is
+written to a `var` as to any: `picked = none`, `picked = 3`, and writing is not reading, so
+`NoneNotHandled` is only for reads.
+
+Three forms make it pleasant:
+
+- `a?.b` is `b` of `a`, or nothing when `a` is, so `user.home?.city ?? "unknown"` follows a
+  chain that may stop anywhere. Where `a` is optional it is the safe way to read a field of it.
+- `if let v = a { … } else { … }` in an action runs the first block with `v` holding what `a`
+  holds when there is something, and the second when there is not. `v` is not there after the
+  block.
+- `xs.get(i)` is the item at `i` or nothing, a `T?`; `xs[i]` is a `T`.
+
+There is no `when let v = a { … }` in a view yet (write `when a != none { … }`), and a `fn`
+result and a lambda parameter cannot be written `T?`.
 
 ### Layout on a call
 

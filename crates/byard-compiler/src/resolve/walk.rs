@@ -139,7 +139,7 @@ pub(crate) fn expr(e: &mut Expr, f: &mut dyn FnMut(&mut Expr)) {
                 member_exprs(m, f);
             }
         }
-        Expr::Member { base, .. } => expr(base, f),
+        Expr::Member { base, .. } | Expr::OptionalMember { base, .. } => expr(base, f),
         Expr::Call { callee, args, .. } => {
             expr(callee, f);
             for a in args {
@@ -264,6 +264,7 @@ pub(crate) fn ty(t: &mut Type, f: &mut dyn FnMut(&mut Type)) {
                 ty(a, f);
             }
         }
+        Type::Optional { inner, .. } => ty(inner, f),
         Type::Function { params, ret, .. } => {
             for p in params {
                 ty(p, f);

@@ -166,6 +166,9 @@ impl Parser<'_> {
     fn parse_if(&mut self) -> Expr {
         let start = self.cur_span();
         self.advance(); // if
+        if matches!(self.cur(), Some(Token::Let)) {
+            return self.parse_if_let(start);
+        }
         let cond = Box::new(self.parse_expr(0));
         let then = Box::new(self.parse_stmt_block("'{' to open the `if` body"));
         let els = if self.eat(&Token::Else) {
@@ -183,6 +186,55 @@ impl Parser<'_> {
             els,
             span: self.span_from(start),
         }
+    }
+
+    /// `if let name = expr { … } else { … }`, after the `if`: it is a block that
+    /// holds the value in `name` and runs the first branch when there is one,
+    /// the second when there is not, so nothing else has to know a new form
+    /// exists. `name` is the value's own type, safe to read in the first branch.
+    fn parse_if_let(&mut self, start: Span) -> Expr {
+        self.advance(); // let
+        let name = self
+            .expect_ident("a name for the value")
+            .unwrap_or_else(|| Symbol::intern(""));
+        let name_span = self.span_from(start);
+        self.expect(&Token::Eq, "'='");
+        let value = self.parse_expr(0);
+        let then = Box::new(self.parse_stmt_block("'{' to open the `if let` body"));
+        let els = if self.eat(&Token::Else) {
+            if self.at_if_statement() {
+                Some(Box::new(self.parse_if()))
+            } else {
+                Some(Box::new(self.parse_stmt_block("'{' after `else`")))
+            }
+        } else {
+            None
+        };
+        let span = self.span_from(start);
+        let held = Expr::Let {
+            name: name.clone(),
+            ty: None,
+            value: Box::new(value),
+            span: name_span,
+        };
+        let is_there = Expr::Binary {
+            op: BinOp::Ne,
+            lhs: Box::new(Expr::Ident(name, name_span)),
+            rhs: Box::new(Expr::Ident(Symbol::intern("none"), name_span)),
+            span: name_span,
+        };
+        Expr::Block(
+            vec![
+                held,
+                Expr::If {
+                    cond: Box::new(is_there),
+                    then,
+                    els,
+                    span,
+                },
+            ],
+            span,
+        )
     }
 
     /// `"{" stmt* "}"` as an [`Expr::Block`].
@@ -221,7 +273,7 @@ impl Parser<'_> {
             .expect_ident("a binding name")
             .unwrap_or_else(|| Symbol::intern(""));
         let ty = if self.eat(&Token::Colon) {
-            Some(self.parse_type())
+            Some(self.parse_type_maybe_none())
         } else {
             None
         };
@@ -671,7 +723,7 @@ impl Parser<'_> {
     fn peek_led(&self) -> Option<Bp> {
         match self.cur()? {
             // Member access, indexing, and calls bind tightest.
-            Token::Dot | Token::LBrack => Some(Bp {
+            Token::Dot | Token::QuestionDot | Token::LBrack => Some(Bp {
                 left: 22,
                 right: 23,
             }),
@@ -737,6 +789,17 @@ impl Parser<'_> {
     fn parse_led(&mut self, lhs: Expr, right_bp: u8) -> Expr {
         let start = lhs.span();
         match self.cur().cloned() {
+            Some(Token::QuestionDot) => {
+                self.advance();
+                let field = self
+                    .expect_ident("a field name")
+                    .unwrap_or_else(|| Symbol::intern(""));
+                Expr::OptionalMember {
+                    base: Box::new(lhs),
+                    field,
+                    span: self.span_from(start),
+                }
+            }
             Some(Token::Dot) => {
                 self.advance();
                 let field = self

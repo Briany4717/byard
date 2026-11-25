@@ -664,8 +664,24 @@ impl Interpreter {
                         None => {}
                     }
                 }
+                // What is compared with the word `none` is asked whether it is
+                // nothing, a name a lambda or an `if let` holds included.
+                if matches!(op, BinOp::Eq | BinOp::Ne)
+                    && self.is_none_word(lhs) != self.is_none_word(rhs)
+                {
+                    let other = if self.is_none_word(lhs) { rhs } else { lhs };
+                    let mut read = self.lower_expr(other, payload_name);
+                    let want_present = op == BinOp::Ne;
+                    return Box::new(move |ctx| {
+                        Value::Bool(!matches!(read(ctx), Value::Unit) == want_present)
+                    });
+                }
                 let mut lc = self.lower_expr(lhs, payload_name);
-                let mut rc = self.lower_expr(rhs, payload_name);
+                let mut rc = if op == BinOp::Otherwise {
+                    self.lower_value(rhs, payload_name)
+                } else {
+                    self.lower_expr(rhs, payload_name)
+                };
                 match op {
                     BinOp::And => Box::new(move |ctx| {
                         // Evaluate, and thereby read-track, the RHS only when
@@ -724,7 +740,7 @@ impl Interpreter {
                 let mut spread_c = spread.as_ref().map(|s| self.lower_expr(s, payload_name));
                 let mut field_cs: Vec<(Symbol, Lowered)> = fields
                     .iter()
-                    .map(|(k, v)| (k.clone(), self.lower_expr(v, payload_name)))
+                    .map(|(k, v)| (k.clone(), self.lower_value(v, payload_name)))
                     .collect();
                 Box::new(move |ctx| {
                     let mut out: Vec<(Symbol, Value)> = match spread_c.as_mut().map(|c| c(ctx)) {
@@ -740,6 +756,16 @@ impl Interpreter {
                         }
                     }
                     Value::Record(out)
+                })
+            }
+            // `a?.b`: nothing when `a` is, the field otherwise.
+            Expr::OptionalMember { base, field, .. } => {
+                let mut base_c = self.lower_expr(base, payload_name);
+                let field = field.clone();
+                let graphemes = self.counts_graphemes();
+                Box::new(move |ctx| match base_c(ctx) {
+                    Value::Unit => Value::Unit,
+                    value => data_member(&value, &field, graphemes),
                 })
             }
             Expr::Call { callee, args, .. } => self.lower_call(callee, args, payload_name),
@@ -826,7 +852,7 @@ impl Interpreter {
                 }
                 if let Ok(sig) = self.resolve_var(target, *span) {
                     let op = *op;
-                    let mut rhs = self.lower_expr(value, payload_name);
+                    let mut rhs = self.lower_value(value, payload_name);
                     let saturate = self.saturates();
                     // A `var` of a record type: what arrives is compared with
                     // the type, and the first difference is reported, once
@@ -932,7 +958,7 @@ impl Interpreter {
                 value,
                 span,
             } => {
-                let mut compute = self.lower_expr(value, payload_name);
+                let mut compute = self.lower_value(value, payload_name);
                 let Some(ty) = ty
                     .clone()
                     .filter(|t| super::shape::names_a_record(t, &self.records))
@@ -1332,14 +1358,27 @@ impl Interpreter {
     /// One arm of a `?:`: the word `none` is nothing when the view binds no
     /// name `none` of its own, anything else lowers as an expression.
     fn lower_ternary_arm(&mut self, arm: &Expr, payload_name: Option<&Symbol>) -> Lowered {
-        if matches!(arm, Expr::Ident(n, _) if n.as_str() == "none")
+        self.lower_value(arm, payload_name)
+    }
+
+    /// Whether `expr` is the word `none` and nothing of the program's own is
+    /// called that: then it is nothing, not the text "none" it reads as in an
+    /// attribute.
+    pub(super) fn is_none_word(&self, expr: &Expr) -> bool {
+        matches!(expr, Expr::Ident(n, _) if n.as_str() == "none")
             && self.env.lookup(&Symbol::intern("none")).is_none()
             && !self.lambda_params.contains(&Symbol::intern("none"))
             && !self.consts.contains_key(&Symbol::intern("none"))
-        {
+    }
+
+    /// [`Self::lower_expr`] for a value that may be nothing: where a `var`, a
+    /// `let`, an arm, a field or what is written to one is the word `none`, it
+    /// is nothing.
+    pub(super) fn lower_value(&mut self, expr: &Expr, payload_name: Option<&Symbol>) -> Lowered {
+        if self.is_none_word(expr) {
             return Box::new(|_| Value::Unit);
         }
-        self.lower_expr(arm, payload_name)
+        self.lower_expr(expr, payload_name)
     }
 
     fn lower_ident(&self, name: &Symbol, payload_name: Option<&Symbol>) -> Lowered {
@@ -2086,6 +2125,14 @@ impl Interpreter {
                     _ => Value::Unit,
                 }))
             }
+            // `xs.get(i)`: the item at `i`, or nothing.
+            "get" => {
+                let mut at = self.lower_expr(&args.first()?.value, payload_name);
+                Some(Box::new(move |ctx| {
+                    let at = at(ctx);
+                    index_value(&base_c(ctx), &at, false)
+                }))
+            }
             "indexOf" => {
                 let graphemes = self.counts_graphemes();
                 let mut arg = self.lower_expr(&args.first()?.value, payload_name);
@@ -2235,7 +2282,11 @@ impl Interpreter {
                 span,
             } => {
                 let sig = self.resolve_var(target, *span)?;
-                let rhs = self.eval_pure(value);
+                let rhs = if self.is_none_word(value) {
+                    Value::Unit
+                } else {
+                    self.eval_pure(value)
+                };
                 let new = assigned(*op, &self.ctx.peek_signal(sig), rhs, self.saturates());
                 self.ctx.write_signal(sig, new);
                 Ok(Value::Unit)

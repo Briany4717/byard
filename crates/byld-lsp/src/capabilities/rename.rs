@@ -240,7 +240,7 @@ fn collect_name_spans_in_expr(expr: &Expr, target_name: &str, out: &mut Vec<Span
                 collect_name_spans_in_expr(&arg.value, target_name, out);
             }
         }
-        Expr::Member { base, field, span } => {
+        Expr::Member { base, field, span } | Expr::OptionalMember { base, field, span } => {
             collect_name_spans_in_expr(base, target_name, out);
             if field.as_str() == target_name {
                 let field_start = span.end as usize - field.as_str().len();

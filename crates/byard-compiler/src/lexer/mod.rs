@@ -315,6 +315,9 @@ pub enum Token {
     /// own tokens.
     #[token("+")]
     Plus,
+    /// `?.`, a field read that is nothing when what it reads from is.
+    #[token("?.")]
+    QuestionDot,
     /// `*`, binary multiplication (see [`Token::Plus`]).
     #[token("*")]
     Star,

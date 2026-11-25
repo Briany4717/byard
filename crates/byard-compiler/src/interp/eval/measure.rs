@@ -259,6 +259,7 @@ pub(super) fn children(expr: &Expr) -> Vec<&Expr> {
         Expr::Array(items, _) | Expr::Block(items, _) => items.iter().collect(),
         Expr::Tuple(args, _) => args.iter().map(|a| &a.value).collect(),
         Expr::Member { base, .. }
+        | Expr::OptionalMember { base, .. }
         | Expr::Postfix { target: base, .. }
         | Expr::Unary { rhs: base, .. }
         | Expr::Lambda { body: base, .. }

@@ -15,7 +15,7 @@ So every step below ends the same way: **its cases lose their `gap:` line, the r
 loses its note, and this file loses the step.** When this file is empty and the suite has no
 gap, the language is where this document wanted it.
 
-As written, the suite has 658 cases: 632 hold and 26 are gaps.
+As written, the suite has 672 cases: 650 hold and 22 are gaps.
 
 ```sh
 cargo test -p byard-cli --test it conformance -- --nocapture
@@ -176,12 +176,19 @@ is only the order.
 
 ### 13. `none` for any value
 
-*Cases:* `optional-var`, `if-let-on-an-optional`, `optional-chaining`,
-`list-get-is-optional`.
+*Left:* a few forms, with no case yet. `optional-var`, `if-let-on-an-optional`,
+`optional-chaining` and `list-get-is-optional` hold, and so do the fourteen cases added with
+them. `T?` is written on a `var`, a `let` and in a record; `a?.b` is a field read that is
+nothing when `a` is; `if let v = a { … } else { … }` in an action binds `v` to the value, in
+that block only; `xs.get(i)` is a `T?`. All of it is in every edition: none of it was written
+before. Passing an optional on to a `let` (`let v = n`) is not a read, and writing one is not
+either.
 
-`T?` on a `var`, a field and a result, not only a parameter. Then the three things that
-make it pleasant: `a?.b`, `if let v = a { … }` in an action, and `xs.get(i)`, which is
-`T?` where `xs[i]` is `T`. Do this before `match`, which needs it.
+- `when let v = a { … }` in a view. `when a != none { … }` does it for a name today.
+- `T?` as the result of a `fn` or the type of a lambda's parameter.
+- `optional-var` was written with `picked ?? "none"` on an `Int?`, which the neighbouring
+  `otherwise-default-of-the-wrong-type` refuses for the same shape; its default is `0` now,
+  and `??` stays strict.
 
 ### 14. `match`, and enums that carry values
 

@@ -1997,7 +1997,9 @@ fn animated_anywhere(value: &Expr) -> bool {
         Expr::Call {
             callee, args: a, ..
         } => animated_anywhere(callee) || args(a),
-        Expr::Member { base, .. } | Expr::Postfix { target: base, .. } => animated_anywhere(base),
+        Expr::Member { base, .. }
+        | Expr::OptionalMember { base, .. }
+        | Expr::Postfix { target: base, .. } => animated_anywhere(base),
         Expr::Lambda { body, .. } | Expr::Unary { rhs: body, .. } => animated_anywhere(body),
         Expr::Assign { target, value, .. } => animated_anywhere(target) || animated_anywhere(value),
         Expr::Index { base, index, .. } => animated_anywhere(base) || animated_anywhere(index),

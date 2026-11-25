@@ -25,6 +25,7 @@ pub fn names_a_record(ty: &Type, records: &Records) -> bool {
         Type::Named { name, args, .. } => {
             records.contains_key(name) || args.iter().any(|a| names_a_record(a, records))
         }
+        Type::Optional { inner, .. } => names_a_record(inner, records),
         Type::Function { .. } => false,
     }
 }
@@ -103,6 +104,7 @@ pub fn written(ty: &Type) -> String {
             name.as_str(),
             args.iter().map(written).collect::<Vec<_>>().join(", ")
         ),
+        Type::Optional { inner, .. } => format!("{}?", written(inner)),
         Type::Function { .. } => "Fn".to_string(),
     }
 }

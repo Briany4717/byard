@@ -1022,7 +1022,7 @@ impl<'a> Parser<'a> {
             .expect_decl_name(if is_var { "a `var`" } else { "a `let`" }, "a binding name")
             .unwrap_or_else(|| Symbol::intern(""));
         let ty = if self.eat(&Token::Colon) {
-            Some(self.parse_type())
+            Some(self.parse_type_maybe_none())
         } else {
             None
         };
@@ -1526,6 +1526,19 @@ impl<'a> Parser<'a> {
     /// `type := IDENT ("<" type ("," type)* ">")?`, plus the function type
     /// `Fn(type,*) ("->" type)?` (RFC-0003 E2). `Fn` lexes as a plain `Ident`,
     /// so it is recognized here by name.
+    /// A type that may be followed by `?`: `Int?`, a value that may be nothing.
+    fn parse_type_maybe_none(&mut self) -> Type {
+        let start = self.cur_span();
+        let ty = self.parse_type();
+        if self.eat(&Token::Question) {
+            return Type::Optional {
+                inner: Box::new(ty),
+                span: self.span_from(start),
+            };
+        }
+        ty
+    }
+
     fn parse_type(&mut self) -> Type {
         let start = self.cur_span();
         let mut name = self

@@ -100,6 +100,10 @@ pub(super) fn shift_type(ty: &mut Type, delta: u32) {
                 shift_type(arg, delta);
             }
         }
+        Type::Optional { inner, span } => {
+            shift(span, delta);
+            shift_type(inner, delta);
+        }
         Type::Function { params, ret, span } => {
             shift(span, delta);
             for p in params {
@@ -296,7 +300,7 @@ fn shift_expr(expr: &mut Expr, delta: u32) {
                 shift_arg(arg, delta);
             }
         }
-        Expr::Member { base, span, .. } => {
+        Expr::Member { base, span, .. } | Expr::OptionalMember { base, span, .. } => {
             shift(span, delta);
             shift_expr(base, delta);
         }

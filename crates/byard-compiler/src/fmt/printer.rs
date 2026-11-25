@@ -129,7 +129,7 @@ fn kind_of(token: &Token) -> K {
         Token::RBrace => K::RBrace,
         Token::Comma => K::Comma,
         Token::Colon => K::Colon,
-        Token::Dot => K::Dot,
+        Token::Dot | Token::QuestionDot => K::Dot,
         Token::DotDot => K::DotDot,
         Token::PlusPlus | Token::MinusMinus => K::Incr,
         Token::Minus => K::Minus,

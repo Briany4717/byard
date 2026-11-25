@@ -24,6 +24,14 @@ pub enum Type {
         /// Source span.
         span: Span,
     },
+    /// `T?`, a value that may be nothing: a `var`, a `let`, a result written
+    /// with it. (A parameter's `T?` is its own flag, [`Param::optional`].)
+    Optional {
+        /// The type of the value when there is one.
+        inner: Box<Type>,
+        /// Source span.
+        span: Span,
+    },
     /// A function type `Fn(P0, P1, ...) -> R` (RFC-0003 E2). `ret` is `None`
     /// for a callback with no declared return.
     Function {
@@ -41,7 +49,9 @@ impl Type {
     #[must_use]
     pub fn span(&self) -> Span {
         match self {
-            Self::Named { span, .. } | Self::Function { span, .. } => *span,
+            Self::Named { span, .. }
+            | Self::Function { span, .. }
+            | Self::Optional { span, .. } => *span,
         }
     }
 }
@@ -961,6 +971,15 @@ pub enum Expr {
         /// Source span.
         span: Span,
     },
+    /// `a?.b`: the field `b` of `a`, or nothing when `a` is nothing.
+    OptionalMember {
+        /// The receiver, which may be nothing.
+        base: Box<Expr>,
+        /// The field name.
+        field: Symbol,
+        /// Source span.
+        span: Span,
+    },
     /// A call `callee(args)`.
     Call {
         /// The callee.
@@ -1288,6 +1307,7 @@ impl Expr {
             | Self::ClassRef(_, span)
             | Self::Member { span, .. }
             | Self::Call { span, .. }
+            | Self::OptionalMember { span, .. }
             | Self::ControllerCall { span, .. }
             | Self::Lambda { span, .. }
             | Self::Block(_, span)

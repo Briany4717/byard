@@ -555,8 +555,10 @@ A case is a different type from text and from the cases of another enum. In a te
 controller and in JSON it is its name. Where a view's parameter is declared with the enum,
 a call may write the case alone, `.large`; anywhere else that is `EnumShorthand`.
 
-> **Not yet.** There is no `match`, a case cannot carry values, and nothing says when a
-> chain of `when`s forgets a case. (`11_control_flow.byd`, `15_wanted_for_1_0.byd`)
+`match` says what to do for each case (see [`match`](#match)). A case cannot carry values yet.
+
+> **Not yet.** An enum case cannot carry values, `Load.failed(message: "offline")`.
+> (`15_wanted_for_1_0.byd`)
 
 ### Contexts
 
@@ -821,6 +823,44 @@ when := "when" expr "{" member* "}" ("else" ( "{" member* "}" | when ))?
 Shows its block while the condition holds, and the `else` block otherwise. Only the arm
 that holds exists: its instances are made when it starts to hold and gone when it stops.
 `byard check` checks every arm, shown or not.
+
+### `match`
+
+```text
+match := "match" expr "{" (pattern "=>" body ","?)+ "}"
+```
+
+One thing for each case of a value. As an expression its arms are values, as a view member
+they are members (one, or a `{ … }` of them) and only the arm that holds is drawn, and in an
+action they are actions:
+
+```byld
+enum Load { idle, loading, failed }
+
+View Main() {
+    var state = Load.loading
+    on mount => { state = Load.failed }
+    match state {
+        .idle    => Text("Nothing yet")
+        .loading => Text("Loading")
+        .failed  => Text("Could not load")
+    }
+    Text(match state { .idle => "i", .loading => "l", else => "x" })
+}
+```
+
+A pattern is `.case`, or `Enum.case`, a literal (`true`, `3`, `"a"`), or `else`. An arm is
+separated from the next by a comma or a line break. The arms of a value are of one type
+(`TypeMismatch`), and a case that is not the enum's is `UnknownEnumCase`.
+
+**Every case has to be covered**, or there is an `else =>`: a `match` that leaves one out is
+`NonExhaustive`, and names it. A `Bool` is covered by `true` and `false`; an `Int` or a `Text`
+needs an `else`. A `match` has at least one arm. The word is only `match` where a value follows
+it: `match(name)` is still the call that reads an anchor's width.
+
+A chain of `when`s over one enum, `when s == S.a { … } else when s == S.b { … }`, that ends
+with no `else { … }` and leaves a case out is the warning `NonExhaustive`: it draws nothing for
+that case, which is what `match` would have said.
 
 ### `for`
 

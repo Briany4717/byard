@@ -17,7 +17,6 @@ View Main() {
 }
 
 //# case: match-as-a-view-member
-//# gap: there is no `match`
 //# text: b
 enum S { a, b }
 View Main() {
@@ -29,7 +28,6 @@ View Main() {
 }
 
 //# case: match-must-cover-every-case
-//# gap: there is no `match`
 //# error: NonExhaustive
 enum S { a, b }
 View Main() {

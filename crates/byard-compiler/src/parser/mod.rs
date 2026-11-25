@@ -936,6 +936,7 @@ impl<'a> Parser<'a> {
             {
                 Some(self.parse_provide())
             }
+            Some(Token::Ident(_)) if self.at_match() => Some(self.parse_match_member()),
             Some(Token::For) => Some(self.parse_for()),
             Some(Token::When) => Some(self.parse_when()),
             Some(Token::Style) => Some(self.parse_style_block()),
@@ -1220,6 +1221,46 @@ impl<'a> Parser<'a> {
     }
 
     /// `when_stmt := "when" expr "{" member* "}" ("else" ("{" member* "}" | when_stmt))?`.
+    /// `match scrutinee { pattern => member … }` as a view member: each arm is
+    /// one member or a `{ … }` of them, and only the arm that holds is drawn.
+    fn parse_match_member(&mut self) -> Member {
+        let start = self.cur_span();
+        self.advance(); // match
+        let scrutinee = self.parse_expr(0);
+        self.expect(&Token::LBrace, "'{' to open the arms of the `match`");
+        let mut arms = Vec::new();
+        while !matches!(self.cur(), Some(Token::RBrace) | None) {
+            let before = self.pos;
+            let arm_start = self.cur_span();
+            if let Some(pattern) = self.parse_pattern() {
+                self.expect(&Token::Arrow, "'=>' after the pattern");
+                let body = if self.eat(&Token::LBrace) {
+                    self.parse_block_members()
+                } else {
+                    self.parse_member().into_iter().collect()
+                };
+                arms.push(ast::Arm {
+                    pattern,
+                    body,
+                    span: self.span_from(arm_start),
+                });
+            }
+            self.eat(&Token::Comma);
+            if self.pos == before {
+                self.advance();
+            }
+        }
+        if arms.is_empty() && matches!(self.cur(), Some(Token::RBrace)) {
+            self.error("an arm: a `match` has at least one, as in `.a => …`");
+        }
+        self.expect(&Token::RBrace, "'}' to close the `match`");
+        Member::Match {
+            scrutinee,
+            arms,
+            span: self.span_from(start),
+        }
+    }
+
     fn parse_when(&mut self) -> Member {
         let start = self.cur_span();
         self.advance(); // when

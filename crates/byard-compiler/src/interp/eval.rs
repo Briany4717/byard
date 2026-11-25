@@ -95,6 +95,7 @@ fn members_span(members: &[Member]) -> Span {
             | Member::Provide { span, .. }
             | Member::For { span, .. }
             | Member::When { span, .. }
+            | Member::Match { span, .. }
             | Member::Route { span, .. }
             | Member::Lifecycle { span, .. }
             | Member::Timer { span, .. }

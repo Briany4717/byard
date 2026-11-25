@@ -128,6 +128,11 @@ fn inside(member: &Member, out: &mut Vec<CompileError>) {
         Member::For { body, .. } | Member::Route { body, .. } => {
             scope(body, HashMap::new(), true, out);
         }
+        Member::Match { arms, .. } => {
+            for arm in arms {
+                scope(&arm.body, HashMap::new(), true, out);
+            }
+        }
         Member::When { then, els, .. } => {
             scope(then, HashMap::new(), true, out);
             if let Some(els) = els {
@@ -404,6 +409,11 @@ fn views_drawn_in(list: &[Member], drawn: &mut HashSet<Symbol>) {
                 }
             }
             Member::For { body, .. } | Member::Route { body, .. } => views_drawn_in(body, drawn),
+            Member::Match { arms, .. } => {
+                for arm in arms {
+                    views_drawn_in(&arm.body, drawn);
+                }
+            }
             Member::When { then, els, .. } => {
                 views_drawn_in(then, drawn);
                 if let Some(els) = els {
@@ -474,6 +484,11 @@ fn declared(members: &[Member], f: &mut dyn FnMut(&str, &Symbol, Span)) {
             Member::Var { name, span, .. } => f("var", name, *span),
             Member::Let { name, span, .. } => f("let", name, *span),
             Member::For { body, .. } | Member::Route { body, .. } => declared(body, f),
+            Member::Match { arms, .. } => {
+                for arm in arms {
+                    declared(&arm.body, f);
+                }
+            }
             Member::When { then, els, .. } => {
                 declared(then, f);
                 if let Some(els) = els {

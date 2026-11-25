@@ -157,6 +157,14 @@ fn collect_name_spans_in_members(members: &[Member], target_name: &str, out: &mu
             Member::Route { body, .. } => {
                 collect_name_spans_in_members(body, target_name, out);
             }
+            Member::Match {
+                scrutinee, arms, ..
+            } => {
+                collect_name_spans_in_expr(scrutinee, target_name, out);
+                for arm in arms {
+                    collect_name_spans_in_members(&arm.body, target_name, out);
+                }
+            }
             Member::When {
                 cond, then, els, ..
             } => {
@@ -275,6 +283,14 @@ fn collect_name_spans_in_expr(expr: &Expr, target_name: &str, out: &mut Vec<Span
         }
         Expr::Postfix { target, .. } => {
             collect_name_spans_in_expr(target, target_name, out);
+        }
+        Expr::Match {
+            scrutinee, arms, ..
+        } => {
+            collect_name_spans_in_expr(scrutinee, target_name, out);
+            for arm in arms {
+                collect_name_spans_in_expr(&arm.body, target_name, out);
+            }
         }
         Expr::If {
             cond, then, els, ..

@@ -556,6 +556,8 @@ fn resolve_root(
     if r.errors.is_empty() {
         r.errors.extend(crate::infer::check_views(&views).errors);
     }
+    // What was written has been checked; what runs is the chain it means.
+    crate::desugar::matches(&mut views);
 
     ResolvedProgram {
         views,

@@ -92,6 +92,14 @@ fn shift_param(param: &mut Param, delta: u32) {
     }
 }
 
+fn shift_pattern(pattern: &mut crate::parser::ast::Pattern, delta: u32) {
+    use crate::parser::ast::Pattern;
+    match pattern {
+        Pattern::Case { span, .. } | Pattern::Else(span) => shift(span, delta),
+        Pattern::Literal(e) => shift_expr(e, delta),
+    }
+}
+
 pub(super) fn shift_type(ty: &mut Type, delta: u32) {
     match ty {
         Type::Named { args, span, .. } => {
@@ -167,6 +175,21 @@ fn shift_member(member: &mut Member, delta: u32) {
             }
             for m in body {
                 shift_member(m, delta);
+            }
+        }
+        Member::Match {
+            scrutinee,
+            arms,
+            span,
+        } => {
+            shift(span, delta);
+            shift_expr(scrutinee, delta);
+            for arm in arms {
+                shift(&mut arm.span, delta);
+                shift_pattern(&mut arm.pattern, delta);
+                for m in &mut arm.body {
+                    shift_member(m, delta);
+                }
             }
         }
         Member::When {
@@ -371,6 +394,19 @@ fn shift_expr(expr: &mut Expr, delta: u32) {
             }
             if let Some(spread) = spread {
                 shift_expr(spread, delta);
+            }
+        }
+        Expr::Match {
+            scrutinee,
+            arms,
+            span,
+        } => {
+            shift(span, delta);
+            shift_expr(scrutinee, delta);
+            for arm in arms {
+                shift(&mut arm.span, delta);
+                shift_pattern(&mut arm.pattern, delta);
+                shift_expr(&mut arm.body, delta);
             }
         }
         Expr::If {

@@ -19,8 +19,8 @@ use std::collections::{HashMap, HashSet};
 use crate::diagnostics::{BindTarget, BindingProblem, CompileError, Span};
 use crate::interp::style::check_static;
 use crate::parser::ast::{
-    AssignOp, AttrKind, BinOp, ConstDecl, EnumDecl, Expr, FnDecl, Member, Param, PostfixOp,
-    StrPart, Type, UnOp, ViewDecl,
+    AssignOp, AttrKind, BinOp, ConstDecl, EnumDecl, Expr, FnDecl, Member, Param, Pattern,
+    PostfixOp, StrPart, Type, UnOp, ViewDecl,
 };
 use crate::symbol::Symbol;
 
@@ -1160,6 +1160,190 @@ impl Checker<'_> {
         }
     }
 
+    /// What the arms of a `match` are for, against what it matches: that a case
+    /// is one of the enum, that a literal is of the value's type, and that
+    /// nothing is left out (`NonExhaustive`).
+    fn check_patterns(&mut self, held: &Ty, patterns: &[&Pattern], span: Span) {
+        let enum_name = match held {
+            Ty::Named(n) if self.enums.contains_key(n) => Some(n.clone()),
+            _ => None,
+        };
+        let mut covered: Vec<Symbol> = Vec::new();
+        let mut literals: Vec<&Expr> = Vec::new();
+        let mut has_else = false;
+        for pattern in patterns {
+            match pattern {
+                Pattern::Else(_) => has_else = true,
+                Pattern::Case {
+                    enum_name: written,
+                    name,
+                    span: at,
+                } => {
+                    if let Some(enum_name) = &enum_name {
+                        let cases = self.enums.get(enum_name).cloned().unwrap_or_default();
+                        if written.as_ref().is_some_and(|w| w != enum_name) {
+                            self.errors.push(CompileError::TypeMismatch {
+                                span: *at,
+                                op: "match".to_string(),
+                                lhs_ty: enum_name.as_str().to_string(),
+                                rhs_ty: written
+                                    .as_ref()
+                                    .map_or_else(String::new, |w| w.as_str().to_string()),
+                            });
+                        } else if cases.contains(name) {
+                            covered.push(name.clone());
+                        } else {
+                            let hint = crate::util::closest_match(
+                                name.as_str(),
+                                cases.iter().map(Symbol::as_str),
+                            )
+                            .map(str::to_string);
+                            self.errors.push(CompileError::UnknownEnumCase {
+                                span: *at,
+                                enum_name: enum_name.as_str().to_string(),
+                                name: name.as_str().to_string(),
+                                hint,
+                            });
+                        }
+                    } else if judged(held) {
+                        self.errors.push(CompileError::TypeMismatch {
+                            span: *at,
+                            op: "match".to_string(),
+                            lhs_ty: ty_name(held),
+                            rhs_ty: "a case".to_string(),
+                        });
+                    }
+                }
+                Pattern::Literal(e) => {
+                    let found = self.check_expr(e);
+                    if (enum_name.is_some() || judged(held))
+                        && is_concrete(&found)
+                        && !(assignable(held, &found) && enum_name.is_none())
+                    {
+                        self.errors.push(CompileError::TypeMismatch {
+                            span: e.span(),
+                            op: "match".to_string(),
+                            lhs_ty: ty_name(held),
+                            rhs_ty: ty_name(&found),
+                        });
+                    }
+                    literals.push(e);
+                }
+            }
+        }
+        if has_else {
+            return;
+        }
+        let missing: Vec<String> = if let Some(enum_name) = &enum_name {
+            self.enums
+                .get(enum_name)
+                .map(|cases| {
+                    cases
+                        .iter()
+                        .filter(|c| !covered.contains(c))
+                        .map(|c| c.as_str().to_string())
+                        .collect()
+                })
+                .unwrap_or_default()
+        } else if *held == Ty::Bool {
+            let said = |word: &str| {
+                literals
+                    .iter()
+                    .any(|l| matches!(l, Expr::Ident(n, _) if n.as_str() == word))
+            };
+            if said("true") && said("false") {
+                Vec::new()
+            } else {
+                vec!["else".to_string()]
+            }
+        } else if judged(held) {
+            vec!["else".to_string()]
+        } else {
+            Vec::new()
+        };
+        if !missing.is_empty() {
+            self.errors.push(CompileError::NonExhaustive {
+                span,
+                missing,
+                chain: false,
+            });
+        }
+    }
+
+    /// A chain of `when`s over one enum that leaves a case out and has no last
+    /// `else { … }` draws nothing for it, and says nothing: a warning, since
+    /// `match` is what says so.
+    fn check_when_chain(&mut self, member: &Member) {
+        let mut links = 0;
+        let mut subject: Option<Symbol> = None;
+        let mut covered: Vec<Symbol> = Vec::new();
+        let mut enum_name: Option<Symbol> = None;
+        let mut at = member;
+        loop {
+            let Member::When { cond, els, .. } = at else {
+                return;
+            };
+            let Expr::Binary {
+                op: BinOp::Eq,
+                lhs,
+                rhs,
+                ..
+            } = cond
+            else {
+                return;
+            };
+            let (Expr::Ident(name, _), Expr::Member { base, field, .. }) = (&**lhs, &**rhs) else {
+                return;
+            };
+            let Expr::Ident(e, _) = &**base else {
+                return;
+            };
+            if !self.enums.contains_key(e)
+                || subject.as_ref().is_some_and(|s| s != name)
+                || enum_name.as_ref().is_some_and(|n| n != e)
+            {
+                return;
+            }
+            subject = Some(name.clone());
+            enum_name = Some(e.clone());
+            covered.push(field.clone());
+            links += 1;
+            match els.as_deref() {
+                None => break,
+                Some([next @ Member::When { .. }]) => at = next,
+                Some(_) => return,
+            }
+        }
+        let (Some(enum_name), true) = (enum_name, links >= 2) else {
+            return;
+        };
+        let mine = member_span(member);
+        if self.errors.iter().any(|e| {
+            matches!(e, CompileError::NonExhaustive { chain: true, span, .. }
+                if span.start <= mine.start && mine.end <= span.end)
+        }) {
+            return;
+        }
+        let missing: Vec<String> = self
+            .enums
+            .get(&enum_name)
+            .map(|cases| {
+                cases
+                    .iter()
+                    .filter(|c| !covered.contains(c))
+                    .map(|c| c.as_str().to_string())
+                    .collect()
+            })
+            .unwrap_or_default();
+        if !missing.is_empty() {
+            self.errors.push(CompileError::NonExhaustive {
+                span: member_span(member),
+                missing,
+                chain: true,
+            });
+        }
+    }
+
     /// The type of an optional name bound to another name (`let v = n`,
     /// `if let v = n`): it is passed on, not read, so `v` may be nothing too.
     fn optional_passed_on(&self, written: Option<&Type>, init: &Expr) -> Option<Ty> {
@@ -1887,12 +2071,27 @@ impl Checker<'_> {
             Member::When {
                 cond, then, els, ..
             } => {
+                // The head of a chain is told first, and the links inside it are
+                // then part of what was told.
+                self.check_when_chain(member);
                 let found = self.value(cond);
                 self.must_be_bool(&found, cond.span());
                 let (when_true, when_false) = self.narrowing(cond);
                 self.narrowed_in(when_true, |s| s.check_scoped(then, &[]));
                 if let Some(els) = els {
                     self.narrowed_in(when_false, |s| s.check_scoped(els, &[]));
+                }
+            }
+            Member::Match {
+                scrutinee,
+                arms,
+                span,
+            } => {
+                let held = self.value(scrutinee);
+                let patterns: Vec<&Pattern> = arms.iter().map(|a| &a.pattern).collect();
+                self.check_patterns(&held, &patterns, *span);
+                for arm in arms {
+                    self.check_scoped(&arm.body, &[]);
                 }
             }
             // A lifecycle effect's body is an action, checked like any other
@@ -2374,6 +2573,48 @@ impl Checker<'_> {
             }
             // `a?.b`: reading `a` here is the point, so a `a` that may be nothing
             // is not told. The field is of what `a` holds, and may be nothing.
+            Expr::Match {
+                scrutinee,
+                arms,
+                span,
+            } => {
+                let held = self.value(scrutinee);
+                let patterns: Vec<&Pattern> = arms.iter().map(|a| &a.pattern).collect();
+                self.check_patterns(&held, &patterns, *span);
+                // The arms are of one type, and an `Int` beside a `Float` is a
+                // `Float`, as for `? :`.
+                let mut joined: Option<Ty> = None;
+                for arm in arms {
+                    let ty = self.check_expr(&arm.body);
+                    joined = Some(match joined {
+                        None => ty,
+                        Some(so_far) => {
+                            if judged(&so_far)
+                                && judged(&ty)
+                                && !(assignable(&so_far, &ty) || assignable(&ty, &so_far))
+                            {
+                                self.errors.push(CompileError::TypeMismatch {
+                                    span: *span,
+                                    op: "match".to_string(),
+                                    lhs_ty: ty_name(&so_far),
+                                    rhs_ty: ty_name(&ty),
+                                });
+                                Ty::Unknown
+                            } else if so_far == ty {
+                                ty
+                            } else if matches!(
+                                (&so_far, &ty),
+                                (Ty::Int | Ty::Float, Ty::Int | Ty::Float)
+                            ) {
+                                Ty::Float
+                            } else {
+                                Ty::Unknown
+                            }
+                        }
+                    });
+                }
+                joined.unwrap_or(Ty::Unknown)
+            }
             Expr::OptionalMember { base, field, span } => {
                 let path = self.optional_path(base);
                 if let Some(path) = &path {
@@ -3529,6 +3770,7 @@ fn member_span(member: &Member) -> Span {
         | Member::Provide { span, .. }
         | Member::For { span, .. }
         | Member::When { span, .. }
+        | Member::Match { span, .. }
         | Member::Route { span, .. }
         | Member::Lifecycle { span, .. }
         | Member::Timer { span, .. }

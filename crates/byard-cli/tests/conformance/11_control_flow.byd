@@ -152,7 +152,6 @@ Text(key)
 for i in 0..3 { Text("{i}") }
 
 //# case: match-on-an-enum
-//# gap: there is no `match`
 //# text: b
 enum S { a, b }
 View Main() {
@@ -160,8 +159,184 @@ View Main() {
     Text(match s { .a => "a", .b => "b" })
 }
 
+//# case: match-with-the-enum-written-out
+//# text: M
+enum Size { small, medium, large }
+View Main() {
+    var size = Size.medium
+    Text(match size { Size.small => "S", Size.medium => "M", Size.large => "L" })
+}
+
+//# case: match-over-lines-needs-no-commas
+//# text: 2
+enum S { a, b, c }
+View Main() {
+    var s = S.b
+    let n = match s {
+        .a => 1
+        .b => 2
+        .c => 3
+    }
+    Text("{n}")
+}
+
+//# case: match-with-else-covers-the-rest
+//# text: other
+enum S { a, b, c }
+View Main() {
+    var s = S.c
+    Text(match s { .a => "first", else => "other" })
+}
+
+//# case: match-with-a-case-that-is-not-there
+//# error: UnknownEnumCase
+//# diagnostics: 1
+enum S { a, b }
+View Main() {
+    var s = S.a
+    Text(match s { .a => "a", .c => "c", .b => "b" })
+}
+
+//# case: match-names-every-case-it-leaves-out
+//# error: NonExhaustive
+//# diagnostics: 1
+enum S { a, b, c }
+View Main() {
+    var s = S.a
+    Text(match s { .a => "a" })
+}
+
+//# case: match-arms-of-two-types-are-one-error
+//# error: TypeMismatch
+//# diagnostics: 1
+enum S { a, b }
+View Main() {
+    var s = S.a
+    Text(match s { .a => "a", .b => 2 })
+}
+
+//# case: match-on-a-bool-needs-both-or-an-else
+//# fragment
+//# text: yes
+var on = true
+Text(match on { true => "yes", false => "no" })
+
+//# case: match-on-a-bool-with-one-arm-is-not-exhaustive
+//# fragment
+//# error: NonExhaustive
+//# diagnostics: 1
+var on = true
+Text(match on { true => "yes" })
+
+//# case: match-on-an-int-needs-an-else
+//# fragment
+//# error: NonExhaustive
+//# diagnostics: 1
+var n = 2
+Text(match n { 1 => "one", 2 => "two" })
+
+//# case: match-on-an-int-with-an-else
+//# fragment
+//# text: many
+var n = 7
+Text(match n { 1 => "one", 2 => "two", else => "many" })
+
+//# case: match-on-text
+//# fragment
+//# text: 2
+var s = "b"
+Text("{match s { "a" => 1, "b" => 2, else => 0 }}")
+
+//# case: match-with-no-arm-is-one-error
+//# fragment
+//# error: UnexpectedToken
+//# diagnostics: 1
+var n = 2
+Text("{match n { }}")
+
+//# case: match-as-an-action
+//# text: 1 | 0
+enum S { up, down }
+View Main() {
+    var s = S.up
+    var n = 0
+    var m = 0
+    on mount => { match s { .up => n++, .down => m++ } }
+    Text("{n}")
+    Text("{m}")
+}
+
+//# case: match-in-a-view-follows-the-value
+//# text: B
+enum S { a, b }
+View Main() {
+    var s = S.a
+    on mount => { s = S.b }
+    match s {
+        .a => Text("A")
+        .b => Text("B")
+    }
+}
+
+//# case: match-arm-with-several-members
+//# text: x | y
+enum S { a, b }
+View Main() {
+    var s = S.a
+    match s {
+        .a => { Text("x") Text("y") }
+        .b => Text("z")
+    }
+}
+
+//# case: match-arm-draws-a-view
+//# text: leaf
+enum S { a, b }
+View Leaf() { Text("leaf") }
+View Main() {
+    var s = S.b
+    match s { .a => Text("no"), .b => Leaf() }
+}
+
+//# case: match-view-member-names-what-it-leaves-out
+//# error: NonExhaustive
+//# diagnostics: 1
+enum S { a, b }
+View Main() {
+    var s = S.a
+    match s { .a => Text("a") }
+}
+
+//# case: when-chain-with-an-else-is-not-told
+//# text: c
+enum S { a, b, c }
+View Main() {
+    var s = S.c
+    when s == S.a { Text("a") } else when s == S.b { Text("b") } else { Text("c") }
+}
+
+//# case: when-chain-covering-every-case-is-not-told
+//# text: b
+enum S { a, b }
+View Main() {
+    var s = S.b
+    when s == S.a { Text("a") } else when s == S.b { Text("b") }
+}
+
+//# case: a-lone-when-over-an-enum-is-not-a-chain
+//# text: a
+enum S { a, b, c }
+View Main() {
+    var s = S.a
+    when s == S.a { Text("a") }
+}
+
+//# case: the-word-match-still-calls-the-anchor-width
+//# fragment
+//# text: ok
+Text("ok")
+
 //# case: when-chain-over-an-enum-is-not-checked-for-missing-cases
-//# gap: a chain that forgets a case draws nothing and says nothing
 //# warning: NonExhaustive
 enum S { a, b, c }
 View Main() {

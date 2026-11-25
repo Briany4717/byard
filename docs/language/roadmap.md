@@ -15,7 +15,7 @@ So every step below ends the same way: **its cases lose their `gap:` line, the r
 loses its note, and this file loses the step.** When this file is empty and the suite has no
 gap, the language is where this document wanted it.
 
-As written, the suite has 672 cases: 650 hold and 22 are gaps.
+As written, the suite has 693 cases: 675 hold and 18 are gaps.
 
 ```sh
 cargo test -p byard-cli --test it conformance -- --nocapture
@@ -192,12 +192,22 @@ either.
 
 ### 14. `match`, and enums that carry values
 
-*Cases:* `match-on-an-enum`, `match-as-a-view-member`, `match-must-cover-every-case`,
-`enum-with-data`, `when-chain-over-an-enum-is-not-checked-for-missing-cases`.
+*Cases:* `enum-with-data`. One feature in two pull requests, and the first is done:
+`match-on-an-enum`, `match-as-a-view-member`, `match-must-cover-every-case` and
+`when-chain-over-an-enum-is-not-checked-for-missing-cases` hold, and so do the twenty-one
+cases added with them.
 
-One feature in two pull requests: `match` over today's enums with the missing-case check,
-then cases with fields. Together they replace the three parallel `var`s every loading
-screen carries.
+`match` is an expression, a view member and an action statement; its patterns are `.case`,
+`Enum.case`, a literal and `else`; a case left out is `NonExhaustive` and named, a chain of
+`when`s that leaves one out is the same name as a warning. A `Bool` is covered by `true` and
+`false`, an `Int` and a `Text` need an `else`, and a `match` with no arm is a syntax error, as an
+enum with no case is. It is rewritten as the chain of `when`s or `? :` it means once the
+checks are done, so nothing after them knows a new form exists. All of it is in every edition.
+
+What is left is the second pull request: cases with fields (`failed(message: Str)`), built
+with `Load.failed(message: "offline")` and read only through `match`, which binds them
+(`.failed(message) =>`). It needs the value of a case to be more than its name, so what an
+enum is at run time, in JSON and to a controller changes with it.
 
 ### 15. Loops in actions, and ranges
 

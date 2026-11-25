@@ -18,6 +18,7 @@
 )]
 
 pub mod consts;
+pub(crate) mod desugar;
 pub mod diagnostics;
 pub mod edition;
 pub mod fmt;

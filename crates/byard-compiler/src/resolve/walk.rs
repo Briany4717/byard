@@ -6,7 +6,7 @@
 //! compile, so a call written inside it can never be skipped in silence.
 
 use crate::parser::ast::{
-    Arg, Attr, AttrKind, ElementNode, Expr, Member, Param, StrPart, Type, ViewDecl,
+    Arg, Attr, AttrKind, ElementNode, Expr, Member, Param, Pattern, StrPart, Type, ViewDecl,
 };
 
 /// Calls `f` on every expression of `member`, children before parents (a
@@ -38,6 +38,19 @@ pub(crate) fn member_exprs(member: &mut Member, f: &mut dyn FnMut(&mut Expr)) {
             }
             for m in body {
                 member_exprs(m, f);
+            }
+        }
+        Member::Match {
+            scrutinee, arms, ..
+        } => {
+            expr(scrutinee, f);
+            for arm in arms {
+                if let Pattern::Literal(e) = &mut arm.pattern {
+                    expr(e, f);
+                }
+                for m in &mut arm.body {
+                    member_exprs(m, f);
+                }
             }
         }
         Member::When {
@@ -174,6 +187,17 @@ pub(crate) fn expr(e: &mut Expr, f: &mut dyn FnMut(&mut Expr)) {
                 expr(spread, f);
             }
         }
+        Expr::Match {
+            scrutinee, arms, ..
+        } => {
+            expr(scrutinee, f);
+            for arm in arms {
+                if let Pattern::Literal(e) = &mut arm.pattern {
+                    expr(e, f);
+                }
+                expr(&mut arm.body, f);
+            }
+        }
         Expr::If {
             cond, then, els, ..
         } => {
@@ -305,6 +329,13 @@ fn declared_types(m: &mut Member, f: &mut dyn FnMut(&mut Type)) {
         Member::For { body, .. } | Member::Route { body, .. } => {
             for c in body {
                 declared_types(c, f);
+            }
+        }
+        Member::Match { arms, .. } => {
+            for arm in arms {
+                for c in &mut arm.body {
+                    declared_types(c, f);
+                }
             }
         }
         Member::When { then, els, .. } => {

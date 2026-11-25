@@ -1064,6 +1064,17 @@ pub enum CompileError {
         /// How many items the list has.
         len: usize,
     },
+    /// A `match` that leaves a case out, or a chain of `when`s over an enum that
+    /// does (a warning there). Naming the cases it forgets is the reason to
+    /// have `match`.
+    NonExhaustive {
+        /// Source range of the `match`, or of the first `when` of the chain.
+        span: Span,
+        /// What no arm is for: the cases, or `else` for a value that is not an enum.
+        missing: Vec<String>,
+        /// Whether it is a chain of `when`s (a warning) and not a `match`.
+        chain: bool,
+    },
     /// An element's `#[ … ]` writes one attribute twice: `#[size: 12, size: 14]`.
     DuplicateAttribute {
         /// Source range of the second one.
@@ -1793,6 +1804,7 @@ impl CompileError {
             | Self::UnknownField { span, .. }
             | Self::DuplicateField { span, .. }
             | Self::DuplicateAttribute { span, .. }
+            | Self::NonExhaustive { span, .. }
             | Self::DivisionByZero { span, .. }
             | Self::IndexOutOfRange { span, .. }
             | Self::UnusedVariable { span, .. }
@@ -1955,6 +1967,7 @@ impl CompileError {
             | Self::UnknownField { span, .. }
             | Self::DuplicateField { span, .. }
             | Self::DuplicateAttribute { span, .. }
+            | Self::NonExhaustive { span, .. }
             | Self::DivisionByZero { span, .. }
             | Self::IndexOutOfRange { span, .. }
             | Self::UnusedVariable { span, .. }
@@ -2120,6 +2133,7 @@ impl CompileError {
             Self::ShapeMismatch { .. } => "ShapeMismatch",
             Self::UnknownField { .. } => "UnknownField",
             Self::DuplicateAttribute { .. } => "DuplicateAttribute",
+            Self::NonExhaustive { .. } => "NonExhaustive",
             Self::DivisionByZero { .. } => "DivisionByZero",
             Self::IndexOutOfRange { .. } => "IndexOutOfRange",
             Self::UnusedVariable { .. } => "UnusedVariable",
@@ -2153,6 +2167,7 @@ impl CompileError {
                 | Self::PanelTakesNoKeys { .. }
                 | Self::SizeOnStretchedAxis { .. }
                 | Self::RecreatesSurface { .. }
+                | Self::NonExhaustive { chain: true, .. }
                 | Self::DivisionByZero { .. }
                 | Self::IndexOutOfRange { .. }
                 | Self::UnusedVariable { .. }
@@ -3115,6 +3130,31 @@ impl CompileError {
             Self::DuplicateField { name, .. } => format!(
                 "this record writes `{name}` twice: the last one wins, so remove the one that does not count"
             ),
+            Self::NonExhaustive { missing, chain, .. } => {
+                let names = missing
+                    .iter()
+                    .map(|m| {
+                        if m == "else" {
+                            "`else =>`".to_string()
+                        } else {
+                            format!("`.{m}`")
+                        }
+                    })
+                    .collect::<Vec<_>>()
+                    .join(", ");
+                if *chain {
+                    format!(
+                        "this chain of `when`s leaves out {names}, and so draws nothing for \
+                         them: write them, end with `else {{ … }}`, or use `match`, which names \
+                         what is missing"
+                    )
+                } else {
+                    format!(
+                        "this `match` leaves out {names}: write an arm for each, or end with \
+                         `else => …` for the rest"
+                    )
+                }
+            }
             Self::DuplicateAttribute { name, .. } => format!(
                 "`{name}` is written twice in this `#[ … ]`: the last one wins, so remove the one \
                  that does not count"

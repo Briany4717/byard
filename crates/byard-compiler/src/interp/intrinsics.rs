@@ -1405,6 +1405,7 @@ fn describe_member(m: &Member) -> String {
         Member::Provide { .. } => "a `provide` declaration".to_string(),
         Member::For { .. } => "a `for` loop".to_string(),
         Member::When { .. } => "a `when` block".to_string(),
+        Member::Match { .. } => "a `match` block".to_string(),
         Member::Style { .. } => "a `style` block".to_string(),
         Member::Route { kind, .. } => format!("a `{}` block", kind.as_str()),
         Member::Timer { every, .. } => {
@@ -1433,6 +1434,7 @@ fn member_span(m: &Member) -> crate::diagnostics::Span {
         | Member::Provide { span, .. }
         | Member::For { span, .. }
         | Member::When { span, .. }
+        | Member::Match { span, .. }
         | Member::Route { span, .. }
         | Member::Lifecycle { span, .. }
         | Member::Timer { span, .. }
@@ -2016,6 +2018,9 @@ fn animated_anywhere(value: &Expr) -> bool {
         Expr::Ternary {
             cond, then, els, ..
         } => animated_anywhere(cond) || animated_anywhere(then) || animated_anywhere(els),
+        Expr::Match {
+            scrutinee, arms, ..
+        } => animated_anywhere(scrutinee) || arms.iter().any(|a| animated_anywhere(&a.body)),
         Expr::If {
             cond, then, els, ..
         } => {
@@ -2494,6 +2499,7 @@ fn first_path_command(members: &[Member]) -> Option<&ElementNode> {
         Member::When { then, els, .. } => {
             first_path_command(then).or_else(|| els.as_deref().and_then(first_path_command))
         }
+        Member::Match { arms, .. } => arms.iter().find_map(|a| first_path_command(&a.body)),
         _ => None,
     })
 }
@@ -2512,6 +2518,12 @@ fn validate_path_members(members: &[Member], errs: &mut Vec<CompileError>) {
             Member::For { key, body, .. } => {
                 push_key_in_canvas(key.as_ref(), errs);
                 validate_path_members(body, errs);
+                continue;
+            }
+            Member::Match { arms, .. } => {
+                for arm in arms {
+                    validate_path_members(&arm.body, errs);
+                }
                 continue;
             }
             Member::When { then, els, .. } => {
@@ -2656,6 +2668,11 @@ fn walk_fused_members(members: &[Member], seen: &mut usize, errs: &mut Vec<Compi
                 }
             }
             Member::For { body, .. } => walk_fused_members(body, seen, errs),
+            Member::Match { arms, .. } => {
+                for arm in arms {
+                    walk_fused_members(&arm.body, seen, errs);
+                }
+            }
             Member::When { then, els, .. } => {
                 walk_fused_members(then, seen, errs);
                 if let Some(els) = els {
@@ -2915,6 +2932,11 @@ fn validate_canvas_body(members: &[Member], errs: &mut Vec<CompileError>, theme:
             Member::For { key, body, .. } => {
                 push_key_in_canvas(key.as_ref(), errs);
                 validate_canvas_body(body, errs, theme);
+            }
+            Member::Match { arms, .. } => {
+                for arm in arms {
+                    validate_canvas_body(&arm.body, errs, theme);
+                }
             }
             Member::When { then, els, .. } => {
                 validate_canvas_body(then, errs, theme);

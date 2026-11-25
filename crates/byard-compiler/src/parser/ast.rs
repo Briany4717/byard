@@ -56,6 +56,46 @@ impl Type {
     }
 }
 
+/// What an arm of a `match` is for (RFC: `match`).
+#[derive(Clone, Debug, PartialEq)]
+pub enum Pattern {
+    /// `.case`, or `Enum.case`: one case of an enum.
+    Case {
+        /// The enum when written (`Load.idle`), `None` for the short `.idle`.
+        enum_name: Option<Symbol>,
+        /// The case.
+        name: Symbol,
+        /// Source span.
+        span: Span,
+    },
+    /// A literal (`true`, `3`, `"a"`) a `Bool`, an `Int` or a `Str` is compared with.
+    Literal(Expr),
+    /// `else`, every case the arms above do not name.
+    Else(Span),
+}
+
+impl Pattern {
+    /// The source span of this pattern.
+    #[must_use]
+    pub fn span(&self) -> Span {
+        match self {
+            Self::Case { span, .. } | Self::Else(span) => *span,
+            Self::Literal(e) => e.span(),
+        }
+    }
+}
+
+/// One arm of a `match`: `pattern => body`.
+#[derive(Clone, Debug, PartialEq)]
+pub struct Arm<B> {
+    /// What the arm is for.
+    pub pattern: Pattern,
+    /// What it is: a value for `match` as an expression, members for a view member.
+    pub body: B,
+    /// Source span.
+    pub span: Span,
+}
+
 /// A `View`/`fn` parameter (`param := IDENT (":" type)?`). The annotation is
 /// optional in the AST; D9's "annotation required here" rule is enforced by the
 /// checker (M5), not the parser.
@@ -303,6 +343,16 @@ pub enum Member {
     },
     /// An intrinsic or user-`View` element.
     Element(ElementNode),
+    /// `match scrutinee { .case => members … }`, one arm's members drawn: the
+    /// view-member form of [`Expr::Match`].
+    Match {
+        /// The value matched.
+        scrutinee: Expr,
+        /// The arms, in written order.
+        arms: Vec<Arm<Vec<Member>>>,
+        /// Source span.
+        span: Span,
+    },
     /// `for item in iter { ... }`, structural reactivity.
     For {
         /// Loop variable.
@@ -971,6 +1021,17 @@ pub enum Expr {
         /// Source span.
         span: Span,
     },
+    /// `match scrutinee { .case => value, … }`: the value of the arm for the
+    /// case `scrutinee` is. An expression, and an action statement when its arms
+    /// are actions.
+    Match {
+        /// The value matched.
+        scrutinee: Box<Expr>,
+        /// The arms, in written order.
+        arms: Vec<Arm<Expr>>,
+        /// Source span.
+        span: Span,
+    },
     /// `a?.b`: the field `b` of `a`, or nothing when `a` is nothing.
     OptionalMember {
         /// The receiver, which may be nothing.
@@ -1308,6 +1369,7 @@ impl Expr {
             | Self::Member { span, .. }
             | Self::Call { span, .. }
             | Self::OptionalMember { span, .. }
+            | Self::Match { span, .. }
             | Self::ControllerCall { span, .. }
             | Self::Lambda { span, .. }
             | Self::Block(_, span)

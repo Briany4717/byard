@@ -67,6 +67,7 @@ impl Parser<'_> {
                 Expr::StrLit(parts, span)
             }
             Some(Token::Ident(_)) if self.at_if_statement() => self.parse_if(),
+            Some(Token::Ident(_)) if self.at_match() => self.parse_match_expr(),
             Some(Token::Ident(sym)) => {
                 self.advance();
                 // A bare single-parameter lambda `x => body` (RFC-0027 §5, used
@@ -185,6 +186,109 @@ impl Parser<'_> {
             then,
             els,
             span: self.span_from(start),
+        }
+    }
+
+    /// Whether the cursor is on the word `match` that begins a `match`: a value
+    /// follows it. (`match(name)` is the call that reads an anchor's width.)
+    pub(super) fn at_match(&self) -> bool {
+        matches!(self.cur(), Some(Token::Ident(s)) if s.as_str() == "match")
+            && matches!(
+                self.peek2(),
+                Some(
+                    Token::Ident(_)
+                        | Token::IntLit(_)
+                        | Token::FloatLit(_)
+                        | Token::StrLit
+                        | Token::Minus
+                        | Token::Bang
+                )
+            )
+    }
+
+    /// `match scrutinee { pattern => expr, … }` as an expression.
+    fn parse_match_expr(&mut self) -> Expr {
+        let start = self.cur_span();
+        self.advance(); // match
+        let scrutinee = Box::new(self.parse_expr(0));
+        self.expect(&Token::LBrace, "'{' to open the arms of the `match`");
+        let mut arms = Vec::new();
+        while !matches!(self.cur(), Some(Token::RBrace) | None) {
+            let before = self.pos;
+            let arm_start = self.cur_span();
+            if let Some(pattern) = self.parse_pattern() {
+                self.expect(&Token::Arrow, "'=>' after the pattern");
+                let body = self.parse_expr(0);
+                arms.push(super::ast::Arm {
+                    pattern,
+                    body,
+                    span: self.span_from(arm_start),
+                });
+            }
+            self.eat(&Token::Comma);
+            if self.pos == before {
+                self.advance();
+            }
+        }
+        if arms.is_empty() && matches!(self.cur(), Some(Token::RBrace)) {
+            self.error("an arm: a `match` has at least one, as in `.a => …`");
+        }
+        self.expect(&Token::RBrace, "'}' to close the `match`");
+        Expr::Match {
+            scrutinee,
+            arms,
+            span: self.span_from(start),
+        }
+    }
+
+    /// What an arm is for: `.case`, `Enum.case`, a literal, or `else`.
+    pub(super) fn parse_pattern(&mut self) -> Option<super::ast::Pattern> {
+        use super::ast::Pattern;
+        let start = self.cur_span();
+        match self.cur().cloned() {
+            Some(Token::Else) => {
+                self.advance();
+                Some(Pattern::Else(self.span_from(start)))
+            }
+            Some(Token::Dot) => {
+                self.advance();
+                let name = self.expect_ident("a case name after `.`")?;
+                Some(Pattern::Case {
+                    enum_name: None,
+                    name,
+                    span: self.span_from(start),
+                })
+            }
+            Some(Token::Ident(first))
+                if !matches!(first.as_str(), "true" | "false")
+                    && matches!(self.peek2(), Some(Token::Dot)) =>
+            {
+                self.advance();
+                self.advance(); // .
+                let name = self.expect_ident("a case name after `.`")?;
+                Some(Pattern::Case {
+                    enum_name: Some(first),
+                    name,
+                    span: self.span_from(start),
+                })
+            }
+            // `true` and `false`: taken as they are, since a word before `=>`
+            // would read as a lambda's parameter.
+            Some(Token::Ident(word)) if matches!(word.as_str(), "true" | "false") => {
+                self.advance();
+                Some(Pattern::Literal(Expr::Ident(word, start)))
+            }
+            Some(
+                Token::Ident(_)
+                | Token::IntLit(_)
+                | Token::FloatLit(_)
+                | Token::StrLit
+                | Token::Minus,
+            ) => Some(Pattern::Literal(self.parse_expr(30))),
+            _ => {
+                self.error("a case (`.name`), a literal or `else`");
+                None
+            }
         }
     }
 
@@ -723,6 +827,14 @@ impl Parser<'_> {
     fn peek_led(&self) -> Option<Bp> {
         match self.cur()? {
             // Member access, indexing, and calls bind tightest.
+            // `.case =>` begins the next arm of a `match`; it is not a field read
+            // of the arm before it.
+            Token::Dot
+                if matches!(self.peek2(), Some(Token::Ident(_)))
+                    && matches!(self.peek3(), Some(Token::Arrow)) =>
+            {
+                None
+            }
             Token::Dot | Token::QuestionDot | Token::LBrack => Some(Bp {
                 left: 22,
                 right: 23,

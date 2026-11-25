@@ -758,6 +758,9 @@ impl Interpreter {
                     Value::Record(out)
                 })
             }
+            // A `match` was rewritten as the chain it means when the program was
+            // resolved; one that reaches here was built without resolving.
+            Expr::Match { .. } => Box::new(|_| Value::Unit),
             // `a?.b`: nothing when `a` is, the field otherwise.
             Expr::OptionalMember { base, field, .. } => {
                 let mut base_c = self.lower_expr(base, payload_name);

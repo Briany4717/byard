@@ -287,6 +287,11 @@ pub(super) fn children(expr: &Expr) -> Vec<&Expr> {
         Expr::Ternary {
             cond, then, els, ..
         } => vec![cond.as_ref(), then.as_ref(), els.as_ref()],
+        Expr::Match {
+            scrutinee, arms, ..
+        } => std::iter::once(scrutinee.as_ref())
+            .chain(arms.iter().map(|a| &a.body))
+            .collect(),
         Expr::If {
             cond, then, els, ..
         } => [cond.as_ref(), then.as_ref()]

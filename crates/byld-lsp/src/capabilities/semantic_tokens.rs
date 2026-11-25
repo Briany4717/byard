@@ -269,6 +269,14 @@ fn collect_member_tokens(members: &[Member], out: &mut Vec<RawToken>) {
                 }
                 collect_member_tokens(body, out);
             }
+            Member::Match {
+                scrutinee, arms, ..
+            } => {
+                collect_expr_tokens(scrutinee, out);
+                for arm in arms {
+                    collect_member_tokens(&arm.body, out);
+                }
+            }
             Member::When {
                 cond,
                 then,
@@ -541,6 +549,14 @@ fn collect_expr_tokens(expr: &Expr, out: &mut Vec<RawToken>) {
             collect_expr_tokens(cond, out);
             collect_expr_tokens(then, out);
             collect_expr_tokens(els, out);
+        }
+        Expr::Match {
+            scrutinee, arms, ..
+        } => {
+            collect_expr_tokens(scrutinee, out);
+            for arm in arms {
+                collect_expr_tokens(&arm.body, out);
+            }
         }
         Expr::If {
             cond, then, els, ..

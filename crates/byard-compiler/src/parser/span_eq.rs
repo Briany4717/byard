@@ -201,11 +201,20 @@ impl SpanEq for EnumDecl {
         let Self {
             name,
             cases,
+            fields,
             private,
             span: _,
         } = self;
         *name == other.name
             && *private == other.private
+            && fields.len() == other.fields.len()
+            && fields.iter().zip(&other.fields).all(|((a, x), (b, y))| {
+                a == b
+                    && x.len() == y.len()
+                    && x.iter()
+                        .zip(y)
+                        .all(|((n, t), (m, u))| n == m && t.span_eq(u))
+            })
             && cases.len() == other.cases.len()
             && cases
                 .iter()

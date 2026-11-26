@@ -7,39 +7,49 @@
 //! case is the text of its name at run time, so `.idle` is a comparison with
 //! `"idle"`. What the chain does when no arm holds is nothing, which the
 //! checker has already said is not so for an enum (`NonExhaustive`).
+//!
+//! A case that carries values is a record at run time: its own name under
+//! `case`, then each value under the name it was declared with. Built with
+//! `Load.failed(message: "offline")` it is that record literal; matched with
+//! `.failed(message)` it is `s.case == "failed"`, and the arm reads `message`
+//! as `s.message`.
 
+use std::collections::HashMap;
 use std::sync::Arc;
 
 use crate::diagnostics::Span;
-use crate::parser::ast::{Arm, BinOp, ConstDecl, Expr, FnDecl, Member, Pattern, StrPart, ViewDecl};
+use crate::parser::ast::{
+    Arm, BinOp, ConstDecl, EnumDecl, Expr, FnDecl, Member, Pattern, StrPart, ViewDecl,
+};
 use crate::resolve::walk;
 use crate::symbol::Symbol;
 
 /// Rewrites every `match` of `views`, and of the functions and constants they
 /// share, as the chain it means.
 pub(crate) fn matches(views: &mut [ViewDecl]) {
+    let enums = Enums::of(views.first().map(|v| &v.enums[..]).unwrap_or_default());
     let (mut helpers, mut consts): (Vec<FnDecl>, Vec<ConstDecl>) = views
         .first()
         .map(|v| ((*v.helpers).clone(), (*v.consts).clone()))
         .unwrap_or_default();
     for decl in &mut helpers {
-        in_expr(&mut decl.body);
+        in_expr(&mut decl.body, &enums);
         for p in &mut decl.params {
             if let Some(d) = &mut p.default {
-                in_expr(d);
+                in_expr(d, &enums);
             }
         }
     }
     for decl in &mut consts {
-        in_expr(&mut decl.init);
+        in_expr(&mut decl.init, &enums);
     }
     let helpers = Arc::new(helpers);
     let consts = Arc::new(consts);
     for view in views {
-        in_members(&mut view.body);
+        in_members(&mut view.body, &enums);
         for p in &mut view.params {
             if let Some(d) = &mut p.default {
-                in_expr(d);
+                in_expr(d, &enums);
             }
         }
         view.helpers = Arc::clone(&helpers);
@@ -49,11 +59,15 @@ pub(crate) fn matches(views: &mut [ViewDecl]) {
 
 /// Every `match` expression inside `expr`, and every list of members a slot
 /// block holds.
-fn in_expr(expr: &mut Expr) {
-    walk::expr(expr, &mut |e| rewrite(e));
+fn in_expr(expr: &mut Expr, enums: &Enums) {
+    walk::expr(expr, &mut |e| rewrite(e, enums));
 }
 
-fn rewrite(e: &mut Expr) {
+fn rewrite(e: &mut Expr, enums: &Enums) {
+    if let Some(record) = enums.built(e) {
+        *e = record;
+        return;
+    }
     if matches!(e, Expr::Match { .. }) {
         let whole = std::mem::replace(e, Expr::Error(Span::new(0, 0)));
         if let Expr::Match {
@@ -62,7 +76,7 @@ fn rewrite(e: &mut Expr) {
             span,
         } = whole
         {
-            *e = chain_expr(&scrutinee, arms, span);
+            *e = chain_expr(&scrutinee, arms, span, enums);
         }
         return;
     }
@@ -71,27 +85,27 @@ fn rewrite(e: &mut Expr) {
         | Expr::Lambda {
             slot: Some(members),
             ..
-        } => in_members(members),
+        } => in_members(members, enums),
         _ => {}
     }
 }
 
 /// Every `match` of a list of members, at any depth.
-fn in_members(members: &mut Vec<Member>) {
+fn in_members(members: &mut Vec<Member>, enums: &Enums) {
     for member in members.iter_mut() {
-        walk::member_exprs(member, &mut |e| rewrite(e));
+        walk::member_exprs(member, &mut |e| rewrite(e, enums));
         match member {
-            Member::Element(el) => in_members(&mut el.children),
-            Member::For { body, .. } | Member::Route { body, .. } => in_members(body),
+            Member::Element(el) => in_members(&mut el.children, enums),
+            Member::For { body, .. } | Member::Route { body, .. } => in_members(body, enums),
             Member::When { then, els, .. } => {
-                in_members(then);
+                in_members(then, enums);
                 if let Some(els) = els {
-                    in_members(els);
+                    in_members(els, enums);
                 }
             }
             Member::Match { arms, .. } => {
                 for arm in arms {
-                    in_members(&mut arm.body);
+                    in_members(&mut arm.body, enums);
                 }
             }
             _ => {}
@@ -103,40 +117,192 @@ fn in_members(members: &mut Vec<Member>) {
                 scrutinee,
                 arms,
                 span,
-            } => chain_member(&scrutinee, arms, span),
+            } => chain_member(&scrutinee, arms, span, enums),
             other => other,
         });
     }
 }
 
+/// What the program's enums say about the cases that carry values.
+pub(crate) struct Enums {
+    /// For each enum, each case with the names of its fields (empty for a
+    /// case that is its name alone).
+    by_enum: HashMap<Symbol, HashMap<Symbol, Vec<Symbol>>>,
+}
+
+impl Enums {
+    fn of(decls: &[EnumDecl]) -> Self {
+        let by_enum = decls
+            .iter()
+            .map(|d| {
+                let cases = d
+                    .cases
+                    .iter()
+                    .map(|(case, _)| {
+                        let fields = d
+                            .fields
+                            .iter()
+                            .find(|(c, _)| c == case)
+                            .map(|(_, f)| f.iter().map(|(n, _)| n.clone()).collect())
+                            .unwrap_or_default();
+                        (case.clone(), fields)
+                    })
+                    .collect();
+                (d.name.clone(), cases)
+            })
+            .collect();
+        Self { by_enum }
+    }
+
+    /// `Load.failed(message: "offline")` as the record it is at run time.
+    fn built(&self, e: &Expr) -> Option<Expr> {
+        let Expr::Call { callee, args, span } = e else {
+            return None;
+        };
+        let Expr::Member { base, field, .. } = &**callee else {
+            return None;
+        };
+        let Expr::Ident(name, _) = &**base else {
+            return None;
+        };
+        if self.by_enum.get(name)?.get(field)?.is_empty() {
+            return None;
+        }
+        let mut fields = vec![(Symbol::intern("case"), text(field, *span))];
+        fields.extend(
+            args.iter()
+                .filter_map(|a| a.name.clone().map(|n| (n, a.value.clone()))),
+        );
+        Some(Expr::Record {
+            fields,
+            spread: None,
+            span: *span,
+        })
+    }
+
+    /// The fields a pattern binds, as the names the case declares them with,
+    /// and whether the case is a record (it carries values) at run time.
+    fn carried(&self, enum_name: Option<&Symbol>, case: &Symbol) -> Option<&Vec<Symbol>> {
+        let mut found = self
+            .by_enum
+            .iter()
+            .filter(|(name, _)| enum_name.is_none_or(|w| w == *name))
+            .filter_map(|(_, cases)| cases.get(case));
+        found.find(|fields| !fields.is_empty())
+    }
+
+    /// Whether a case of that name is written as its name alone in some enum
+    /// the pattern may mean.
+    fn plain(&self, enum_name: Option<&Symbol>, case: &Symbol) -> bool {
+        self.by_enum
+            .iter()
+            .filter(|(name, _)| enum_name.is_none_or(|w| w == *name))
+            .filter_map(|(_, cases)| cases.get(case))
+            .any(Vec::is_empty)
+    }
+}
+
+fn text(name: &Symbol, span: Span) -> Expr {
+    Expr::StrLit(vec![StrPart::Text(name.as_str().to_string())], span)
+}
+
 /// The condition that makes `pattern` the arm to take, `None` for `else`.
-fn test(scrutinee: &Expr, pattern: &Pattern) -> Option<Expr> {
-    let (value, at) = match pattern {
-        Pattern::Else(_) => return None,
-        Pattern::Case { name, span, .. } => (
-            Expr::StrLit(vec![StrPart::Text(name.as_str().to_string())], *span),
-            *span,
-        ),
-        Pattern::Literal(e) => (e.clone(), e.span()),
-    };
-    Some(Expr::Binary {
+fn test(scrutinee: &Expr, pattern: &Pattern, enums: &Enums) -> Option<Expr> {
+    let eq = |lhs: Expr, rhs: Expr, span: Span| Expr::Binary {
         op: BinOp::Eq,
-        lhs: Box::new(scrutinee.clone()),
-        rhs: Box::new(value),
-        span: at,
-    })
+        lhs: Box::new(lhs),
+        rhs: Box::new(rhs),
+        span,
+    };
+    match pattern {
+        Pattern::Else(_) => None,
+        Pattern::Case {
+            enum_name,
+            name,
+            span,
+            ..
+        } => {
+            let name_of = |s: &Expr| Expr::Member {
+                base: Box::new(s.clone()),
+                field: Symbol::intern("case"),
+                span: *span,
+            };
+            let by_value = eq(scrutinee.clone(), text(name, *span), *span);
+            if enums.carried(enum_name.as_ref(), name).is_none() {
+                return Some(by_value);
+            }
+            let by_case = eq(name_of(scrutinee), text(name, *span), *span);
+            // The same name is a plain case of another enum: either holds.
+            Some(if enums.plain(enum_name.as_ref(), name) {
+                Expr::Binary {
+                    op: BinOp::Or,
+                    lhs: Box::new(by_value),
+                    rhs: Box::new(by_case),
+                    span: *span,
+                }
+            } else {
+                by_case
+            })
+        }
+        Pattern::Literal(e) => Some(eq(scrutinee.clone(), e.clone(), e.span())),
+    }
+}
+
+/// The values a pattern binds, as `name = scrutinee.field` in the order the
+/// case declares its fields.
+fn bound(scrutinee: &Expr, pattern: &Pattern, enums: &Enums) -> Vec<(Symbol, Expr, Span)> {
+    let Pattern::Case {
+        enum_name,
+        name,
+        binds,
+        span,
+    } = pattern
+    else {
+        return Vec::new();
+    };
+    let Some(fields) = enums.carried(enum_name.as_ref(), name) else {
+        return Vec::new();
+    };
+    binds
+        .iter()
+        .zip(fields)
+        .map(|(bind, field)| {
+            let read = Expr::Member {
+                base: Box::new(scrutinee.clone()),
+                field: field.clone(),
+                span: *span,
+            };
+            (bind.clone(), read, *span)
+        })
+        .collect()
 }
 
 /// `match` as an expression: `c1 ? v1 : c2 ? v2 : … : else-or-nothing`.
-fn chain_expr(scrutinee: &Expr, arms: Vec<Arm<Expr>>, span: Span) -> Expr {
+fn chain_expr(scrutinee: &Expr, arms: Vec<Arm<Expr>>, span: Span, enums: &Enums) -> Expr {
     let nothing = Expr::Ident(Symbol::intern("none"), span);
     let mut out = nothing;
     for arm in arms.into_iter().rev() {
-        out = match test(scrutinee, &arm.pattern) {
-            None => arm.body,
+        let lets = bound(scrutinee, &arm.pattern, enums);
+        let body = if lets.is_empty() {
+            arm.body
+        } else {
+            let mut stmts: Vec<Expr> = lets
+                .into_iter()
+                .map(|(name, value, at)| Expr::Let {
+                    name,
+                    ty: None,
+                    value: Box::new(value),
+                    span: at,
+                })
+                .collect();
+            stmts.push(arm.body);
+            Expr::Block(stmts, span)
+        };
+        out = match test(scrutinee, &arm.pattern, enums) {
+            None => body,
             Some(cond) => Expr::Ternary {
                 cond: Box::new(cond),
-                then: Box::new(arm.body),
+                then: Box::new(body),
                 els: Box::new(out),
                 span,
             },
@@ -146,14 +312,29 @@ fn chain_expr(scrutinee: &Expr, arms: Vec<Arm<Expr>>, span: Span) -> Expr {
 }
 
 /// `match` as a view member: `when c1 { … } else when c2 { … } else { … }`.
-fn chain_member(scrutinee: &Expr, arms: Vec<Arm<Vec<Member>>>, span: Span) -> Member {
+fn chain_member(
+    scrutinee: &Expr,
+    arms: Vec<Arm<Vec<Member>>>,
+    span: Span,
+    enums: &Enums,
+) -> Member {
     let mut out: Option<Vec<Member>> = None;
     for arm in arms.into_iter().rev() {
-        out = Some(match test(scrutinee, &arm.pattern) {
-            None => arm.body,
+        let mut body: Vec<Member> = bound(scrutinee, &arm.pattern, enums)
+            .into_iter()
+            .map(|(name, init, at)| Member::Let {
+                name,
+                ty: None,
+                init,
+                span: at,
+            })
+            .collect();
+        body.extend(arm.body);
+        out = Some(match test(scrutinee, &arm.pattern, enums) {
+            None => body,
             Some(cond) => vec![Member::When {
                 cond,
-                then: arm.body,
+                then: body,
                 els: out,
                 span,
             }],

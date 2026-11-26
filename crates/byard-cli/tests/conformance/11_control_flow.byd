@@ -494,3 +494,222 @@ Text("{n}")
 for c in "abc" {
     Text("x")
 }
+
+//# case: enum-case-with-values-in-a-view
+//# text: could not load: offline
+enum Load { idle, failed(message: Str) }
+View Main() {
+    var state = Load.failed(message: "offline")
+    match state {
+        .idle => Text("idle")
+        .failed(message) => Text("could not load: {message}")
+    }
+}
+
+//# case: enum-case-with-two-values
+//# text: 3 of 10
+enum Page { empty, at(n: Int, of: Int) }
+View Main() {
+    let page = Page.at(n: 3, of: 10)
+    Text(match page {
+        .empty => "none"
+        .at(n, of) => "{n} of {of}"
+    })
+}
+
+//# case: enum-plain-case-beside-cases-with-values
+//# text: idle
+enum Load { idle, ready(count: Int) }
+View Main() {
+    var state = Load.idle
+    Text(match state {
+        .idle => "idle"
+        .ready(count) => "{count}"
+    })
+}
+
+//# case: enum-case-with-values-written-with-its-enum
+//# text: 7
+enum Load { idle, ready(count: Int) }
+View Main() {
+    var state = Load.ready(count: 7)
+    Text(match state {
+        Load.idle => "idle"
+        Load.ready(count) => "{count}"
+    })
+}
+
+//# case: enum-case-with-values-matched-without-reading-them
+//# text: ready
+enum Load { idle, ready(count: Int) }
+View Main() {
+    var state = Load.ready(count: 7)
+    Text(match state {
+        .idle => "idle"
+        .ready => "ready"
+    })
+}
+
+//# case: enum-case-with-values-and-an-else
+//# text: not ready
+enum Load { idle, loading, ready(count: Int) }
+View Main() {
+    var state = Load.loading
+    Text(match state {
+        .ready(count) => "{count}"
+        else => "not ready"
+    })
+}
+
+//# case: enum-case-with-values-given-to-a-view
+//# text: offline
+enum Load { idle, failed(message: Str) }
+View Show(state: Load) {
+    match state {
+        .idle => Text("idle")
+        .failed(message) => Text(message)
+    }
+}
+View Main() {
+    Show(state: Load.failed(message: "offline"))
+}
+
+//# case: enum-case-with-values-equal-when-their-values-are
+//# text: true | false
+enum Load { idle, failed(message: Str) }
+View Main() {
+    Text("{Load.failed(message: "a") == Load.failed(message: "a")}")
+    Text("{Load.failed(message: "a") == Load.failed(message: "b")}")
+}
+
+//# case: enum-case-with-a-list-of-records
+//# text: Ada | Grace
+type Person = { name: Str }
+enum Load { idle, ready(people: List<Person>) }
+View Main() {
+    var state = Load.ready(people: [{ name: "Ada" }, { name: "Grace" }])
+    match state {
+        .idle => Text("idle")
+        .ready(people) => for p in people { Text(p.name) }
+    }
+}
+
+//# case: enum-case-with-an-enum-inside
+//# text: dark
+enum Mode { light, dark }
+enum Setting { off, on(mode: Mode) }
+View Main() {
+    var s = Setting.on(mode: Mode.dark)
+    Text(match s {
+        .off => "off"
+        .on(mode) => match mode {
+            .light => "light"
+            .dark => "dark"
+        }
+    })
+}
+
+//# case: enum-case-with-values-binds-its-values-with-their-types
+//# error: UnknownMethod
+//# diagnostics: 1
+enum Load { idle, ready(count: Int) }
+View Main() {
+    var state = Load.ready(count: 7)
+    Text(match state {
+        .idle => "idle"
+        .ready(count) => count.upper()
+    })
+}
+
+//# case: enum-case-with-a-value-of-the-wrong-type
+//# error: TypeMismatch
+//# diagnostics: 1
+enum Load { idle, failed(message: Str) }
+View Main() {
+    var state = Load.failed(message: 3)
+    Text("x")
+}
+
+//# case: enum-case-with-a-value-left-out
+//# error: TypeMismatch
+//# diagnostics: 1
+enum Load { idle, failed(message: Str) }
+View Main() {
+    var state = Load.failed()
+    Text("x")
+}
+
+//# case: enum-case-with-a-field-it-does-not-have
+//# error: UnknownField
+//# diagnostics: 1
+enum Load { idle, failed(message: Str) }
+View Main() {
+    var state = Load.failed(message: "a", code: 1)
+    Text("x")
+}
+
+//# case: enum-case-with-values-needs-them
+//# error: ArityMismatch
+//# diagnostics: 1
+enum Load { idle, failed(message: Str) }
+View Main() {
+    var state = Load.failed
+    Text("x")
+}
+
+//# case: enum-pattern-binds-as-many-as-the-case-carries
+//# error: ArityMismatch
+//# diagnostics: 1
+enum Load { idle, failed(message: Str) }
+View Main() {
+    var state = Load.idle
+    Text(match state {
+        .idle => "idle"
+        .failed(a, b) => a
+    })
+}
+
+//# case: enum-plain-case-binds-nothing
+//# error: ArityMismatch
+//# diagnostics: 1
+enum Load { idle, failed(message: Str) }
+View Main() {
+    var state = Load.idle
+    Text(match state {
+        .idle(x) => "idle"
+        .failed(message) => message
+    })
+}
+
+//# case: enum-case-with-values-left-out-of-a-match-is-named
+//# error: NonExhaustive
+//# diagnostics: 1
+enum Load { idle, failed(message: Str), ready(count: Int) }
+View Main() {
+    var state = Load.idle
+    Text(match state {
+        .idle => "idle"
+        .failed(message) => message
+    })
+}
+
+//# case: enum-case-with-values-has-no-field-read
+//# error: UnknownField
+//# diagnostics: 1
+enum Load { idle, failed(message: Str) }
+View Main() {
+    var state = Load.idle
+    Text("{state.message}")
+}
+
+//# case: enum-case-cannot-carry-a-field-called-case
+//# error: UnexpectedToken
+//# diagnostics: 1
+enum Load { idle, failed(case: Str) }
+View Main() { Text("x") }
+
+//# case: enum-case-with-empty-parentheses-is-one-error
+//# error: UnexpectedToken
+//# diagnostics: 1
+enum Load { idle, failed() }
+View Main() { Text("x") }

@@ -253,9 +253,11 @@ impl Parser<'_> {
             Some(Token::Dot) => {
                 self.advance();
                 let name = self.expect_ident("a case name after `.`")?;
+                let binds = self.parse_pattern_binds();
                 Some(Pattern::Case {
                     enum_name: None,
                     name,
+                    binds,
                     span: self.span_from(start),
                 })
             }
@@ -266,9 +268,11 @@ impl Parser<'_> {
                 self.advance();
                 self.advance(); // .
                 let name = self.expect_ident("a case name after `.`")?;
+                let binds = self.parse_pattern_binds();
                 Some(Pattern::Case {
                     enum_name: Some(first),
                     name,
+                    binds,
                     span: self.span_from(start),
                 })
             }
@@ -290,6 +294,49 @@ impl Parser<'_> {
                 None
             }
         }
+    }
+
+    /// Whether the `.` here begins the next arm of a `match`: `.case =>`, or
+    /// `.case(a, b) =>` for a case that carries values.
+    fn at_case_arm(&self) -> bool {
+        let at = |n: usize| self.tokens.get(self.pos + n).map(|(t, _)| t);
+        if !matches!(at(1), Some(Token::Ident(_))) {
+            return false;
+        }
+        if matches!(at(2), Some(Token::Arrow)) {
+            return true;
+        }
+        if !matches!(at(2), Some(Token::LParen)) {
+            return false;
+        }
+        let mut n = 3;
+        while matches!(at(n), Some(Token::Ident(_))) {
+            n += 1;
+            if matches!(at(n), Some(Token::Comma)) {
+                n += 1;
+            }
+        }
+        matches!(at(n), Some(Token::RParen)) && matches!(at(n + 1), Some(Token::Arrow))
+    }
+
+    /// The names after a case in a pattern, `(message, code)`, when it has
+    /// them: what a case that carries values binds.
+    fn parse_pattern_binds(&mut self) -> Vec<Symbol> {
+        let mut binds = Vec::new();
+        if !self.eat(&Token::LParen) {
+            return binds;
+        }
+        while !matches!(self.cur(), Some(Token::RParen) | None) {
+            let Some(name) = self.expect_ident("a name for the value") else {
+                break;
+            };
+            binds.push(name);
+            if !self.eat(&Token::Comma) {
+                break;
+            }
+        }
+        self.expect(&Token::RParen, "')'");
+        binds
     }
 
     /// `if let name = expr { … } else { … }`, after the `if`: it is a block that
@@ -829,12 +876,7 @@ impl Parser<'_> {
             // Member access, indexing, and calls bind tightest.
             // `.case =>` begins the next arm of a `match`; it is not a field read
             // of the arm before it.
-            Token::Dot
-                if matches!(self.peek2(), Some(Token::Ident(_)))
-                    && matches!(self.peek3(), Some(Token::Arrow)) =>
-            {
-                None
-            }
+            Token::Dot if self.at_case_arm() => None,
             Token::Dot | Token::QuestionDot | Token::LBrack => Some(Bp {
                 left: 22,
                 right: 23,

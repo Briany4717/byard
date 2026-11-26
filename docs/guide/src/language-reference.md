@@ -545,7 +545,8 @@ View Main() {
 ```
 
 ```text
-enum := "enum" NAME "{" NAME ","? (NAME ","?)* "}"
+enum  := "enum" NAME "{" case ","? (case ","?)* "}"
+case  := NAME ( "(" NAME ":" type ("," NAME ":" type)* ")" )?
 ```
 
 An enum has at least one case: `enum Size { }` is a syntax error.
@@ -555,10 +556,35 @@ A case is a different type from text and from the cases of another enum. In a te
 controller and in JSON it is its name. Where a view's parameter is declared with the enum,
 a call may write the case alone, `.large`; anywhere else that is `EnumShorthand`.
 
-`match` says what to do for each case (see [`match`](#match)). A case cannot carry values yet.
+`match` says what to do for each case (see [`match`](#match)).
 
-> **Not yet.** An enum case cannot carry values, `Load.failed(message: "offline")`.
-> (`15_wanted_for_1_0.byd`)
+A case may carry values, each named and typed as a record's fields are:
+
+```byld
+enum Load { idle, loading, failed(message: Str), ready(count: Int) }
+
+View Main() {
+    var state = Load.failed(message: "offline")
+    Text(match state {
+        .idle => "idle"
+        .loading => "loading"
+        .failed(message) => "failed: {message}"
+        .ready(count) => "{count} items"
+    })
+}
+```
+
+It is built by writing its fields by name, `Load.failed(message: "offline")`: one of a
+different type is `TypeMismatch`, one left out is `TypeMismatch` that names it, one the case does
+not have is `UnknownField`, and writing `Load.failed` with none is `ArityMismatch`. A case with
+values is read **only through `match`**, which binds them in the order they were declared,
+`.failed(message) =>`; a pattern that binds a different number is `ArityMismatch`, and one that
+binds none matches the case and reads nothing. There is no `state.message`: that is
+`UnknownField`. A field cannot be called `case`.
+
+A case with values is a record at run time, `{ case: "failed", message: "offline" }`, which
+is what a controller and JSON see; a case with none stays its name. Two of them are equal when
+their case and their values are.
 
 ### Contexts
 

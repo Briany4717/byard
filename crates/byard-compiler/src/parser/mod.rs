@@ -694,11 +694,16 @@ impl<'a> Parser<'a> {
             .unwrap_or_else(|| Symbol::intern(""));
         self.expect(&Token::LBrace, "'{'");
         let mut cases = Vec::new();
+        let mut fields = Vec::new();
         while !matches!(self.cur(), Some(Token::RBrace) | None) {
             let at = self.cur_span();
             let Some(case) = self.expect_decl_name("a case", "a case name") else {
                 break;
             };
+            if matches!(self.cur(), Some(Token::LParen)) {
+                let carried = self.parse_case_fields();
+                fields.push((case.clone(), carried));
+            }
             cases.push((case, self.span_from(at)));
             self.eat(&Token::Comma);
         }
@@ -709,9 +714,38 @@ impl<'a> Parser<'a> {
         EnumDecl {
             name,
             cases,
+            fields,
             private: false,
             span: self.span_from(start),
         }
+    }
+
+    /// The values a case carries, `(message: Str, code: Int)`, named as a
+    /// record's fields are.
+    fn parse_case_fields(&mut self) -> Vec<(Symbol, Type)> {
+        self.advance(); // (
+        let mut fields: Vec<(Symbol, Type)> = Vec::new();
+        while !matches!(self.cur(), Some(Token::RParen) | None) {
+            let Some(name) = self.expect_ident("a field name, as in `failed(message: Str)`") else {
+                break;
+            };
+            if name.as_str() == "case" {
+                self.error(
+                    "a field name other than `case`, which a case's value keeps for its own name",
+                );
+            }
+            self.expect(&Token::Colon, "':'");
+            let ty = self.parse_type();
+            fields.push((name, ty));
+            if !self.eat(&Token::Comma) {
+                break;
+            }
+        }
+        if fields.is_empty() && matches!(self.cur(), Some(Token::RParen)) {
+            self.error("a field: a case with `( )` carries one, as in `failed(message: Str)`");
+        }
+        self.expect(&Token::RParen, "')'");
+        fields
     }
 
     /// `use_decl := "use" IDENT ("as" IDENT | "." "{" IDENT ("," IDENT)* "}")?`

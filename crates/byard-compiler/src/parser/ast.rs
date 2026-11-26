@@ -65,6 +65,9 @@ pub enum Pattern {
         enum_name: Option<Symbol>,
         /// The case.
         name: Symbol,
+        /// The names a case that carries values binds, in the order of its
+        /// fields: `.failed(message)`.
+        binds: Vec<Symbol>,
         /// Source span.
         span: Span,
     },
@@ -242,6 +245,9 @@ pub struct EnumDecl {
     pub name: Symbol,
     /// The cases, in the order written, each with its span.
     pub cases: Vec<(Symbol, Span)>,
+    /// The cases that carry values (`failed(message: Str)`), each with its
+    /// fields in the order written. A case not named here is its name alone.
+    pub fields: Vec<(Symbol, Vec<(Symbol, Type)>)>,
     /// Written `private enum …`.
     pub private: bool,
     /// Source span.

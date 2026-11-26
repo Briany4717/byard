@@ -26,8 +26,9 @@ use crate::symbol::Symbol;
 
 /// Rewrites every `match` of `views`, and of the functions and constants they
 /// share, as the chain it means.
-pub(crate) fn matches(views: &mut [ViewDecl]) {
-    let enums = Enums::of(views.first().map(|v| &v.enums[..]).unwrap_or_default());
+pub(crate) fn matches(views: &mut [ViewDecl], map_loops: &[Span]) {
+    let mut enums = Enums::of(views.first().map(|v| &v.enums[..]).unwrap_or_default());
+    enums.map_loops = map_loops.iter().map(|s| (s.start, s.end)).collect();
     let (mut helpers, mut consts): (Vec<FnDecl>, Vec<ConstDecl>) = views
         .first()
         .map(|v| ((*v.helpers).clone(), (*v.consts).clone()))
@@ -68,6 +69,36 @@ fn rewrite(e: &mut Expr, enums: &Enums) {
         *e = record;
         return;
     }
+    // `for k, v in map { … }` as an action.
+    if let Expr::ForEach {
+        var,
+        index,
+        body,
+        span,
+        ..
+    } = e
+    {
+        if enums.goes_over_a_map(*span) {
+            let (entry, lets) = Enums::entry_lets(*span, var, index.as_ref());
+            let mut stmts: Vec<Expr> = lets
+                .into_iter()
+                .map(|(name, value)| Expr::Let {
+                    name,
+                    ty: None,
+                    value: Box::new(value),
+                    span: *span,
+                })
+                .collect();
+            match std::mem::replace(&mut **body, Expr::Error(*span)) {
+                Expr::Block(inner, _) => stmts.extend(inner),
+                other => stmts.push(other),
+            }
+            **body = Expr::Block(stmts, *span);
+            *var = entry;
+            *index = None;
+        }
+        return;
+    }
     if matches!(e, Expr::Match { .. }) {
         let whole = std::mem::replace(e, Expr::Error(Span::new(0, 0)));
         if let Expr::Match {
@@ -93,6 +124,32 @@ fn rewrite(e: &mut Expr, enums: &Enums) {
 /// Every `match` of a list of members, at any depth.
 fn in_members(members: &mut Vec<Member>, enums: &Enums) {
     for member in members.iter_mut() {
+        // `for k, v in map { … }` in a view.
+        if let Member::For {
+            var,
+            index,
+            body,
+            span,
+            ..
+        } = member
+        {
+            if enums.goes_over_a_map(*span) {
+                let (entry, lets) = Enums::entry_lets(*span, var, index.as_ref());
+                let mut inner: Vec<Member> = lets
+                    .into_iter()
+                    .map(|(name, init)| Member::Let {
+                        name,
+                        ty: None,
+                        init,
+                        span: *span,
+                    })
+                    .collect();
+                inner.append(body);
+                *body = inner;
+                *var = entry;
+                *index = None;
+            }
+        }
         walk::member_exprs(member, &mut |e| rewrite(e, enums));
         match member {
             Member::Element(el) => in_members(&mut el.children, enums),
@@ -128,6 +185,8 @@ pub(crate) struct Enums {
     /// For each enum, each case with the names of its fields (empty for a
     /// case that is its name alone).
     by_enum: HashMap<Symbol, HashMap<Symbol, Vec<Symbol>>>,
+    /// The spans of the `for` loops that go over a map.
+    map_loops: std::collections::HashSet<(u32, u32)>,
 }
 
 impl Enums {
@@ -151,7 +210,37 @@ impl Enums {
                 (d.name.clone(), cases)
             })
             .collect();
-        Self { by_enum }
+        Self {
+            by_enum,
+            map_loops: std::collections::HashSet::new(),
+        }
+    }
+
+    /// Whether the `for` at `span` goes over a map.
+    fn goes_over_a_map(&self, span: Span) -> bool {
+        self.map_loops.contains(&(span.start, span.end))
+    }
+
+    /// The name a map loop reads each entry as, and the names it binds from
+    /// it: `for k, v in m` runs for each entry `e` with `k = e.key` and
+    /// `v = e.value`.
+    fn entry_lets(
+        span: Span,
+        var: &Symbol,
+        index: Option<&Symbol>,
+    ) -> (Symbol, Vec<(Symbol, Expr)>) {
+        let entry = Symbol::intern(&format!("__entry_{}", span.start));
+        let read = |field: &str| Expr::Member {
+            base: Box::new(Expr::Ident(entry.clone(), span)),
+            field: Symbol::intern(field),
+            span,
+        };
+        let mut lets = Vec::new();
+        if let Some(index) = index {
+            lets.push((index.clone(), read("key")));
+        }
+        lets.push((var.clone(), read("value")));
+        (entry, lets)
     }
 
     /// `Load.failed(message: "offline")` as the record it is at run time.

@@ -204,7 +204,6 @@ View Main() {
 }
 
 //# case: index-assignment
-//# gap: `xs[0] = 9` checks clean and changes nothing
 //# fragment
 //# text: 9
 var xs = [1, 2]

@@ -26,10 +26,15 @@ use crate::symbol::Symbol;
 
 /// The closed set of list methods (RFC-0027 §4), used for the `UnknownMethod`
 /// suggestion.
-const LIST_METHODS: [&str; 16] = [
+const LIST_METHODS: [&str; 24] = [
     "push", "removeAt", "contains", "map", "filter", "slice", "sort", "sortBy", "reduce", "find",
-    "indexOf", "min", "max", "reverse", "join", "get",
+    "indexOf", "min", "max", "reverse", "join", "get", "first", "last", "any", "all", "count",
+    "sum", "insertAt", "updateAt",
 ];
+
+/// The methods of a `Map`, and of a `Set`.
+const MAP_METHODS: [&str; 2] = ["set", "remove"];
+const SET_METHODS: [&str; 3] = ["add", "remove", "contains"];
 
 /// The methods a `Str` has at runtime (`len` is a field). Any other call on a
 /// `Str` silently evaluates to nothing, which is exactly what this diagnostic
@@ -70,8 +75,8 @@ const BUILT_IN_NAMES: [&str; 5] = ["anim", "scroll_fraction", "route", "window",
 /// Functions the language itself provides: `untrack(expr)`, the
 /// `match(element)` width of an anchored overlay, the navigation actions
 /// (`navigate`, `back`, `replace`), and the clock (`now`, `nowUtc`; RFC-0049).
-const BUILT_IN_CALLS: [&str; 7] = [
-    "untrack", "match", "navigate", "back", "replace", "now", "nowUtc",
+const BUILT_IN_CALLS: [&str; 8] = [
+    "untrack", "match", "navigate", "back", "replace", "now", "nowUtc", "Set",
 ];
 
 /// Whether the property `prop` of the element `element` takes only values (a
@@ -118,6 +123,10 @@ pub enum Ty {
     Bool,
     /// `List<T>`.
     List(Box<Ty>),
+    /// `Map<K, V>`.
+    Map(Box<Ty>, Box<Ty>),
+    /// `Set<T>`.
+    Set(Box<Ty>),
     /// `Fn(params) -> ret`.
     Fn(Vec<Ty>, Option<Box<Ty>>),
     /// `T?` (RFC-0065): a value that may be none. Only a parameter or a context
@@ -146,6 +155,9 @@ pub struct Inference {
     /// What surfaces the program writes (RFC-0068 §1): whether it is a
     /// single-surface program, the implicit window, or has a `Window`.
     pub surfaces: crate::surfaces::SurfaceShape,
+    /// The `for` loops that go over a map, by their spans: what each runs for
+    /// is an entry, `{ key, value }`, which the loop's two names are read from.
+    pub map_loops: Vec<Span>,
 }
 
 /// What the value a handler may name is, by event (RFC-0063 §2).
@@ -326,6 +338,7 @@ pub fn check_views(views: &[ViewDecl]) -> Inference {
             provided: HashSet::new(),
             type_vars: HashSet::new(),
             generics: HashMap::new(),
+            map_loops: Vec::new(),
         };
         for decl in record_decls.iter() {
             for field in &decl.fields {
@@ -365,8 +378,11 @@ pub fn check_views(views: &[ViewDecl]) -> Inference {
             provided: HashSet::new(),
             type_vars: HashSet::new(),
             generics: top_generics.clone(),
+            map_loops: Vec::new(),
         };
         checker.check_view(view);
+        let loops = std::mem::take(&mut checker.map_loops);
+        out.map_loops.extend(loops);
     }
     out.surfaces = crate::surfaces::check_surfaces(views, &mut out.errors);
     crate::names::check(views, &mut out.errors);
@@ -433,6 +449,7 @@ fn check_top_fns(
         provided: HashSet::new(),
         type_vars: HashSet::new(),
         generics: generics_of(helpers),
+        map_loops: Vec::new(),
     };
     let mut top = HashMap::new();
     for decl in helpers {
@@ -618,6 +635,7 @@ fn check_consts(
                 provided: HashSet::new(),
                 type_vars: HashSet::new(),
                 generics: generics_of(helpers),
+                map_loops: Vec::new(),
             };
             let declared = decl.ty.as_ref().map(|t| checker.resolve_written(t));
             let found = if declared.is_some() {
@@ -799,6 +817,8 @@ struct Checker<'a> {
     /// The type parameters of each `fn` that has some, by its name: a call
     /// gives them types by the arguments it passes.
     generics: HashMap<Symbol, Vec<Symbol>>,
+    /// The `for` loops over a map the checker has met.
+    map_loops: Vec<Span>,
 }
 
 /// The program's contexts, by name: each field with its type, and whether it
@@ -1643,7 +1663,8 @@ impl Checker<'_> {
     fn has_equality(&self, ty: &Ty, depth: u32) -> bool {
         match ty {
             Ty::List(_) | Ty::Fn(..) => false,
-            Ty::Optional(inner) => self.has_equality(inner, depth),
+            Ty::Map(key, value) => self.has_equality(key, depth) && self.has_equality(value, depth),
+            Ty::Set(item) | Ty::Optional(item) => self.has_equality(item, depth),
             Ty::Named(name) => match self.records.get(name) {
                 Some(fields) if depth < 8 => fields
                     .iter()
@@ -2187,9 +2208,14 @@ impl Checker<'_> {
                         rhs_ty: ty_name(&iterated),
                     });
                 }
-                let item = match iterated {
-                    Ty::List(inner) => *inner,
-                    _ => Ty::Unknown,
+                // `for sku, qty in stock`: a map gives each key and its value.
+                if matches!(iterated, Ty::Map(..)) {
+                    self.map_loops.push(member_span(member));
+                }
+                let (item, key_ty) = match iterated {
+                    Ty::List(inner) | Ty::Set(inner) => (*inner, Ty::Int),
+                    Ty::Map(key, value) => (*value, *key),
+                    _ => (Ty::Unknown, Ty::Int),
                 };
                 let element = match &item {
                     Ty::Named(n) if self.records.contains_key(n) || n.as_str() == "Screen" => {
@@ -2202,7 +2228,7 @@ impl Checker<'_> {
                     self.check_for_key(var, &item, &element, key);
                 }
                 let mut shadow = vec![(var, element)];
-                shadow.extend(index.as_ref().map(|i| (i, Ty::Int)));
+                shadow.extend(index.as_ref().map(|i| (i, key_ty)));
                 self.check_scoped(body, &shadow);
             }
             Member::When {
@@ -2282,6 +2308,15 @@ impl Checker<'_> {
                         self.must_fit_expr(item, elem, &found, elem.span());
                     }
                 }
+                // A map is judged pair by pair, as a list is item by item.
+                (Expr::MapLit(pairs, _), Ty::Map(key, value)) => {
+                    for (k, v) in pairs {
+                        let found = self.value(k);
+                        self.must_fit(key, &found, k.span());
+                        let found = self.value(v);
+                        self.must_fit_expr(value, v, &found, v.span());
+                    }
+                }
                 _ => {
                     let found = self.value(init);
                     self.must_fit_expr(&expected, init, &found, init.span());
@@ -2345,7 +2380,7 @@ impl Checker<'_> {
             return false;
         };
         let mut at: &Expr = target;
-        while let Expr::Member { base, .. } = at {
+        while let Expr::Member { base, .. } | Expr::Index { base, .. } = at {
             at = base;
         }
         matches!(
@@ -2359,7 +2394,7 @@ impl Checker<'_> {
                 Expr::Assign { target, .. } | Expr::Postfix { target, .. } => target,
                 _ => return false,
             },
-            Expr::Member { .. }
+            Expr::Member { .. } | Expr::Index { .. }
         )
     }
 
@@ -2672,6 +2707,11 @@ impl Checker<'_> {
                         });
                     }
                 }
+                // A value is found by a key of the map's type, and may not be
+                // there.
+                if let Ty::Map(key, _) = &b {
+                    self.must_fit(key, &at, index.span());
+                }
                 // An item is found by a whole number.
                 if matches!(b, Ty::List(_) | Ty::Str) && is_concrete(&at) && at != Ty::Int {
                     self.errors.push(CompileError::TypeMismatch {
@@ -2683,6 +2723,7 @@ impl Checker<'_> {
                 }
                 match b {
                     Ty::List(elem) => *elem,
+                    Ty::Map(_, value) => Ty::Optional(value),
                     // The character at `i`.
                     Ty::Str => Ty::Str,
                     _ => Ty::Unknown,
@@ -2694,7 +2735,9 @@ impl Checker<'_> {
                     return ty;
                 }
                 let b = self.value(base);
-                if field.as_str() == "len" && matches!(b, Ty::List(_) | Ty::Str) {
+                if field.as_str() == "len"
+                    && matches!(b, Ty::List(_) | Ty::Str | Ty::Map(..) | Ty::Set(_))
+                {
                     Ty::Int
                 } else if let Ty::Shape(known) = &b {
                     self.shape_field(known, field, *span)
@@ -2926,6 +2969,36 @@ impl Checker<'_> {
                 }
                 Ty::Unknown
             }
+            // `["ada": 36]`: the keys are of one type and so are the values.
+            Expr::MapLit(pairs, span) => {
+                if pairs.is_empty() {
+                    self.errors.push(CompileError::CannotInfer { span: *span });
+                    return Ty::Unknown;
+                }
+                let mut key: Option<Ty> = None;
+                let mut value: Option<Ty> = None;
+                let mut mixed = false;
+                for (k, v) in pairs {
+                    for (found, held) in [(self.value(k), &mut key), (self.value(v), &mut value)] {
+                        if !is_concrete(&found) {
+                            continue;
+                        }
+                        match held {
+                            None => *held = Some(found),
+                            Some(prev) if same_ty(prev, &found) => {}
+                            Some(_) => mixed = true,
+                        }
+                    }
+                }
+                if mixed {
+                    self.errors.push(CompileError::CannotInfer { span: *span });
+                    return Ty::Unknown;
+                }
+                Ty::Map(
+                    Box::new(key.unwrap_or(Ty::Unknown)),
+                    Box::new(value.unwrap_or(Ty::Unknown)),
+                )
+            }
             // `for item in items { … }` as an action: the list is a list, and
             // the body is checked with the item (and its position) bound.
             Expr::ForEach {
@@ -2944,14 +3017,18 @@ impl Checker<'_> {
                         rhs_ty: ty_name(&iterated),
                     });
                 }
-                let item = match iterated {
-                    Ty::List(inner) if is_concrete(&inner) => *inner,
-                    _ => Ty::Unknown,
+                if matches!(iterated, Ty::Map(..)) {
+                    self.map_loops.push(expr.span());
+                }
+                let (item, key_ty) = match iterated {
+                    Ty::List(inner) | Ty::Set(inner) if is_concrete(&inner) => (*inner, Ty::Int),
+                    Ty::Map(key, value) => (*value, *key),
+                    _ => (Ty::Unknown, Ty::Int),
                 };
                 let mark = self.undo.len();
                 self.bind(var.clone(), item);
                 if let Some(index) = index {
-                    self.bind(index.clone(), Ty::Int);
+                    self.bind(index.clone(), key_ty);
                 }
                 self.value(body);
                 self.leave(mark);
@@ -3471,6 +3548,29 @@ impl Checker<'_> {
             self.strict = was;
             return ty;
         }
+        // `Set([1, 2])`: the items of a list, each once. `Set()` is empty.
+        if let Expr::Ident(name, _) = callee {
+            if name.as_str() == "Set" && !self.knows_own(name) {
+                let item = match args.first() {
+                    Some(arg) => match self.value(&arg.value) {
+                        Ty::List(item) => *item,
+                        found => {
+                            if is_concrete(&found) {
+                                self.errors.push(CompileError::TypeMismatch {
+                                    span: arg.value.span(),
+                                    op: "Set".to_string(),
+                                    lhs_ty: ty_name(&found),
+                                    rhs_ty: "List".to_string(),
+                                });
+                            }
+                            Ty::Unknown
+                        }
+                    },
+                    None => Ty::Unknown,
+                };
+                return Ty::Set(Box::new(item));
+            }
+        }
         // `match(searchField)` names an element by its `as` tag, which is not
         // a value in scope.
         if matches!(callee, Expr::Ident(name, _) if name.as_str() == "match") {
@@ -3532,6 +3632,8 @@ impl Checker<'_> {
     ) -> Ty {
         let known: Option<&[&str]> = match recv {
             Ty::List(_) => Some(&LIST_METHODS),
+            Ty::Map(..) => Some(&MAP_METHODS),
+            Ty::Set(_) => Some(&SET_METHODS),
             Ty::Str => Some(&STR_METHODS),
             Ty::Int => Some(&INT_METHODS),
             Ty::Float => Some(&FLOAT_METHODS),
@@ -3558,7 +3660,7 @@ impl Checker<'_> {
         // Lambda-bearing methods: purity + (for filter and find) a Bool
         // predicate. `reduce` takes its lambda second, after the initial value.
         let lambda_at = match name.as_str() {
-            "map" | "filter" | "sortBy" | "find" => Some(0),
+            "map" | "filter" | "sortBy" | "find" | "any" | "all" | "count" => Some(0),
             "reduce" => Some(1),
             _ => None,
         };
@@ -3611,7 +3713,9 @@ impl Checker<'_> {
                 }
                 let bt = self.value(body);
                 self.leave(mark);
-                if matches!(name.as_str(), "filter" | "find") && is_concrete(&bt) && bt != Ty::Bool
+                if matches!(name.as_str(), "filter" | "find" | "any" | "all" | "count")
+                    && is_concrete(&bt)
+                    && bt != Ty::Bool
                 {
                     self.errors
                         .push(CompileError::PredicateNotBool { span: body.span() });
@@ -3631,8 +3735,27 @@ impl Checker<'_> {
                 if let (Ty::List(item), "push", 0) = (recv, name.as_str(), i) {
                     self.must_fit(item, &found, arg.value.span());
                 }
+                // A map is given keys and values of its types, a set items of
+                // its own.
+                match (recv, name.as_str(), i) {
+                    (Ty::Map(key, _), "set" | "remove", 0) => {
+                        self.must_fit(key, &found, arg.value.span());
+                    }
+                    (Ty::Map(_, value), "set", 1) => {
+                        self.must_fit(value, &found, arg.value.span());
+                    }
+                    (Ty::Set(item), "add" | "remove" | "contains", 0) => {
+                        self.must_fit(item, &found, arg.value.span());
+                    }
+                    _ => {}
+                }
+                // `insertAt` and `updateAt` put an item the list holds.
+                if let (Ty::List(item), "insertAt" | "updateAt", 1) = (recv, name.as_str(), i) {
+                    self.must_fit(item, &found, arg.value.span());
+                }
                 // An item is found by a whole number.
-                if let (Ty::List(_), "get", 0) = (recv, name.as_str(), i) {
+                if let (Ty::List(_), "get" | "insertAt" | "updateAt", 0) = (recv, name.as_str(), i)
+                {
                     if is_concrete(&found) && found != Ty::Int {
                         self.errors.push(CompileError::TypeMismatch {
                             span: arg.value.span(),
@@ -3645,15 +3768,33 @@ impl Checker<'_> {
             }
         }
         match (recv, name.as_str()) {
-            (
+            (Ty::Map(..), "set" | "remove")
+            | (Ty::Set(_), "add" | "remove")
+            | (
                 Ty::List(_),
-                "push" | "removeAt" | "filter" | "slice" | "sort" | "sortBy" | "reverse",
+                "push" | "removeAt" | "filter" | "slice" | "sort" | "sortBy" | "reverse"
+                | "insertAt" | "updateAt",
             )
             | (Ty::Int | Ty::Float, "abs") => recv.clone(),
             // `xs.get(i)` is the item, or nothing past the end: a `T?`, where
             // `xs[i]` is a `T`.
-            (Ty::List(item), "get") => Ty::Optional(item.clone()),
-            (Ty::List(_) | Ty::Str, "indexOf")
+            (Ty::List(item), "get" | "first" | "last") => Ty::Optional(item.clone()),
+            // The items added up: a list of numbers has a sum.
+            (Ty::List(item), "sum") => {
+                if is_concrete(item) && !matches!(**item, Ty::Int | Ty::Float) {
+                    self.errors.push(CompileError::TypeMismatch {
+                        span,
+                        op: "sum".to_string(),
+                        lhs_ty: ty_name(recv),
+                        rhs_ty: "a list of numbers".to_string(),
+                    });
+                    Ty::Unknown
+                } else {
+                    (**item).clone()
+                }
+            }
+            (Ty::List(_), "count")
+            | (Ty::List(_) | Ty::Str, "indexOf")
             | (Ty::Int, "alpha")
             | (Ty::Str, "toInt")
             | (Ty::Float, "round" | "floor" | "ceil") => Ty::Int,
@@ -3678,7 +3819,9 @@ impl Checker<'_> {
             )
             | (Ty::List(_), "join") => Ty::Str,
             (Ty::Str, "split") => Ty::List(Box::new(Ty::Str)),
-            (Ty::List(_) | Ty::Str, "contains") | (Ty::Str, "startsWith" | "endsWith") => Ty::Bool,
+            (Ty::List(_), "any" | "all")
+            | (Ty::List(_) | Ty::Set(_) | Ty::Str, "contains")
+            | (Ty::Str, "startsWith" | "endsWith") => Ty::Bool,
             (Ty::List(_), "map") => Ty::List(Box::new(lambda_body_ty.unwrap_or(Ty::Unknown))),
             _ => Ty::Unknown,
         }
@@ -3846,6 +3989,8 @@ impl Checker<'_> {
                         | "Bool"
                         | "Color"
                         | "List"
+                        | "Map"
+                        | "Set"
                         | "Slot"
                         | "Fn"
                         | "Text"
@@ -3902,6 +4047,15 @@ impl Checker<'_> {
                         let inner = args.first().map_or(Ty::Unknown, |a| self.resolve_type(a));
                         Ty::List(Box::new(inner))
                     }
+                    "Map" => {
+                        let key = args.first().map_or(Ty::Unknown, |a| self.resolve_type(a));
+                        let value = args.get(1).map_or(Ty::Unknown, |a| self.resolve_type(a));
+                        Ty::Map(Box::new(key), Box::new(value))
+                    }
+                    "Set" => {
+                        let inner = args.first().map_or(Ty::Unknown, |a| self.resolve_type(a));
+                        Ty::Set(Box::new(inner))
+                    }
                     _ => {
                         // Still recurse into args to catch a nested `Text`.
                         for a in args {
@@ -3942,6 +4096,11 @@ fn plain_ty(ty: &Type) -> Ty {
             "Bool" => Ty::Bool,
             "Text" => Ty::Unknown,
             "List" => Ty::List(Box::new(args.first().map_or(Ty::Unknown, plain_ty))),
+            "Map" => Ty::Map(
+                Box::new(args.first().map_or(Ty::Unknown, plain_ty)),
+                Box::new(args.get(1).map_or(Ty::Unknown, plain_ty)),
+            ),
+            "Set" => Ty::Set(Box::new(args.first().map_or(Ty::Unknown, plain_ty))),
             _ => Ty::Named(name.clone()),
         },
         Type::Optional { inner, .. } => Ty::Optional(Box::new(plain_ty(inner))),
@@ -3960,7 +4119,8 @@ fn plain_ty(ty: &Type) -> Ty {
 fn same_ty(a: &Ty, b: &Ty) -> bool {
     match (a, b) {
         (Ty::Unknown, _) | (_, Ty::Unknown) => true,
-        (Ty::List(x), Ty::List(y)) => same_ty(x, y),
+        (Ty::List(x), Ty::List(y)) | (Ty::Set(x), Ty::Set(y)) => same_ty(x, y),
+        (Ty::Map(kx, vx), Ty::Map(ky, vy)) => same_ty(kx, ky) && same_ty(vx, vy),
         _ => a == b,
     }
 }
@@ -3971,7 +4131,10 @@ fn same_ty(a: &Ty, b: &Ty) -> bool {
 fn judged(t: &Ty) -> bool {
     match t {
         Ty::Int | Ty::Float | Ty::Str | Ty::Bool => true,
-        Ty::List(item) => judged(item) || **item == Ty::Unknown,
+        Ty::List(item) | Ty::Set(item) => judged(item) || **item == Ty::Unknown,
+        Ty::Map(key, value) => {
+            (judged(key) || **key == Ty::Unknown) && (judged(value) || **value == Ty::Unknown)
+        }
         _ => false,
     }
 }
@@ -4027,7 +4190,8 @@ fn assignable(expected: &Ty, found: &Ty) -> bool {
         (Ty::Unknown | Ty::Fn(..), _) | (_, Ty::Unknown | Ty::Fn(..)) | (Ty::Float, Ty::Int) => {
             true
         }
-        (Ty::List(e), Ty::List(f)) => assignable(e, f),
+        (Ty::List(e), Ty::List(f)) | (Ty::Set(e), Ty::Set(f)) => assignable(e, f),
+        (Ty::Map(ke, ve), Ty::Map(kf, vf)) => assignable(ke, kf) && assignable(ve, vf),
         _ => expected == found,
     }
 }
@@ -4059,6 +4223,8 @@ fn ty_name(t: &Ty) -> String {
         Ty::Str => "Str".to_string(),
         Ty::Bool => "Bool".to_string(),
         Ty::List(e) => format!("List<{}>", ty_name(e)),
+        Ty::Map(k, v) => format!("Map<{}, {}>", ty_name(k), ty_name(v)),
+        Ty::Set(e) => format!("Set<{}>", ty_name(e)),
         Ty::Fn(..) => "Fn".to_string(),
         Ty::Optional(t) => format!("{}?", ty_name(t)),
         Ty::Named(n) => n.as_str().to_string(),
@@ -4108,10 +4274,14 @@ fn eq_compatible(l: &Ty, r: &Ty) -> bool {
         | (Ty::Bool, Ty::Bool)
         | (Ty::Shape(_), Ty::Shape(_) | Ty::Named(_))
         | (Ty::Named(_), Ty::Shape(_)) => true,
-        (Ty::List(a), Ty::List(b)) => {
+        (Ty::List(a), Ty::List(b)) | (Ty::Set(a), Ty::Set(b)) => {
             a == b || matches!(**a, Ty::Unknown) || matches!(**b, Ty::Unknown)
         }
         (Ty::Named(a), Ty::Named(b)) => a == b,
+        (Ty::Map(ka, va), Ty::Map(kb, vb)) => {
+            (ka == kb || matches!(**ka, Ty::Unknown) || matches!(**kb, Ty::Unknown))
+                && (va == vb || matches!(**va, Ty::Unknown) || matches!(**vb, Ty::Unknown))
+        }
         _ => false,
     }
 }

@@ -199,6 +199,12 @@ pub(crate) fn expr(e: &mut Expr, f: &mut dyn FnMut(&mut Expr)) {
                 expr(&mut arm.body, f);
             }
         }
+        Expr::MapLit(pairs, _) => {
+            for (k, v) in pairs {
+                expr(k, f);
+                expr(v, f);
+            }
+        }
         Expr::ForEach { iter, body, .. } => {
             expr(iter, f);
             expr(body, f);

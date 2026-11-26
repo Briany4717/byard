@@ -553,11 +553,14 @@ fn resolve_root(
     // The type checks run over the merged, rebased views, so their spans are
     // already program-wide. Held back while the program has parse or resolve
     // errors: a broken tree would only add follow-on noise to the real one.
+    let mut map_loops = Vec::new();
     if r.errors.is_empty() {
-        r.errors.extend(crate::infer::check_views(&views).errors);
+        let checked = crate::infer::check_views(&views);
+        r.errors.extend(checked.errors);
+        map_loops = checked.map_loops;
     }
     // What was written has been checked; what runs is the chain it means.
-    crate::desugar::matches(&mut views);
+    crate::desugar::matches(&mut views, &map_loops);
 
     ResolvedProgram {
         views,

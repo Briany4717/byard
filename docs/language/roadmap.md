@@ -15,7 +15,7 @@ So every step below ends the same way: **its cases lose their `gap:` line, the r
 loses its note, and this file loses the step.** When this file is empty and the suite has no
 gap, the language is where this document wanted it.
 
-As written, the suite has 754 cases: 743 hold and 11 are gaps.
+As written, the suite has 793 cases: 786 hold and 7 are gaps.
 
 ```sh
 cargo test -p byard-cli --test it conformance -- --nocapture
@@ -215,9 +215,18 @@ so do the twenty-two cases added with them. What stays open:
 
 ### 17. Collections
 
-*Cases:* `map-type`, `list-helpers`, `list-insert-and-update`.
+*Done.* `map-type`, `list-helpers` and `list-insert-and-update` hold, and so does
+`index-assignment`, left from step 9, with the forty-one cases added with them. What stays open:
 
-`Map<K, V>` and `Set<T>`, and the list methods people write by hand every week.
+- The other list methods the proposal names: `take`, `skip`, `flatMap`, `groupBy`, `unique`,
+  `zip`, `chunk` and `enumerate`.
+- A lookup in a `Map` or a `Set` searches what was added, as `find` does. The order they keep
+  is what the reference promises; a hash for the keys that can be hashed would make the lookup
+  fast without changing it.
+- `m.keys()`, `m.values()` and a `Set` operation such as `union` do not exist. A `for` goes over
+  a map for its keys.
+- `var-map-type-does-not-exist` said `Map` was not a type; it is one now, so it asks the same of
+  `Dict`.
 
 ### 18. Types for what is an `Int` today
 

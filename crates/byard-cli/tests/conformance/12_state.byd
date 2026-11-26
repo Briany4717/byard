@@ -42,10 +42,10 @@ Text("{xs.len}")
 var q: Qux = 1
 Text("{q}")
 
-//# case: var-map-type-does-not-exist
+//# case: var-generic-type-that-does-not-exist
 //# fragment
 //# error: UnknownType
-var m: Map<Str, Int> = {}
+var m: Dict<Str, Int> = {}
 Text("x")
 
 //# case: var-assigned-another-type

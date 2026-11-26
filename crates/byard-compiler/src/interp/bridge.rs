@@ -25,11 +25,27 @@ pub fn value_to_host(value: &Value) -> Option<HostValue> {
         Value::Int(n) => HostValue::Int(*n),
         Value::Float(f) => HostValue::Float(*f),
         Value::Str(s) => HostValue::Str(s.clone()),
-        Value::List(xs) => HostValue::List(xs.iter().map(value_to_host).collect::<Option<_>>()?),
+        // A set crosses as the list of its items.
+        Value::List(xs) | Value::Set(xs) => {
+            HostValue::List(xs.iter().map(value_to_host).collect::<Option<_>>()?)
+        }
         Value::Record(fields) => HostValue::Record(
             fields
                 .iter()
                 .map(|(k, v)| Some((k.as_str().to_string(), value_to_host(v)?)))
+                .collect::<Option<_>>()?,
+        ),
+        // A map crosses as the list of its `{ key, value }` entries: the host
+        // has no value of it.
+        Value::Map(pairs) => HostValue::List(
+            pairs
+                .iter()
+                .map(|(k, v)| {
+                    Some(HostValue::Record(vec![
+                        ("key".to_string(), value_to_host(k)?),
+                        ("value".to_string(), value_to_host(v)?),
+                    ]))
+                })
                 .collect::<Option<_>>()?,
         ),
         // A tuple is positional layout data, not a controller data shape; map it

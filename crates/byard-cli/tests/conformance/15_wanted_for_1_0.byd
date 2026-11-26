@@ -35,7 +35,6 @@ View Main() {
 }
 
 //# case: map-type
-//# gap: there is no `Map`
 //# fragment
 //# text: 2 1 0
 var ages: Map<Str, Int> = ["ada": 36, "bo": 1]
@@ -62,14 +61,12 @@ let xs = [1]
 Text("{xs.get("a") ?? 9}")
 
 //# case: list-helpers
-//# gap: no `first`, `last`, `any`, `all`, `count`, `sum`
 //# fragment
 //# text: 1 3 true false 2 6
 let xs = [1, 2, 3]
 Text("{xs.first() ?? 0} {xs.last() ?? 0} {xs.any(x => x > 2)} {xs.all(x => x > 2)} {xs.count(x => x > 1)} {xs.sum()}")
 
 //# case: list-insert-and-update
-//# gap: no `insertAt`, `updateAt`
 //# fragment
 //# text: 0,1,2 1,9
 Text("{[1, 2].insertAt(0, 0).join(",")} {[1, 2].updateAt(1, 9).join(",")}")

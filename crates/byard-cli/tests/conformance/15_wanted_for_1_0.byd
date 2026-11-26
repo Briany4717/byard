@@ -3,7 +3,6 @@
 // starts to pass the day the feature lands.
 
 //# case: enum-with-data
-//# gap: an enum case cannot carry values
 //# text: failed: offline
 enum Load { idle, loading, failed(message: Str), ready(count: Int) }
 View Main() {

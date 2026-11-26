@@ -256,6 +256,13 @@ pub fn check_views(views: &[ViewDecl]) -> Inference {
                         .collect();
                     (r.name.clone(), fields)
                 })
+                .chain(v.enums.iter().flat_map(|e| {
+                    // A case that carries values is checked as the record of
+                    // its fields, under the name it is written with.
+                    e.fields
+                        .iter()
+                        .map(|(case, fields)| (case_record(&e.name, case), fields.clone()))
+                }))
                 .collect()
         })
         .unwrap_or_default();
@@ -472,6 +479,12 @@ fn check_top_fns(
         }
     }
     (top, top_sigs)
+}
+
+/// The name a case that carries values is checked under, as a record of its
+/// fields: `Load.failed`. No program can write it as a type.
+fn case_record(enum_name: &Symbol, case: &Symbol) -> Symbol {
+    Symbol::intern(&format!("{}.{}", enum_name.as_str(), case.as_str()))
 }
 
 /// The program's enums by name, each with its distinct cases.
@@ -1160,6 +1173,37 @@ impl Checker<'_> {
         }
     }
 
+    /// The names a pattern binds, with the types of the values they hold: the
+    /// fields of the case when the enum is known, nothing known otherwise.
+    fn pattern_binds(&mut self, held: &Ty, pattern: &Pattern) -> Vec<(Symbol, Ty)> {
+        let Pattern::Case {
+            enum_name: written,
+            name,
+            binds,
+            ..
+        } = pattern
+        else {
+            return Vec::new();
+        };
+        let enum_name = match held {
+            Ty::Named(n) if self.enums.contains_key(n) => Some(n.clone()),
+            _ => written.clone(),
+        };
+        let fields = enum_name
+            .and_then(|e| self.records.get(&case_record(&e, name)).cloned())
+            .unwrap_or_default();
+        binds
+            .iter()
+            .enumerate()
+            .map(|(i, bind)| {
+                let ty = fields
+                    .get(i)
+                    .map_or(Ty::Unknown, |(_, t)| self.resolve_type(t));
+                (bind.clone(), ty)
+            })
+            .collect()
+    }
+
     /// What the arms of a `match` are for, against what it matches: that a case
     /// is one of the enum, that a literal is of the value's type, and that
     /// nothing is left out (`NonExhaustive`).
@@ -1177,6 +1221,7 @@ impl Checker<'_> {
                 Pattern::Case {
                     enum_name: written,
                     name,
+                    binds,
                     span: at,
                 } => {
                     if let Some(enum_name) = &enum_name {
@@ -1192,6 +1237,18 @@ impl Checker<'_> {
                             });
                         } else if cases.contains(name) {
                             covered.push(name.clone());
+                            let carried = self
+                                .records
+                                .get(&case_record(enum_name, name))
+                                .map_or(0, Vec::len);
+                            if !binds.is_empty() && binds.len() != carried {
+                                self.errors.push(CompileError::ArityMismatch {
+                                    span: *at,
+                                    name: name.as_str().to_string(),
+                                    expected: carried,
+                                    found: binds.len(),
+                                });
+                            }
                         } else {
                             let hint = crate::util::closest_match(
                                 name.as_str(),
@@ -2091,7 +2148,10 @@ impl Checker<'_> {
                 let patterns: Vec<&Pattern> = arms.iter().map(|a| &a.pattern).collect();
                 self.check_patterns(&held, &patterns, *span);
                 for arm in arms {
-                    self.check_scoped(&arm.body, &[]);
+                    let binds = self.pattern_binds(&held, &arm.pattern);
+                    let shadow: Vec<(&Symbol, Ty)> =
+                        binds.iter().map(|(n, t)| (n, t.clone())).collect();
+                    self.check_scoped(&arm.body, &shadow);
                 }
             }
             // A lifecycle effect's body is an action, checked like any other
@@ -2585,7 +2645,12 @@ impl Checker<'_> {
                 // `Float`, as for `? :`.
                 let mut joined: Option<Ty> = None;
                 for arm in arms {
+                    let mark = self.undo.len();
+                    for (name, ty) in self.pattern_binds(&held, &arm.pattern) {
+                        self.bind(name, ty);
+                    }
                     let ty = self.check_expr(&arm.body);
+                    self.leave(mark);
                     joined = Some(match joined {
                         None => ty,
                         Some(so_far) => {
@@ -2825,6 +2890,14 @@ impl Checker<'_> {
                 hint,
             });
         }
+        if let Some(carried) = self.records.get(&case_record(name, field)) {
+            self.errors.push(CompileError::ArityMismatch {
+                span,
+                name: format!("{}.{}", name.as_str(), field.as_str()),
+                expected: carried.len(),
+                found: 0,
+            });
+        }
         Some(Ty::Named(name.clone()))
     }
 
@@ -2981,6 +3054,22 @@ impl Checker<'_> {
     }
 
     fn record_field(&mut self, record: &Symbol, field: &Symbol, span: Span) -> Ty {
+        // What a case carries is read through `match`, which binds it: an enum
+        // that has such a case has no field of its own to read.
+        if self.enums.get(record).is_some_and(|cases| {
+            cases
+                .iter()
+                .any(|c| self.records.contains_key(&case_record(record, c)))
+        }) {
+            let len = u32::try_from(field.as_str().len()).unwrap_or(0);
+            self.errors.push(CompileError::UnknownField {
+                span: Span::new(span.end.saturating_sub(len).max(span.start), span.end),
+                record: record.as_str().to_string(),
+                name: field.as_str().to_string(),
+                hint: None,
+            });
+            return Ty::Unknown;
+        }
         // RFC-0063: the value of a pointer or drag handler, unless the
         // program declares a record of the same name.
         if !self.records.contains_key(record) {
@@ -3039,6 +3128,44 @@ impl Checker<'_> {
             hint,
         });
         Ty::Unknown
+    }
+
+    /// `Load.failed(message: "offline")`: a value of the enum, built from the
+    /// fields its case declares, each written by name and of its type. `None`
+    /// when `callee` is not a case that carries values.
+    fn check_case_value(
+        &mut self,
+        callee: &Expr,
+        args: &[crate::parser::ast::Arg],
+        span: Span,
+    ) -> Option<Ty> {
+        let Expr::Member { base, field, .. } = callee else {
+            return None;
+        };
+        let Expr::Ident(name, _) = &**base else {
+            return None;
+        };
+        if self.env.contains_key(name) || self.declared.contains(name) {
+            return None;
+        }
+        let record = case_record(name, field);
+        if !self.records.contains_key(&record) {
+            return None;
+        }
+        let fields: Vec<(Symbol, Expr)> = args
+            .iter()
+            .filter_map(|a| a.name.clone().map(|n| (n, a.value.clone())))
+            .collect();
+        let literal = Expr::Record {
+            fields,
+            spread: None,
+            span,
+        };
+        // Written by name, like a record's: one that is not is not a field,
+        // and its field is then the one left out.
+        let found = Ty::Named(record.clone());
+        self.check_record_literal(&record, &literal, &found);
+        Some(Ty::Named(name.clone()))
     }
 
     /// Checks a call to a name against what the name is: a `fn` or a named
@@ -3114,6 +3241,9 @@ impl Checker<'_> {
     /// declared return type.
     fn check_call(&mut self, callee: &Expr, args: &[crate::parser::ast::Arg], span: Span) -> Ty {
         self.reject_bind_args(args);
+        if let Some(ty) = self.check_case_value(callee, args, span) {
+            return ty;
+        }
         if let Expr::Member { base, field, span } = callee {
             let recv = self.value(base);
             // What a method of a value is called with is a value. An

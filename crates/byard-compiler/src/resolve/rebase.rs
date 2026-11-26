@@ -70,6 +70,11 @@ pub(super) fn shift_enum(decl: &mut EnumDecl, delta: u32) {
     for (_, span) in &mut decl.cases {
         shift(span, delta);
     }
+    for (_, fields) in &mut decl.fields {
+        for (_, ty) in fields {
+            shift_type(ty, delta);
+        }
+    }
 }
 
 /// Rebases a `use` declaration by `delta` bytes.

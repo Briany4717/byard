@@ -897,6 +897,11 @@ for := "for" (NAME ",")? NAME "in" expr ("key" expr)? "{" member* "}"
 One copy of the block for each item of a list. With two names, the first is the item's
 position. The names belong to the block.
 
+`a..b` is the list of whole numbers from `a` up to, not including, `b`, so `for i in 0..3`
+is `0`, `1`, `2`, and `0..0` and `3..1` are empty. Its ends are `Int`s (`TypeMismatch`), and
+it reads looser than `+` and `-`: `1..n + 1` is `1..(n + 1)`. A range of more than a million
+numbers is an empty list. It is a list wherever a list goes: `let r = 0..4`, `r.len`.
+
 Without `key`, the copies stay where they are in the list: a new first item is shown by
 what was the first copy, with that copy's state. With `key`, a copy belongs to its key and
 follows it when the list is reordered, and only new keys get new copies. A key is a `Str`,
@@ -1023,7 +1028,25 @@ What an assignment writes is a `var`, a `bind` parameter, or a field or an item 
 assignment, `++` or `--` anywhere but an action, such as inside a text or a `let`, is
 `EffectInPureContext`.
 
-> **Not yet.** An action cannot loop and cannot stop early. (`11_control_flow.byd`)
+An action can loop over a list, and can stop early:
+
+```byld,fragment
+var total = 0
+on mount => {
+    for i, price in [10, 20, 30] {
+        if price > 25 { return }
+        total += i * price
+    }
+}
+Text("{total}")
+```
+
+`for item in items { … }` runs its block once for each item, in order; with two names the
+first is the item's position, as in a view. A value that is not a list is `TypeMismatch`. The
+names belong to the block. `return` ends the action where it is written, in whatever loop or
+`if` it is, and what follows it does not run. There is no `while`: a list has an end, so an
+action always does. `return` is a statement by itself, at the end of a block or of a line; a
+name that is `return` is still a name elsewhere.
 
 ## How the screen follows
 

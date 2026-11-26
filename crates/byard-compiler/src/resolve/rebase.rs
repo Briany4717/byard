@@ -307,6 +307,7 @@ fn shift_expr(expr: &mut Expr, delta: u32) {
         | Expr::AngleLit(_, span)
         | Expr::Ident(_, span)
         | Expr::ClassRef(_, span)
+        | Expr::Return(span)
         | Expr::Error(span) => shift(span, delta),
         Expr::StrLit(parts, span) => {
             shift(span, delta);
@@ -413,6 +414,13 @@ fn shift_expr(expr: &mut Expr, delta: u32) {
                 shift_pattern(&mut arm.pattern, delta);
                 shift_expr(&mut arm.body, delta);
             }
+        }
+        Expr::ForEach {
+            iter, body, span, ..
+        } => {
+            shift(span, delta);
+            shift_expr(iter, delta);
+            shift_expr(body, delta);
         }
         Expr::If {
             cond,

@@ -2846,6 +2846,37 @@ impl Checker<'_> {
                 }
                 Ty::Unknown
             }
+            // `for item in items { … }` as an action: the list is a list, and
+            // the body is checked with the item (and its position) bound.
+            Expr::ForEach {
+                var,
+                index,
+                iter,
+                body,
+                ..
+            } => {
+                let iterated = self.value(iter);
+                if is_not_a_list(&iterated) {
+                    self.errors.push(CompileError::TypeMismatch {
+                        span: iter.span(),
+                        op: "for".to_string(),
+                        lhs_ty: ty_name(&iterated),
+                        rhs_ty: ty_name(&iterated),
+                    });
+                }
+                let item = match iterated {
+                    Ty::List(inner) if is_concrete(&inner) => *inner,
+                    _ => Ty::Unknown,
+                };
+                let mark = self.undo.len();
+                self.bind(var.clone(), item);
+                if let Some(index) = index {
+                    self.bind(index.clone(), Ty::Int);
+                }
+                self.value(body);
+                self.leave(mark);
+                Ty::Unknown
+            }
             Expr::Animated { value, anim, .. } => {
                 self.word(anim);
                 self.check_expr(value)
@@ -2863,7 +2894,9 @@ impl Checker<'_> {
                 self.value(right);
                 Ty::Unknown
             }
-            Expr::AngleLit(..) | Expr::ClassRef(..) | Expr::Error(_) => Ty::Unknown,
+            Expr::AngleLit(..) | Expr::ClassRef(..) | Expr::Return(_) | Expr::Error(_) => {
+                Ty::Unknown
+            }
         }
     }
 
@@ -3527,6 +3560,13 @@ impl Checker<'_> {
                 }
                 join_numeric(l, r)
             }
+            // Whole numbers: `0..2.5` has no last one to stop at.
+            BinOp::Range => {
+                if both_concrete && !(*l == Ty::Int && *r == Ty::Int) {
+                    mismatch(self);
+                }
+                Ty::List(Box::new(Ty::Int))
+            }
         }
     }
 
@@ -3823,6 +3863,7 @@ fn op_str(op: BinOp) -> &'static str {
         BinOp::And => "&&",
         BinOp::Or => "||",
         BinOp::Otherwise => "??",
+        BinOp::Range => "..",
     }
 }
 

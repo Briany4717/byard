@@ -129,6 +129,7 @@ pub(crate) fn expr(e: &mut Expr, f: &mut dyn FnMut(&mut Expr)) {
         | Expr::AngleLit(..)
         | Expr::Ident(..)
         | Expr::ClassRef(..)
+        | Expr::Return(_)
         | Expr::Error(_) => {}
         Expr::StrLit(parts, _) => {
             for part in parts {
@@ -197,6 +198,10 @@ pub(crate) fn expr(e: &mut Expr, f: &mut dyn FnMut(&mut Expr)) {
                 }
                 expr(&mut arm.body, f);
             }
+        }
+        Expr::ForEach { iter, body, .. } => {
+            expr(iter, f);
+            expr(body, f);
         }
         Expr::If {
             cond, then, els, ..

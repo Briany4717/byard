@@ -1993,6 +1993,7 @@ fn animated_anywhere(value: &Expr) -> bool {
         // A controller call is a statement, never a property value, so it can
         // never carry a layout animation.
         | Expr::ControllerCall { .. }
+        | Expr::Return(_)
         | Expr::Error(..) => false,
         Expr::Array(items, _) | Expr::Block(items, _) => items.iter().any(animated_anywhere),
         Expr::Tuple(items, _) => args(items),
@@ -2021,6 +2022,7 @@ fn animated_anywhere(value: &Expr) -> bool {
         Expr::Match {
             scrutinee, arms, ..
         } => animated_anywhere(scrutinee) || arms.iter().any(|a| animated_anywhere(&a.body)),
+        Expr::ForEach { iter, body, .. } => animated_anywhere(iter) || animated_anywhere(body),
         Expr::If {
             cond, then, els, ..
         } => {

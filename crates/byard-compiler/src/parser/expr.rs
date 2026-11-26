@@ -406,6 +406,16 @@ impl Parser<'_> {
                 stmts.push(self.parse_let_stmt());
                 continue;
             }
+            if matches!(self.cur(), Some(Token::For)) {
+                stmts.push(self.parse_for_stmt());
+                continue;
+            }
+            if self.at_return_statement() {
+                let span = self.cur_span();
+                self.advance();
+                stmts.push(Expr::Return(span));
+                continue;
+            }
             stmts.push(self.parse_expr(0));
             // Guard against a non-advancing parse (a stray token that is neither
             // a statement start nor `}`) so recovery never spins.
@@ -414,6 +424,56 @@ impl Parser<'_> {
             }
         }
         stmts
+    }
+
+    /// `for item in items { stmt* }` (or `for i, item in items`), a statement
+    /// of an action block: the statements run once for each item.
+    fn parse_for_stmt(&mut self) -> Expr {
+        let start = self.cur_span();
+        self.advance(); // for
+        let first = self
+            .expect_ident("a loop variable")
+            .unwrap_or_else(|| Symbol::intern(""));
+        let (index, var) = if self.eat(&Token::Comma) {
+            let item = self
+                .expect_ident("a loop variable")
+                .unwrap_or_else(|| Symbol::intern(""));
+            (Some(first), item)
+        } else {
+            (None, first)
+        };
+        self.expect(&Token::In, "'in'");
+        let iter = Box::new(self.parse_expr(0));
+        let body = Box::new(self.parse_stmt_block("'{' to open the `for` body"));
+        Expr::ForEach {
+            var,
+            index,
+            iter,
+            body,
+            span: self.span_from(start),
+        }
+    }
+
+    /// True when the cursor is on a `return` that is a statement by itself:
+    /// the word, then the end of the block or a line break. `return` is
+    /// contextual, like `if`: a name that happens to be `return` is still one.
+    fn at_return_statement(&self) -> bool {
+        if !matches!(self.cur(), Some(Token::Ident(s)) if s.as_str() == "return") {
+            return false;
+        }
+        let Some(next) = self.tokens.get(self.pos + 1) else {
+            return true;
+        };
+        if matches!(next.0, Token::RBrace) {
+            return true;
+        }
+        let here = self.cur_span();
+        let after = next.1;
+        // A line break between the word and what follows it.
+        let (a, b) = (self.local_offset(here.end), self.local_offset(after.start));
+        self.source
+            .get(a..b)
+            .is_some_and(|between| between.contains('\n'))
     }
 
     /// `let IDENT (":" type)? "=" expr`, a statement of an action block.
@@ -907,7 +967,10 @@ impl Parser<'_> {
             // `count ?? 0 + 1` reads as `count ?? (0 + 1)`, and tighter than
             // comparison, so `user.age ?? 0 == 0` compares the defaulted
             // value. It and `merge` never meet.
-            Token::Merge | Token::QuestionQuestion => Some(Bp {
+            //
+            // `a..b` is there too: `0..n + 1` is `0..(n + 1)`, and `0..n == xs`
+            // compares the list.
+            Token::Merge | Token::QuestionQuestion | Token::DotDot => Some(Bp {
                 left: 11,
                 right: 12,
             }),
@@ -1032,6 +1095,7 @@ impl Parser<'_> {
                 | Token::GtEq
                 | Token::AmpAmp
                 | Token::PipePipe
+                | Token::DotDot
                 | Token::QuestionQuestion),
             ) => {
                 let op = match tok {
@@ -1048,6 +1112,7 @@ impl Parser<'_> {
                     Token::GtEq => BinOp::Ge,
                     Token::AmpAmp => BinOp::And,
                     Token::QuestionQuestion => BinOp::Otherwise,
+                    Token::DotDot => BinOp::Range,
                     _ => BinOp::Or,
                 };
                 self.advance();

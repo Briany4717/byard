@@ -558,6 +558,10 @@ fn collect_expr_tokens(expr: &Expr, out: &mut Vec<RawToken>) {
                 collect_expr_tokens(&arm.body, out);
             }
         }
+        Expr::ForEach { iter, body, .. } => {
+            collect_expr_tokens(iter, out);
+            collect_expr_tokens(body, out);
+        }
         Expr::If {
             cond, then, els, ..
         } => {
@@ -611,6 +615,6 @@ fn collect_expr_tokens(expr: &Expr, out: &mut Vec<RawToken>) {
             }
         }
         // Nothing was parsed here, so there is nothing to colour.
-        Expr::Error(_) => {}
+        Expr::Return(_) | Expr::Error(_) => {}
     }
 }

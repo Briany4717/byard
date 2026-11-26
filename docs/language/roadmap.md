@@ -15,7 +15,7 @@ So every step below ends the same way: **its cases lose their `gap:` line, the r
 loses its note, and this file loses the step.** When this file is empty and the suite has no
 gap, the language is where this document wanted it.
 
-As written, the suite has 714 cases: 697 hold and 17 are gaps.
+As written, the suite has 729 cases: 715 hold and 14 are gaps.
 
 ```sh
 cargo test -p byard-cli --test it conformance -- --nocapture
@@ -200,13 +200,6 @@ What stays open:
 - A case with values is a record at run time, `{ case: "failed", message: … }`, and a reply from
   a controller or JSON with that shape is taken as that case without being checked against the
   fields it declares. Step 19, with the other data from outside, is where it is.
-
-### 15. Loops in actions, and ranges
-
-*Cases:* `action-for-loop`, `for-with-range`, `action-early-return`.
-
-`for x in xs { … }` as a statement, `a..b` as a list of `Int`s, and `return` to leave an
-action. No `while`: every action still ends.
 
 ### 16. Functions that scale
 

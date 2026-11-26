@@ -942,6 +942,9 @@ pub enum BinOp {
     /// `??`: the left value, or the right one when the left is nothing (a
     /// missing JSON field, an empty `find`). Short-circuit.
     Otherwise,
+    /// `a..b`: the whole numbers from `a` up to, not including, `b`, as a
+    /// list. Nothing when `b` is not above `a`.
+    Range,
 }
 
 /// Prefix unary operators (RFC-0027 §2): boolean `!` and numeric negation `-`.
@@ -1212,6 +1215,25 @@ pub enum Expr {
         /// Source span.
         span: Span,
     },
+    /// `for item in items { stmt* }` as an action statement: the block runs
+    /// once for each item, in order, with `item` bound (and `i` for the
+    /// `for i, item in items` form). Its structural counterpart in a view
+    /// body is [`Member::For`]. It ends: a list has an end.
+    ForEach {
+        /// The name each item is bound to.
+        var: Symbol,
+        /// The name the position is bound to, in `for i, item in …`.
+        index: Option<Symbol>,
+        /// The list.
+        iter: Box<Expr>,
+        /// The statements run for each item, an [`Expr::Block`].
+        body: Box<Expr>,
+        /// Source span.
+        span: Span,
+    },
+    /// `return`, an action statement: the action stops here, and what comes
+    /// after it in the action does not run.
+    Return(Span),
     /// `let name: Type = value`, a statement of an action block: `name` holds
     /// `value` for the statements after it in the same block, and for the
     /// arms of any call placed there. A record `Type` makes `byard check`
@@ -1393,6 +1415,8 @@ impl Expr {
             | Self::KeyframeStep { span, .. }
             | Self::StyleValue { span, .. }
             | Self::Merge { span, .. }
+            | Self::ForEach { span, .. }
+            | Self::Return(span)
             | Self::Error(span) => *span,
         }
     }

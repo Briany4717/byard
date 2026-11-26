@@ -9,7 +9,7 @@
 //! lowering of an action: a mutation, a bare expression, or a callback body.
 
 use super::animation::mix_hex_oklab;
-use super::{CURRENT_PAYLOAD, Interpreter, LAMBDA_ARGS, Lowered};
+use super::{CURRENT_PAYLOAD, Interpreter, LAMBDA_ARGS, Lowered, RETURNING};
 use crate::diagnostics::{CompileError, Span};
 use crate::interp::env::{Env, SignalId, Value};
 use crate::interp::events::Action;
@@ -41,6 +41,9 @@ enum NoneTest<'e> {
     Read(&'e Expr),
 }
 
+/// The most whole numbers `a..b` holds. A longer one is an empty list.
+const MAX_RANGE: i128 = 1_000_000;
+
 /// Evaluates one binary arithmetic operation (`+ - * /`, RFC-0020 enabler)
 /// with numeric promotion: Int∘Int → Int (division truncates), any Float
 /// operand → Float. Division by zero yields the zero of the promoted type and
@@ -66,6 +69,17 @@ pub(super) fn eval_binary_in(op: BinOp, lhs: Value, rhs: Value, saturate: bool) 
         BinOp::Otherwise => match lhs {
             Value::Unit => rhs,
             value => value,
+        },
+        BinOp::Range => match (lhs, rhs) {
+            (Value::Int(a), Value::Int(b)) => {
+                // A list this long is not one anybody meant to make.
+                if i128::from(b) - i128::from(a) > MAX_RANGE {
+                    Value::List(Vec::new())
+                } else {
+                    Value::List((a..b).map(Value::Int).collect())
+                }
+            }
+            _ => Value::Unit,
         },
         BinOp::Add | BinOp::Sub | BinOp::Mul | BinOp::Div | BinOp::Rem | BinOp::And | BinOp::Or => {
             match (lhs, rhs) {
@@ -923,6 +937,63 @@ impl Interpreter {
             // A `let` holds its value for the statements after it: its name is
             // read through the same stack a lambda's parameters are, pushed
             // when the statement runs and popped when the block ends.
+            Expr::ForEach {
+                var,
+                index,
+                iter,
+                body,
+                ..
+            } => {
+                let mut items = self.lower_expr(iter, payload_name);
+                let shadowed = self.lambda_params.len();
+                self.lambda_params.push(var.clone());
+                if let Some(index) = index {
+                    self.lambda_params.push(index.clone());
+                }
+                let mut run = self.lower_expr(body, payload_name);
+                self.lambda_params.truncate(shadowed);
+                let (var, index) = (var.clone(), index.clone());
+                Box::new(move |ctx| {
+                    let Value::List(items) = items(ctx) else {
+                        return Value::Unit;
+                    };
+                    let base = LAMBDA_ARGS.with(|args| args.borrow().len());
+                    for (at, item) in items.into_iter().enumerate() {
+                        LAMBDA_ARGS.with(|args| {
+                            let mut args = args.borrow_mut();
+                            args.truncate(base);
+                            args.push((var.clone(), item));
+                            if let Some(index) = &index {
+                                args.push((
+                                    index.clone(),
+                                    Value::Int(i64::try_from(at).unwrap_or(i64::MAX)),
+                                ));
+                            }
+                        });
+                        run(ctx);
+                        if RETURNING.with(std::cell::Cell::get) {
+                            break;
+                        }
+                    }
+                    LAMBDA_ARGS.with(|args| args.borrow_mut().truncate(base));
+                    Value::Unit
+                })
+            }
+            // `return`: the action stops where it is written, which only an
+            // action has. Anywhere else it would have nothing to stop.
+            Expr::Return(span) => {
+                if self.bridge.action_depth == 0 {
+                    self.errors.push(CompileError::EffectInPureContext {
+                        span: *span,
+                        context: "a value position".to_string(),
+                    });
+                    return Box::new(|_| Value::Unit);
+                }
+                Box::new(|_| {
+                    RETURNING.with(|r| r.set(true));
+                    Value::Unit
+                })
+            }
             Expr::Block(stmts, _) => {
                 let shadowed = self.lambda_params.len();
                 let mut cs: Vec<(Option<Symbol>, Lowered)> = Vec::with_capacity(stmts.len());
@@ -946,6 +1017,9 @@ impl Interpreter {
                             last = Value::Unit;
                         } else {
                             last = value;
+                        }
+                        if RETURNING.with(std::cell::Cell::get) {
+                            break;
                         }
                     }
                     LAMBDA_ARGS.with(|args| args.borrow_mut().truncate(base));
@@ -2304,6 +2378,9 @@ impl Interpreter {
                 let mut last = Value::Unit;
                 for stmt in stmts {
                     last = self.eval_action(stmt)?;
+                    if RETURNING.with(std::cell::Cell::get) {
+                        break;
+                    }
                 }
                 Ok(last)
             }
@@ -2451,7 +2528,9 @@ impl Interpreter {
             CURRENT_PAYLOAD.with(|cell| {
                 *cell.borrow_mut() = payload.cloned();
             });
+            RETURNING.with(|r| r.set(false));
             let _ = compute(ctx);
+            RETURNING.with(|r| r.set(false));
             CURRENT_PAYLOAD.with(|cell| {
                 *cell.borrow_mut() = None;
             });

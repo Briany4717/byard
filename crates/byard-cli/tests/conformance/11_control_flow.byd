@@ -146,7 +146,6 @@ let key = "k"
 Text(key)
 
 //# case: for-with-range
-//# gap: no range; a counted loop needs a list written out
 //# fragment
 //# text: 0 | 1 | 2
 for i in 0..3 { Text("{i}") }
@@ -417,7 +416,6 @@ on mount => { a = 2 b = a * 2 }
 Text("{a} {b}")
 
 //# case: action-for-loop
-//# gap: an action cannot loop over a list
 //# fragment
 //# text: 6
 var n = 0
@@ -432,7 +430,6 @@ on mount => { if 5 { n = 1 } }
 Text("{n}")
 
 //# case: action-early-return
-//# gap: an action cannot stop early
 //# fragment
 //# text: 1
 var n = 0
@@ -713,3 +710,123 @@ View Main() { Text("x") }
 //# diagnostics: 1
 enum Load { idle, failed() }
 View Main() { Text("x") }
+
+//# case: range-is-a-list-of-whole-numbers
+//# fragment
+//# text: 4 | 0 | 1,2,3
+let r = 0..4
+Text("{r.len}")
+Text("{(3..1).len}")
+Text("{(1..4).join(",")}")
+
+//# case: range-bounds-are-expressions
+//# fragment
+//# text: 1 | 2 | 3
+let n = 2
+for i in 1..n + 2 { Text("{i}") }
+
+//# case: range-bounds-are-whole-numbers
+//# fragment
+//# error: TypeMismatch
+//# diagnostics: 1
+let r = 0..2.5
+Text("{r.len}")
+
+//# case: range-that-is-too-long-is-empty
+//# fragment
+//# text: 0
+let r = 0..2000000
+Text("{r.len}")
+
+//# case: action-for-loop-over-a-range
+//# fragment
+//# text: 10
+var n = 0
+on mount => { for i in 0..5 { n += i } }
+Text("{n}")
+
+//# case: action-for-loop-with-a-position
+//# fragment
+//# text: 80
+var n = 0
+on mount => { for i, x in [10, 20, 30] { n += i * x } }
+Text("{n}")
+
+//# case: action-for-loop-over-nothing-does-nothing
+//# fragment
+//# text: 0
+var n = 0
+on mount => { for i in 3..3 { n += 1 } }
+Text("{n}")
+
+//# case: action-for-loops-nest
+//# fragment
+//# text: 6
+var n = 0
+on mount => { for i in 0..3 { for j in 0..2 { n += 1 } } }
+Text("{n}")
+
+//# case: action-for-loop-item-has-its-type
+//# fragment
+//# error: UnknownMethod
+//# diagnostics: 1
+var n = 0
+on mount => { for s in ["a", "b"] { n = s.nope() } }
+Text("{n}")
+
+//# case: action-for-loop-needs-a-list
+//# fragment
+//# error: TypeMismatch
+//# diagnostics: 1
+var n = 0
+on mount => { for i in 5 { n += 1 } }
+Text("{n}")
+
+//# case: action-for-loop-variable-ends-with-the-loop
+//# fragment
+//# error: UnknownName
+//# diagnostics: 1
+var n = 0
+on mount => {
+    for i in 0..3 { n += 1 }
+    n = i
+}
+Text("{n}")
+
+//# case: action-return-stops-a-loop-and-the-action
+//# fragment
+//# text: 3
+var n = 0
+on mount => {
+    for i in 0..10 {
+        n += 1
+        if i == 2 { return }
+    }
+    n = 100
+}
+Text("{n}")
+
+//# case: action-return-in-the-branch-not-taken
+//# fragment
+//# text: 2
+var n = 0
+on mount => {
+    if n == 5 { return }
+    n = 2
+}
+Text("{n}")
+
+//# case: action-return-does-not-stop-the-next-action
+//# fragment
+//# text: 1 2
+var a = 0
+var b = 0
+on mount => { a = 1 return }
+on mount => { b = 2 }
+Text("{a} {b}")
+
+//# case: return-is-still-a-name
+//# fragment
+//# text: 3
+let return = 3
+Text("{return}")

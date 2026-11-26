@@ -248,6 +248,7 @@ pub(super) fn children(expr: &Expr) -> Vec<&Expr> {
         | Expr::Ident(..)
         | Expr::ClassRef(..)
         | Expr::SlotBlock { .. }
+        | Expr::Return(_)
         | Expr::Error(_) => Vec::new(),
         Expr::StrLit(parts, _) => parts
             .iter()
@@ -292,6 +293,7 @@ pub(super) fn children(expr: &Expr) -> Vec<&Expr> {
         } => std::iter::once(scrutinee.as_ref())
             .chain(arms.iter().map(|a| &a.body))
             .collect(),
+        Expr::ForEach { iter, body, .. } => vec![iter.as_ref(), body.as_ref()],
         Expr::If {
             cond, then, els, ..
         } => [cond.as_ref(), then.as_ref()]

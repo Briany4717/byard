@@ -292,6 +292,22 @@ fn collect_name_spans_in_expr(expr: &Expr, target_name: &str, out: &mut Vec<Span
                 collect_name_spans_in_expr(&arm.body, target_name, out);
             }
         }
+        Expr::ForEach {
+            var,
+            iter,
+            body,
+            span,
+            ..
+        } => {
+            if var.as_str() == target_name {
+                out.push(Span::new(
+                    span.start + 4,
+                    span.start + 4 + var.as_str().len() as u32,
+                ));
+            }
+            collect_name_spans_in_expr(iter, target_name, out);
+            collect_name_spans_in_expr(body, target_name, out);
+        }
         Expr::If {
             cond, then, els, ..
         } => {
@@ -365,6 +381,7 @@ fn collect_name_spans_in_expr(expr: &Expr, target_name: &str, out: &mut Vec<Span
         | Expr::FloatLit(..)
         | Expr::AngleLit(..)
         | Expr::ClassRef(..)
+        | Expr::Return(..)
         | Expr::Error(..) => {}
     }
 }

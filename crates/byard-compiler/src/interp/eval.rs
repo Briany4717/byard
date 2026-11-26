@@ -558,6 +558,11 @@ thread_local! {
     /// with more than one parameter (`reduce`'s `(acc, x) => …`). The single
     /// parameter of `map`/`filter` still goes through [`CURRENT_PAYLOAD`].
     static LAMBDA_ARGS: std::cell::RefCell<Vec<(Symbol, Value)>> = const { std::cell::RefCell::new(Vec::new()) };
+
+    /// Set by `return` and read by the statements around it: while it is set
+    /// the rest of the action does not run. The action that was started clears
+    /// it when it ends, so it never reaches the next one.
+    static RETURNING: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
 }
 
 /// The Dev-mode interpreter for one `View` instance: a reactive context plus
@@ -1650,6 +1655,7 @@ impl Interpreter {
                 // A bare statement member is an action, so a call written
                 // there is in effect position like any other (RFC-0028 §4).
                 let result = self.in_action_position(|s| s.eval_action(e));
+                RETURNING.with(|r| r.set(false));
                 if let Err(err) = result {
                     self.errors.push(err);
                 }

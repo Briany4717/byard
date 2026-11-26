@@ -277,6 +277,9 @@ pub struct FnDecl {
     /// The name; a package's functions are canonical (`brand.helper`) once
     /// resolved.
     pub name: Symbol,
+    /// The type parameters, `T` in `fn first<T>(…)`: names a call gives a
+    /// type to, by the arguments it passes.
+    pub type_params: Vec<Symbol>,
     /// Declared parameters.
     pub params: Vec<Param>,
     /// Declared return type, if written.
@@ -319,6 +322,8 @@ pub enum Member {
     Fn {
         /// Function name.
         name: Symbol,
+        /// The type parameters, `T` in `fn first<T>(…)`.
+        type_params: Vec<Symbol>,
         /// Parameters.
         params: Vec<Param>,
         /// Declared return type, if written.

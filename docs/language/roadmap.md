@@ -15,7 +15,7 @@ So every step below ends the same way: **its cases lose their `gap:` line, the r
 loses its note, and this file loses the step.** When this file is empty and the suite has no
 gap, the language is where this document wanted it.
 
-As written, the suite has 729 cases: 715 hold and 14 are gaps.
+As written, the suite has 754 cases: 743 hold and 11 are gaps.
 
 ```sh
 cargo test -p byard-cli --test it conformance -- --nocapture
@@ -203,10 +203,15 @@ What stays open:
 
 ### 16. Functions that scale
 
-*Cases:* `function-with-a-block-body`, `function-named-arguments`, `generic-function`.
+*Done.* `function-with-a-block-body`, `function-named-arguments` and `generic-function` hold, and
+so do the twenty-two cases added with them. What stays open:
 
-A block body with `let`s and a last expression; arguments by name, as views take them;
-type parameters on `fn` and `type`.
+- Type parameters on `type`, `type Box<T> = { value: T }`. A type the checker knows is a
+  name with no arguments, so a generic one needs the checker to carry them.
+- Default values on a `fn`, `fn total(items: List<Item>, tax: Float = 0.0)`. The parameter
+  is parsed and not used.
+- A function that reads a name it cannot reach is told twice, `UnknownName` and
+  `ImpureFunction`, for one mistake. It was before this step.
 
 ### 17. Collections
 

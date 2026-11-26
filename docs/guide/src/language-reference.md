@@ -502,16 +502,45 @@ View Main() {
 ```
 
 ```text
-function := "fn" NAME "(" (NAME ":" type ("," NAME ":" type)*)? ")" "->" type "=>" expr
+function := "fn" NAME ("<" NAME ("," NAME)* ">")? "(" (NAME ":" type ("," NAME ":" type)*)? ")" "->" type "=>" body
+body     := expr | "{" ("let" NAME "=" expr)* expr "}"
 ```
 
-The body is one expression. A shared function is pure: it reads its parameters and
-constants and calls other shared functions (`ImpureFunction`). A function is written into
-each place that calls it, so it cannot call itself, directly or through another
-(`RecursiveFunction`).
+The body is one expression, or a block: some `let`s and then the expression that is the
+result. A `let` is the name of what the lines after it read. A shared function is pure: it
+reads its parameters, its own `let`s and constants and calls other shared functions
+(`ImpureFunction`). A function is written into each place that calls it, so it cannot call
+itself, directly or through another (`RecursiveFunction`).
 
-> **Not yet.** Arguments cannot be given by name, a function cannot have type parameters or
-> default values, and its body cannot be a block. (`08_functions.byd`)
+```byld
+fn area(w: Int, h: Int) -> Int => {
+    let a = w * h
+    a
+}
+
+fn sub(a: Int, b: Int) -> Int => a - b
+
+fn first<T>(xs: List<T>) -> T => xs[0]
+
+View Main() {
+    Text("{area(2, 3)} {sub(b: 1, a: 4)} {first(["a", "b"])}")
+}
+```
+
+A call may give arguments by name, as a view's call does: the positional ones come first and
+fill the first parameters, and a named one is the parameter of that name. A name the function
+does not have is `UnknownParam`, one given twice is `DuplicateParam`, and one left out is
+`MissingParam`.
+
+A function may have type parameters, `<T>`, which stand for whatever type the call passes: the
+first argument written for a `T` gives it its type, and any other argument for a `T` has to
+agree (`ArgumentTypeMismatch`). The result has that type. Inside the function a `T` can be
+stored, passed and compared with `==`, and that is all: `a + b` of two of them is
+`TypeMismatch`. There are no bounds. A `T` is a type only inside its own function
+(`UnknownType` anywhere else).
+
+> **Not yet.** A function cannot have default values, and a `type` cannot have type
+> parameters. (`08_functions.byd`)
 
 ### Record types
 

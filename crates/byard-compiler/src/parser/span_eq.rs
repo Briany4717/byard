@@ -242,6 +242,7 @@ impl SpanEq for FnDecl {
     fn span_eq(&self, other: &Self) -> bool {
         let Self {
             name,
+            type_params,
             params,
             ret,
             body,
@@ -249,6 +250,7 @@ impl SpanEq for FnDecl {
             span: _,
         } = self;
         *name == other.name
+            && *type_params == other.type_params
             && *private == other.private
             && params.span_eq(&other.params)
             && ret.span_eq(&other.ret)
@@ -291,6 +293,7 @@ impl SpanEq for Member {
             (
                 Self::Fn {
                     name,
+                    type_params,
                     params,
                     ret,
                     body,
@@ -298,12 +301,19 @@ impl SpanEq for Member {
                 },
                 Self::Fn {
                     name: n2,
+                    type_params: tp2,
                     params: p2,
                     ret: r2,
                     body: b2,
                     span: _,
                 },
-            ) => name == n2 && params.span_eq(p2) && ret.span_eq(r2) && body.span_eq(b2),
+            ) => {
+                name == n2
+                    && type_params == tp2
+                    && params.span_eq(p2)
+                    && ret.span_eq(r2)
+                    && body.span_eq(b2)
+            }
             (
                 Self::Inject { ty, name, span: _ },
                 Self::Inject {

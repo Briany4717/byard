@@ -1531,6 +1531,7 @@ pub fn validate_element_in(
             if accepted != Some(given.as_str()) {
                 unknown_names += 1;
                 errs.push(CompileError::UnknownParam {
+                    function: false,
                     span: arg.value.span(),
                     name: given.as_str().to_string(),
                     callee: name.to_string(),

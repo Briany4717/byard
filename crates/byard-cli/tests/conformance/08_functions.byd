@@ -62,7 +62,6 @@ fn name(a: Int) -> Str => a + 1
 View Main() { Text(name(1)) }
 
 //# case: function-named-arguments
-//# gap: arguments by name are not supported for `fn`
 //# text: 1
 fn sub(a: Int, b: Int) -> Int => a - b
 View Main() { Text("{sub(b: 1, a: 2)}") }
@@ -78,7 +77,6 @@ fn half(x: Float) -> Float => x / 2
 View Main() { Text("{half(3)}") }
 
 //# case: function-with-a-block-body
-//# gap: a `fn` body is one expression; it cannot name intermediate values
 //# text: 6
 fn area(w: Int, h: Int) -> Int => {
     let a = w * h
@@ -87,7 +85,6 @@ fn area(w: Int, h: Int) -> Int => {
 View Main() { Text("{area(2, 3)}") }
 
 //# case: generic-function
-//# gap: no type parameters
 //# text: 1
 fn first<T>(xs: List<T>) -> T => xs[0]
 View Main() { Text("{first([1, 2])}") }
@@ -266,3 +263,172 @@ View Main() {
     Go(on_done: {|s| state = s })
     Text(state)
 }
+
+//# case: function-positional-then-named-arguments
+//# text: 1
+fn sub(a: Int, b: Int) -> Int => a - b
+View Main() { Text("{sub(2, b: 1)}") }
+
+//# case: function-named-argument-it-does-not-have
+//# error: UnknownParam
+//# diagnostics: 1
+fn sub(a: Int, b: Int) -> Int => a - b
+View Main() { Text("{sub(a: 2, c: 1)}") }
+
+//# case: function-argument-given-twice
+//# error: DuplicateParam
+//# diagnostics: 1
+fn sub(a: Int, b: Int) -> Int => a - b
+View Main() { Text("{sub(1, a: 2)}") }
+
+//# case: function-argument-left-out-by-name
+//# error: MissingParam
+//# diagnostics: 1
+fn sub(a: Int, b: Int) -> Int => a - b
+View Main() { Text("{sub(a: 2)}") }
+
+//# case: function-named-argument-of-the-wrong-type
+//# error: ArgumentTypeMismatch
+//# diagnostics: 1
+fn sub(a: Int, b: Int) -> Int => a - b
+View Main() { Text("{sub(b: "x", a: 2)}") }
+
+//# case: function-named-arguments-in-a-view-function
+//# text: 7
+View Main() {
+    fn mix(a: Int, b: Int) -> Int => a * 10 + b
+    Text("{mix(b: 7, a: 0)}")
+}
+
+//# case: function-named-arguments-in-either-order
+//# fragment
+//# text: 3 1
+fn two(a: Int, b: Int) -> Int => a - b
+Text("{two(b: 1, a: 4)} {two(a: 2, b: 1)}")
+
+//# case: function-named-arguments-for-a-named-action
+//# fragment
+//# text: 5
+var n = 0
+let add = (by: Int) => { n += by }
+on mount => { add(by: 5) }
+Text("{n}")
+
+//# case: function-block-body-with-two-lets
+//# text: 11
+fn f(a: Int) -> Int => {
+    let b = a * 2
+    let c = b + 1
+    c
+}
+View Main() { Text("{f(5)}") }
+
+//# case: function-block-body-of-the-wrong-type
+//# error: TypeMismatch
+//# diagnostics: 1
+fn f(a: Int) -> Str => {
+    let b = a * 2
+    b
+}
+View Main() { Text(f(1)) }
+
+//# case: function-block-body-calls-a-function
+//# text: 7
+fn one() -> Int => 1
+fn f(a: Int) -> Int => {
+    let b = a + one()
+    b * 1
+}
+View Main() { Text("{f(6)}") }
+
+//# case: function-block-body-in-a-view
+//# text: 9
+View Main() {
+    fn f(a: Int) -> Int => {
+        let b = a * a
+        b
+    }
+    Text("{f(3)}")
+}
+
+//# case: function-block-body-may-not-write
+//# error: ImpureFunction
+//# diagnostics: 1
+fn f(a: Int) -> Int => {
+    let b = a
+    b = 2
+    b
+}
+View Main() { Text("{f(1)}") }
+
+//# case: function-body-that-is-a-record-is-still-a-record
+//# text: 3
+type P = { x: Int }
+fn mk(a: Int) -> P => { x: a }
+View Main() { Text("{mk(3).x}") }
+
+//# case: generic-function-gives-back-what-it-was-given
+//# text: A
+fn first<T>(xs: List<T>) -> T => xs[0]
+View Main() { Text(first(["a", "b"]).toUpper()) }
+
+//# case: generic-function-result-has-the-type-it-was-given
+//# fragment
+//# error: TypeMismatch
+//# diagnostics: 1
+fn first<T>(xs: List<T>) -> T => xs[0]
+let n: Int = first(["a"])
+Text("{n}")
+
+//# case: generic-function-with-two-parameters
+//# text: x
+fn pair<A, B>(a: A, b: B) -> A => a
+View Main() { Text(pair("x", 1)) }
+
+//# case: generic-function-needs-its-arguments-to-agree
+//# error: ArgumentTypeMismatch
+//# diagnostics: 1
+fn pick<T>(a: T, b: T) -> T => a
+View Main() { Text("{pick(1, "x")}") }
+
+//# case: generic-function-values-can-be-compared
+//# text: true
+fn same<T>(a: T, b: T) -> Bool => a == b
+View Main() { Text("{same("a", "a")}") }
+
+//# case: generic-function-values-cannot-be-added
+//# error: TypeMismatch
+//# diagnostics: 1
+fn add<T>(a: T, b: T) -> T => a + b
+View Main() { Text("{add(1, 2)}") }
+
+//# case: generic-function-over-a-list
+//# text: 3
+fn count<T>(xs: List<T>) -> Int => xs.len
+View Main() { Text("{count([1, 2, 3])}") }
+
+//# case: generic-function-in-a-view
+//# text: b
+View Main() {
+    fn last<T>(xs: List<T>) -> T => xs[1]
+    Text(last(["a", "b"]))
+}
+
+//# case: type-parameter-is-not-a-type-outside-its-function
+//# error: UnknownType
+//# diagnostics: 1
+fn f<T>(a: T) -> Int => 1
+fn g(a: T) -> Int => 1
+View Main() { Text("{f(1)}") }
+
+//# case: generic-function-with-a-type-that-is-not-there
+//# error: UnknownType
+//# diagnostics: 1
+fn f<T>(a: U) -> Int => 1
+View Main() { Text("{f(1)}") }
+
+//# case: type-parameter-written-twice-is-one-error
+//# error: UnexpectedToken
+//# diagnostics: 1
+fn f<T, T>(a: T) -> Int => 1
+View Main() { Text("x") }

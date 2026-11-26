@@ -41,6 +41,33 @@ enum NoneTest<'e> {
     Read(&'e Expr),
 }
 
+/// The arguments of a call in the order of the parameters of what it calls:
+/// the positional ones first, and each one written by name in the place of the
+/// parameter it names. A parameter no argument is for is `None`.
+fn in_parameter_order<'a>(
+    params: &[Symbol],
+    args: &'a [crate::parser::ast::Arg],
+) -> Vec<Option<&'a crate::parser::ast::Arg>> {
+    let mut ordered = vec![None; params.len()];
+    let mut next = 0;
+    for arg in args {
+        match &arg.name {
+            None => {
+                if let Some(slot) = ordered.get_mut(next) {
+                    *slot = Some(arg);
+                }
+                next += 1;
+            }
+            Some(written) => {
+                if let Some(at) = params.iter().position(|p| p == written) {
+                    ordered[at] = Some(arg);
+                }
+            }
+        }
+    }
+    ordered
+}
+
 /// The most whole numbers `a..b` holds. A longer one is an empty list.
 const MAX_RANGE: i128 = 1_000_000;
 
@@ -1669,7 +1696,12 @@ impl Interpreter {
                 });
             }
             let mut arg_cs: Vec<(Symbol, Lowered)> = Vec::with_capacity(params.len());
-            for (i, (param, arg)) in params.iter().zip(args.iter()).enumerate() {
+            // The arguments in the order of the parameters: the positional
+            // ones first, and each one written by name in the place of the
+            // parameter it names.
+            let ordered = in_parameter_order(&params, args);
+            for (i, (param, arg)) in params.iter().zip(ordered).enumerate() {
+                let Some(arg) = arg else { continue };
                 let lowered = self.lower_expr(&arg.value, payload_name);
                 let lowered = super::coerced_arg(self.fn_types.get(&id.0), i, lowered);
                 arg_cs.push((param.clone(), lowered));
@@ -1849,6 +1881,14 @@ impl Interpreter {
             });
             return Box::new(|_| Value::Unit);
         }
+        // The arguments in the order of the parameters, whatever order they
+        // were written in; one a parameter did not get was refused by the
+        // checker.
+        let Some(args): Option<Vec<&crate::parser::ast::Arg>> =
+            in_parameter_order(&params, args).into_iter().collect()
+        else {
+            return Box::new(|_| Value::Unit);
+        };
         if !params.is_empty() && self.per_call(payload_name) {
             // Called inside a lambda or an event handler: the arguments depend
             // on the item, so they are evaluated at each call, not memoised.

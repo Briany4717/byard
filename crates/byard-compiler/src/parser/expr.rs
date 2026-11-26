@@ -389,7 +389,7 @@ impl Parser<'_> {
     }
 
     /// `"{" stmt* "}"` as an [`Expr::Block`].
-    fn parse_stmt_block(&mut self, what: &str) -> Expr {
+    pub(super) fn parse_stmt_block(&mut self, what: &str) -> Expr {
         let start = self.cur_span();
         self.expect(&Token::LBrace, what);
         let stmts = self.parse_block_stmts();
@@ -863,7 +863,7 @@ impl Parser<'_> {
     /// True when the cursor sits on a `{` opening a record literal (as opposed
     /// to a callback block): the token after `{` is `..` (spread), or an
     /// identifier immediately followed by `:`.
-    fn at_record_literal(&self) -> bool {
+    pub(super) fn at_record_literal(&self) -> bool {
         if !matches!(self.cur(), Some(Token::LBrace)) {
             return false;
         }

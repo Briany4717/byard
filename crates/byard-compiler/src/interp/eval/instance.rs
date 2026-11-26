@@ -179,6 +179,7 @@ impl Interpreter {
                 && param_default(param).is_none()
             {
                 self.errors.push(CompileError::MissingParam {
+                    function: false,
                     span: el.span,
                     name: param.name.as_str().to_string(),
                     callee: el.name.as_str().to_string(),
@@ -301,6 +302,7 @@ impl Interpreter {
                     binds[i] = Some(self.resolve_binding_arg(value));
                 } else {
                     self.errors.push(CompileError::DuplicateParam {
+                        function: false,
                         declared: false,
                         span: value.span(),
                         name: params[i].name.as_str().to_string(),
@@ -316,6 +318,7 @@ impl Interpreter {
                 slots[i] = Some(self.param_arg(&params[i], value));
             }
             Some(_) => self.errors.push(CompileError::DuplicateParam {
+                function: false,
                 declared: false,
                 span: value.span(),
                 name: name.as_str().to_string(),
@@ -326,6 +329,7 @@ impl Interpreter {
             None if crate::interp::intrinsics::VIEW_CALL_LAYOUT.contains(&name.as_str()) => {
                 if layout.iter().any(|(n, ..)| n == name) {
                     self.errors.push(CompileError::DuplicateParam {
+                        function: false,
                         declared: false,
                         span: value.span(),
                         name: name.as_str().to_string(),
@@ -346,6 +350,7 @@ impl Interpreter {
                 let hint = closest_match(name.as_str(), params.iter().map(|p| p.name.as_str()))
                     .map(str::to_string);
                 self.errors.push(CompileError::UnknownParam {
+                    function: false,
                     span: value.span(),
                     name: name.as_str().to_string(),
                     callee: callee.to_string(),
@@ -415,6 +420,7 @@ impl Interpreter {
                     let scope = self.param_arg(&params[i], &arg.value);
                     if slots[i].is_some() {
                         self.errors.push(CompileError::DuplicateParam {
+                            function: false,
                             declared: false,
                             span: arg.value.span(),
                             name: params[i].name.as_str().to_string(),
@@ -495,6 +501,7 @@ impl Interpreter {
                 && !is_callback_param(&params[i])
             {
                 self.errors.push(CompileError::MissingParam {
+                    function: false,
                     span: call.span,
                     name: params[i].name.as_str().to_string(),
                     callee: callee_name.clone(),
@@ -673,6 +680,7 @@ impl Interpreter {
         } else {
             // A required callback with no default and no argument.
             self.errors.push(CompileError::MissingParam {
+                function: false,
                 span: call.span,
                 name: param.name.as_str().to_string(),
                 callee: call.name.as_str().to_string(),

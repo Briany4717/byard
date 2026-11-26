@@ -584,6 +584,8 @@ pub enum CompileError {
     /// A named argument at a user-`View` call site does not match any declared
     /// parameter (RFC-0007 §6); `hint` carries a Levenshtein "did you mean …?".
     UnknownParam {
+        /// Whether the callee is a `fn` rather than a view.
+        function: bool,
         /// Source range of the argument.
         span: Span,
         /// The unknown parameter name.
@@ -596,6 +598,8 @@ pub enum CompileError {
     /// A required callee parameter (no default) received no argument at the call
     /// site (RFC-0007 §6, interacts with D-B defaults).
     MissingParam {
+        /// Whether the callee is a `fn` rather than a view.
+        function: bool,
         /// Source range of the call site.
         span: Span,
         /// The missing parameter name.
@@ -606,6 +610,8 @@ pub enum CompileError {
     /// The same callee parameter was bound twice, positional + named, or named
     /// twice (RFC-0007 §6).
     DuplicateParam {
+        /// Whether the callee is a `fn` rather than a view.
+        function: bool,
         /// Source range of the offending argument, or of the second
         /// parameter when `declared`.
         span: Span,
@@ -2580,6 +2586,16 @@ impl CompileError {
                 "view `{name}` declares {expected} parameter(s), found {found} positional argument(s)"
             ),
             Self::UnknownParam {
+                name,
+                callee,
+                hint,
+                function: true,
+                ..
+            } => with_hint(
+                format!("function `{callee}` has no parameter `{name}`"),
+                hint.as_deref(),
+            ),
+            Self::UnknownParam {
                 name, callee, hint, ..
             } if crate::interp::intrinsics::lookup(callee).is_some() => with_hint(
                 format!(
@@ -2598,6 +2614,12 @@ impl CompileError {
                 ),
                 crate::interp::intrinsics::VIEW_CALL_LAYOUT.join(", ")
             ),
+            Self::MissingParam {
+                name,
+                callee,
+                function: true,
+                ..
+            } => format!("missing argument `{name}` for function `{callee}`"),
             Self::MissingParam { name, callee, .. } => {
                 format!("missing required argument `{name}` for view `{callee}`")
             }
@@ -2612,6 +2634,12 @@ impl CompileError {
                      remove one of them"
                 )
             }
+            Self::DuplicateParam {
+                name,
+                callee,
+                function: true,
+                ..
+            } => format!("parameter `{name}` of function `{callee}` is given more than once"),
             Self::DuplicateParam { name, callee, .. } => {
                 format!("parameter `{name}` of view `{callee}` is bound more than once")
             }

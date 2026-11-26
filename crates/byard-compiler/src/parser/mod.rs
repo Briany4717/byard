@@ -513,6 +513,7 @@ impl<'a> Parser<'a> {
                 Some(Token::Fn) => {
                     if let Member::Fn {
                         name,
+                        type_params,
                         params,
                         ret,
                         body,
@@ -521,6 +522,7 @@ impl<'a> Parser<'a> {
                     {
                         items.fns.push(FnDecl {
                             name,
+                            type_params,
                             params,
                             ret,
                             body,
@@ -1088,6 +1090,7 @@ impl<'a> Parser<'a> {
         let name = self
             .expect_decl_name("a function", "a function name")
             .unwrap_or_else(|| Symbol::intern(""));
+        let type_params = self.parse_type_params();
         self.expect(&Token::LParen, "'('");
         let params = self.parse_params();
         self.expect(&Token::RParen, "')'");
@@ -1097,14 +1100,44 @@ impl<'a> Parser<'a> {
             None
         };
         self.expect(&Token::Arrow, "'=>'");
-        let body = self.parse_expr(0);
+        // A `{` is the lines of a block, `let`s and then the value, unless it
+        // is a record literal.
+        let body = if matches!(self.cur(), Some(Token::LBrace)) && !self.at_record_literal() {
+            self.parse_stmt_block("'{' to open the body")
+        } else {
+            self.parse_expr(0)
+        };
         Member::Fn {
             name,
+            type_params,
             params,
             ret,
             body,
             span: self.span_from(start),
         }
+    }
+
+    /// The type parameters after a function's name, `<T, U>`, when it has
+    /// them.
+    fn parse_type_params(&mut self) -> Vec<Symbol> {
+        let mut names = Vec::new();
+        if !self.eat(&Token::Lt) {
+            return names;
+        }
+        while !matches!(self.cur(), Some(Token::Gt) | None) {
+            let Some(name) = self.expect_ident("a type parameter, as in `fn first<T>(…)`") else {
+                break;
+            };
+            if names.contains(&name) {
+                self.error("a type parameter that is not already one");
+            }
+            names.push(name);
+            if !self.eat(&Token::Comma) {
+                break;
+            }
+        }
+        self.expect(&Token::Gt, "'>'");
+        names
     }
 
     /// `lifecycle := "on" ("mount" | "unmount") "=>" action` (RFC-0028 §4b).

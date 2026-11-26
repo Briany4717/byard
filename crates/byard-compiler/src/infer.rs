@@ -215,6 +215,7 @@ pub fn check_views(views: &[ViewDecl]) -> Inference {
         .collect();
     let type_names = &type_names;
     let (top_fns, top_sigs) = check_top_fns(&helpers, &const_decls, &enums, type_names, &mut out);
+    let top_generics = generics_of(&helpers);
     let consts = check_consts(
         &const_decls,
         &helpers,
@@ -323,6 +324,8 @@ pub fn check_views(views: &[ViewDecl]) -> Inference {
             contexts: &contexts,
             narrowed: Vec::new(),
             provided: HashSet::new(),
+            type_vars: HashSet::new(),
+            generics: HashMap::new(),
         };
         for decl in record_decls.iter() {
             for field in &decl.fields {
@@ -360,6 +363,8 @@ pub fn check_views(views: &[ViewDecl]) -> Inference {
             contexts: &contexts,
             narrowed: Vec::new(),
             provided: HashSet::new(),
+            type_vars: HashSet::new(),
+            generics: top_generics.clone(),
         };
         checker.check_view(view);
     }
@@ -426,15 +431,19 @@ fn check_top_fns(
         contexts: &no_contexts,
         narrowed: Vec::new(),
         provided: HashSet::new(),
+        type_vars: HashSet::new(),
+        generics: generics_of(helpers),
     };
     let mut top = HashMap::new();
     for decl in helpers {
+        checker.type_vars = decl.type_params.iter().cloned().collect();
         let ty = decl.ret.as_ref().map(|t| checker.resolve_written(t));
         top.insert(decl.name.clone(), ty);
     }
     checker.fns.clone_from(&top);
     for decl in helpers {
         let mark = checker.undo.len();
+        checker.type_vars = decl.type_params.iter().cloned().collect();
         for param in &decl.params {
             checker.check_param(param, "function parameter");
         }
@@ -444,7 +453,10 @@ fn check_top_fns(
                 what: "function return".to_string(),
             });
         }
-        let found = checker.check_expr(&decl.body);
+        let found = match checker.block_result(&decl.body, false) {
+            Some(ty) => ty,
+            None => checker.check_expr(&decl.body),
+        };
         if let Some(Some(ret)) = top.get(&decl.name) {
             checker.must_fit(ret, &found, decl.body.span());
         }
@@ -455,6 +467,11 @@ fn check_top_fns(
             name: decl.name.as_str().to_string(),
         };
         if let Some(span) = effect_span(&decl.body) {
+            // The write is told once, as what makes the function impure.
+            checker.errors.retain(|e| {
+                !matches!(e, CompileError::NotAssignable { span: s }
+                    if span.start <= s.start && s.end <= span.end)
+            });
             checker.errors.push(impure(span));
         }
         // A name the body reads that is none of: its parameters, a lambda's
@@ -467,6 +484,10 @@ fn check_top_fns(
         let mut used: Vec<(Symbol, Span)> = Vec::new();
         crate::resolve::walk::expr(&mut body, &mut |e| match e {
             Expr::Lambda { params, .. } => bound.extend(params.iter().cloned()),
+            // A `let` of a block body names what the lines after it read.
+            Expr::Let { name, .. } => {
+                bound.insert(name.clone());
+            }
             Expr::Ident(name, span) => used.push((name.clone(), *span)),
             _ => {}
         });
@@ -477,8 +498,18 @@ fn check_top_fns(
                 break;
             }
         }
+        checker.type_vars.clear();
     }
     (top, top_sigs)
+}
+
+/// The type parameters of each function that has some.
+fn generics_of(helpers: &[FnDecl]) -> HashMap<Symbol, Vec<Symbol>> {
+    helpers
+        .iter()
+        .filter(|f| !f.type_params.is_empty())
+        .map(|f| (f.name.clone(), f.type_params.clone()))
+        .collect()
 }
 
 /// The name a case that carries values is checked under, as a record of its
@@ -585,6 +616,8 @@ fn check_consts(
                 contexts: &no_contexts,
                 narrowed: Vec::new(),
                 provided: HashSet::new(),
+                type_vars: HashSet::new(),
+                generics: generics_of(helpers),
             };
             let declared = decl.ty.as_ref().map(|t| checker.resolve_written(t));
             let found = if declared.is_some() {
@@ -760,6 +793,12 @@ struct Checker<'a> {
     narrowed: Vec<String>,
     /// The contexts the view being checked provides, for `DuplicateProvide`.
     provided: HashSet<Symbol>,
+    /// The type parameters of the `fn` whose body is being checked: names a
+    /// type may be written with there, and nowhere else.
+    type_vars: HashSet<Symbol>,
+    /// The type parameters of each `fn` that has some, by its name: a call
+    /// gives them types by the arguments it passes.
+    generics: HashMap<Symbol, Vec<Symbol>>,
 }
 
 /// The program's contexts, by name: each field with its type, and whether it
@@ -788,9 +827,21 @@ impl Checker<'_> {
         for member in &view.body {
             match member {
                 Member::Fn {
-                    name, ret, params, ..
+                    name,
+                    type_params,
+                    ret,
+                    params,
+                    ..
                 } => {
+                    let outer = std::mem::replace(
+                        &mut self.type_vars,
+                        type_params.iter().cloned().collect(),
+                    );
+                    if !type_params.is_empty() {
+                        self.generics.insert(name.clone(), type_params.clone());
+                    }
                     let ty = ret.as_ref().map(|t| self.resolve_written(t));
+                    self.type_vars = outer;
                     self.fns.insert(name.clone(), ty);
                     if !params.is_empty() {
                         self.local_sigs.insert(name.clone(), sig_of(params));
@@ -838,6 +889,28 @@ impl Checker<'_> {
                 self.errors.extend(style_errors);
             }
         }
+    }
+
+    /// The type a `fn` body written as a block has: the lines before the last
+    /// are checked with what they bind in scope, and the result is the last
+    /// one's. `None` for a body that is not a block with a value to give.
+    fn block_result(&mut self, body: &Expr, strict: bool) -> Option<Ty> {
+        let Expr::Block(stmts, _) = body else {
+            return None;
+        };
+        let (last, before) = stmts.split_last()?;
+        if matches!(last, Expr::Let { .. }) {
+            return None;
+        }
+        let mark = self.undo.len();
+        let was = std::mem::replace(&mut self.strict, strict);
+        for stmt in before {
+            self.check_expr(stmt);
+        }
+        let ty = self.check_expr(last);
+        self.strict = was;
+        self.leave(mark);
+        Some(ty)
     }
 
     /// Binds `name` in the current scope, logging what it replaces.
@@ -1987,6 +2060,7 @@ impl Checker<'_> {
             }
             Member::Fn {
                 name,
+                type_params,
                 params,
                 ret,
                 body,
@@ -1994,6 +2068,8 @@ impl Checker<'_> {
             } => {
                 // The parameters are in scope for the body alone.
                 let mark = self.undo.len();
+                let outer =
+                    std::mem::replace(&mut self.type_vars, type_params.iter().cloned().collect());
                 for param in params {
                     self.check_param(param, "function parameter");
                 }
@@ -2003,10 +2079,14 @@ impl Checker<'_> {
                         what: "function return".to_string(),
                     });
                 }
-                let found = self.value(body);
+                let found = match self.block_result(body, true) {
+                    Some(ty) => ty,
+                    None => self.value(body),
+                };
                 if let Some(Some(ret)) = self.fns.get(name).cloned() {
                     self.must_fit(&ret, &found, body.span());
                 }
+                self.type_vars = outer;
                 self.leave(mark);
             }
             Member::Inject { ty, name, span } => {
@@ -3201,21 +3281,110 @@ impl Checker<'_> {
         Some(Ty::Named(name.clone()))
     }
 
+    /// Which argument is for which parameter of `name` (`sub(b: 1, a: 2)`):
+    /// the positional ones fill the first parameters, each named one is the
+    /// parameter of that name, and every parameter is given once. What is
+    /// wrong is told, once each, and `None` is returned.
+    fn bind_args(
+        &mut self,
+        name: &Symbol,
+        sig: &[(Symbol, Ty, bool)],
+        args: &[crate::parser::ast::Arg],
+        span: Span,
+    ) -> Option<Vec<Option<usize>>> {
+        let callee = name.as_str().to_string();
+        let named = args.iter().any(|a| a.name.is_some());
+        let required = sig.iter().filter(|p| !p.2).count();
+        if !named && (args.len() < required || args.len() > sig.len()) {
+            self.errors.push(CompileError::ArityMismatch {
+                span,
+                name: callee,
+                expected: sig.len(),
+                found: args.len(),
+            });
+            return None;
+        }
+        let mut given: Vec<Option<usize>> = vec![None; sig.len()];
+        let mut positional = 0;
+        let mut told = false;
+        for (i, arg) in args.iter().enumerate() {
+            let slot = match &arg.name {
+                None => {
+                    positional += 1;
+                    if positional > sig.len() {
+                        self.errors.push(CompileError::ArityMismatch {
+                            span,
+                            name: callee,
+                            expected: sig.len(),
+                            found: args.len(),
+                        });
+                        return None;
+                    }
+                    Some(positional - 1)
+                }
+                Some(written) => {
+                    let at = sig.iter().position(|(p, _, _)| p == written);
+                    if at.is_none() {
+                        let hint = crate::util::closest_match(
+                            written.as_str(),
+                            sig.iter().map(|(p, _, _)| p.as_str()),
+                        )
+                        .map(str::to_string);
+                        self.errors.push(CompileError::UnknownParam {
+                            function: true,
+                            span: arg.value.span(),
+                            name: written.as_str().to_string(),
+                            callee: callee.clone(),
+                            hint,
+                        });
+                        told = true;
+                    }
+                    at
+                }
+            };
+            let Some(slot) = slot else { continue };
+            if given[slot].is_some() {
+                self.errors.push(CompileError::DuplicateParam {
+                    function: true,
+                    span: arg.value.span(),
+                    name: sig[slot].0.as_str().to_string(),
+                    callee: callee.clone(),
+                    declared: false,
+                });
+                told = true;
+            } else {
+                given[slot] = Some(i);
+            }
+        }
+        if !told {
+            for ((param, _, has_default), at) in sig.iter().zip(&given) {
+                if at.is_none() && !has_default {
+                    self.errors.push(CompileError::MissingParam {
+                        function: true,
+                        span,
+                        name: param.as_str().to_string(),
+                        callee: callee.clone(),
+                    });
+                    told = true;
+                }
+            }
+        }
+        (!told).then_some(given)
+    }
+
     /// Checks a call to a name against what the name is: a `fn` or a named
-    /// action takes the number of arguments it declares, each of the type it
-    /// declares; a callback takes what its `Fn(…)` type says; a value that is
-    /// none of those cannot be called.
+    /// action takes the arguments it declares, each of the type it declares; a
+    /// callback takes what its `Fn(…)` type says; a value that is none of those
+    /// cannot be called. For a `fn` with type parameters, the type its call
+    /// has: the one it returns, with each parameter given the type of the
+    /// arguments passed for it.
     fn check_fn_call(
         &mut self,
         name: &Symbol,
         args: &[crate::parser::ast::Arg],
         found: &[Ty],
         span: Span,
-    ) {
-        // Arguments by name are step 16's.
-        if args.iter().any(|a| a.name.is_some()) {
-            return;
-        }
+    ) -> Option<Ty> {
         let sig = self.local_sigs.get(name).cloned().or_else(|| {
             if self.env.contains_key(name) {
                 None
@@ -3224,28 +3393,42 @@ impl Checker<'_> {
             }
         });
         if let Some(sig) = sig {
-            let required = sig.iter().filter(|p| !p.2).count();
-            if args.len() < required || args.len() > sig.len() {
-                self.errors.push(CompileError::ArityMismatch {
-                    span,
-                    name: name.as_str().to_string(),
-                    expected: sig.len(),
-                    found: args.len(),
-                });
-                return;
-            }
-            for ((arg, ty), (param, expected, _)) in args.iter().zip(found).zip(&sig) {
-                if !fits(expected, ty) {
+            let vars = if self.local_sigs.contains_key(name) || !self.env.contains_key(name) {
+                self.generics.get(name).cloned().unwrap_or_default()
+            } else {
+                Vec::new()
+            };
+            let Some(given) = self.bind_args(name, &sig, args, span) else {
+                return (!vars.is_empty()).then_some(Ty::Unknown);
+            };
+            let mut subst: HashMap<Symbol, Ty> = HashMap::new();
+            for ((param, expected, _), at) in sig.iter().zip(&given) {
+                let Some(i) = at else { continue };
+                if !unify(expected, &found[*i], &vars, &mut subst) {
                     self.errors.push(CompileError::ArgumentTypeMismatch {
-                        span: arg.value.span(),
+                        span: args[*i].value.span(),
                         callee: name.as_str().to_string(),
                         name: param.as_str().to_string(),
-                        expected: ty_name(expected),
-                        found: ty_name(ty),
+                        expected: ty_name(&substitute(expected, &subst)),
+                        found: ty_name(&found[*i]),
                     });
                 }
             }
-            return;
+            if vars.is_empty() {
+                return None;
+            }
+            let ret = self.fns.get(name).cloned().flatten().unwrap_or(Ty::Unknown);
+            let ret = substitute(&ret, &subst);
+            // A parameter nothing passed a known type for (an argument whose
+            // type is not known) leaves the result as unknown as it was.
+            return Some(if mentions(&ret, &vars) {
+                Ty::Unknown
+            } else {
+                ret
+            });
+        }
+        if args.iter().any(|a| a.name.is_some()) {
+            return None;
         }
         match self.env.get(name).cloned() {
             Some(Ty::Fn(params, _)) if self.origins.get(name) == Some(&Origin::Param) => {
@@ -3267,6 +3450,7 @@ impl Checker<'_> {
             }),
             _ => {}
         }
+        None
     }
 
     /// Checks a call: a method call (`recv.method(args)`, RFC-0027 §4) validates
@@ -3319,7 +3503,9 @@ impl Checker<'_> {
                 if self.strict && !self.knows(name) && !BUILT_IN_CALLS.contains(&name.as_str()) {
                     self.unknown_name(name, *span);
                 }
-                self.check_fn_call(name, args, &arg_tys, span_of_call);
+                if let Some(ty) = self.check_fn_call(name, args, &arg_tys, span_of_call) {
+                    return ty;
+                }
                 self.fns.get(name).cloned().flatten().unwrap_or_else(|| {
                     // The clock answers text (RFC-0049).
                     if matches!(name.as_str(), "now" | "nowUtc") && !self.knows(name) {
@@ -3666,7 +3852,8 @@ impl Checker<'_> {
                         | "Screen"
                         | "Window"
                 ) || text.contains('.')
-                    || self.type_names.contains(name);
+                    || self.type_names.contains(name)
+                    || self.type_vars.contains(name);
                 if !known {
                     let hint = crate::util::closest_match(
                         text,
@@ -3791,6 +3978,46 @@ fn judged(t: &Ty) -> bool {
 
 /// Whether a value of type `found` may be where `expected` was written, as far
 /// as the checker can tell.
+/// Whether `found` fits `pattern`, a parameter's type that may name type
+/// parameters (`vars`): the first time one is met it is given the type of what
+/// was passed, and after that what is passed must be that type.
+fn unify(pattern: &Ty, found: &Ty, vars: &[Symbol], subst: &mut HashMap<Symbol, Ty>) -> bool {
+    match (pattern, found) {
+        (Ty::Named(var), found) if vars.contains(var) => {
+            if !is_concrete(found) {
+                return true;
+            }
+            if let Some(held) = subst.get(var) {
+                return fits(held, found) || fits(found, held);
+            }
+            subst.insert(var.clone(), found.clone());
+            true
+        }
+        (Ty::List(p), Ty::List(f)) | (Ty::Optional(p), Ty::Optional(f)) => unify(p, f, vars, subst),
+        (Ty::Optional(p), found) => unify(p, found, vars, subst),
+        _ => fits(pattern, found),
+    }
+}
+
+/// `ty` with each type parameter in `subst` replaced by the type it was given.
+fn substitute(ty: &Ty, subst: &HashMap<Symbol, Ty>) -> Ty {
+    match ty {
+        Ty::Named(var) => subst.get(var).cloned().unwrap_or_else(|| ty.clone()),
+        Ty::List(inner) => Ty::List(Box::new(substitute(inner, subst))),
+        Ty::Optional(inner) => Ty::Optional(Box::new(substitute(inner, subst))),
+        other => other.clone(),
+    }
+}
+
+/// Whether `ty` still names one of the type parameters `vars`.
+fn mentions(ty: &Ty, vars: &[Symbol]) -> bool {
+    match ty {
+        Ty::Named(var) => vars.contains(var),
+        Ty::List(inner) | Ty::Optional(inner) => mentions(inner, vars),
+        _ => false,
+    }
+}
+
 fn fits(expected: &Ty, found: &Ty) -> bool {
     !judged(expected) || !is_concrete(found) || assignable(expected, found)
 }

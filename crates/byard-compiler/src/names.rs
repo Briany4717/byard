@@ -70,6 +70,7 @@ fn check_view(view: &ViewDecl, out: &mut Vec<CompileError>) {
     for param in &view.params {
         if seen.insert(param.name.clone(), "a parameter").is_some() {
             out.push(CompileError::DuplicateParam {
+                function: false,
                 span: param.span,
                 name: param.name.as_str().to_string(),
                 callee: view.name.as_str().to_string(),

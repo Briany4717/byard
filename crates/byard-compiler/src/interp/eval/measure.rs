@@ -294,6 +294,7 @@ pub(super) fn children(expr: &Expr) -> Vec<&Expr> {
             .chain(arms.iter().map(|a| &a.body))
             .collect(),
         Expr::ForEach { iter, body, .. } => vec![iter.as_ref(), body.as_ref()],
+        Expr::MapLit(pairs, _) => pairs.iter().flat_map(|(k, v)| [k, v]).collect(),
         Expr::If {
             cond, then, els, ..
         } => [cond.as_ref(), then.as_ref()]

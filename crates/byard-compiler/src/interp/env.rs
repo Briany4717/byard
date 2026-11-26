@@ -45,6 +45,10 @@ pub enum Value {
     Str(String),
     /// `List<T>`.
     List(Vec<Value>),
+    /// `Map<K, V>`: each key with its value, in the order they were added.
+    Map(Vec<(Value, Value)>),
+    /// `Set<T>`: each item once, in the order they were added.
+    Set(Vec<Value>),
     /// A tuple of (optionally named) values, e.g. `(left: 5, bottom: 3)`.
     Tuple(Vec<(Option<Symbol>, Value)>),
     /// A name-keyed, ordered, immutable data record (RFC-0027 §6): the element

@@ -2024,6 +2024,9 @@ fn animated_anywhere(value: &Expr) -> bool {
             scrutinee, arms, ..
         } => animated_anywhere(scrutinee) || arms.iter().any(|a| animated_anywhere(&a.body)),
         Expr::ForEach { iter, body, .. } => animated_anywhere(iter) || animated_anywhere(body),
+        Expr::MapLit(pairs, _) => pairs
+            .iter()
+            .any(|(k, v)| animated_anywhere(k) || animated_anywhere(v)),
         Expr::If {
             cond, then, els, ..
         } => {

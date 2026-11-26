@@ -415,6 +415,13 @@ fn shift_expr(expr: &mut Expr, delta: u32) {
                 shift_expr(&mut arm.body, delta);
             }
         }
+        Expr::MapLit(pairs, span) => {
+            shift(span, delta);
+            for (k, v) in pairs {
+                shift_expr(k, delta);
+                shift_expr(v, delta);
+            }
+        }
         Expr::ForEach {
             iter, body, span, ..
         } => {

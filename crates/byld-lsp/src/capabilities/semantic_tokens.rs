@@ -558,6 +558,12 @@ fn collect_expr_tokens(expr: &Expr, out: &mut Vec<RawToken>) {
                 collect_expr_tokens(&arm.body, out);
             }
         }
+        Expr::MapLit(pairs, _) => {
+            for (k, v) in pairs {
+                collect_expr_tokens(k, out);
+                collect_expr_tokens(v, out);
+            }
+        }
         Expr::ForEach { iter, body, .. } => {
             collect_expr_tokens(iter, out);
             collect_expr_tokens(body, out);

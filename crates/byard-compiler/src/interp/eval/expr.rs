@@ -41,6 +41,26 @@ enum NoneTest<'e> {
     Read(&'e Expr),
 }
 
+/// The rows a `for` runs over: a list's items, a set's items, or a map's
+/// entries, each a `{ key, value }`. `None` for anything else.
+pub(super) fn rows_of(value: Value) -> Option<Vec<Value>> {
+    match value {
+        Value::List(items) | Value::Set(items) => Some(items),
+        Value::Map(pairs) => Some(
+            pairs
+                .into_iter()
+                .map(|(key, value)| {
+                    Value::Record(vec![
+                        (Symbol::intern("key"), key),
+                        (Symbol::intern("value"), value),
+                    ])
+                })
+                .collect(),
+        ),
+        _ => None,
+    }
+}
+
 /// The arguments of a call in the order of the parameters of what it calls:
 /// the positional ones first, and each one written by name in the place of the
 /// parameter it names. A parameter no argument is for is `None`.
@@ -239,6 +259,18 @@ pub(super) fn structural_eq(a: &Value, b: &Value) -> bool {
         (Value::Bool(x), Value::Bool(y)) => x == y,
         (Value::Str(x), Value::Str(y)) => x == y,
         (Value::Unit, Value::Unit) => true,
+        // A set is the same set in any order, and a map the same map.
+        (Value::Set(xs), Value::Set(ys)) => {
+            xs.len() == ys.len() && xs.iter().all(|x| ys.iter().any(|y| structural_eq(x, y)))
+        }
+        (Value::Map(xs), Value::Map(ys)) => {
+            xs.len() == ys.len()
+                && xs.iter().all(|(kx, vx)| {
+                    ys.iter()
+                        .find(|(ky, _)| structural_eq(kx, ky))
+                        .is_some_and(|(_, vy)| structural_eq(vx, vy))
+                })
+        }
         (Value::List(xs), Value::List(ys)) => {
             xs.len() == ys.len() && xs.iter().zip(ys).all(|(x, y)| structural_eq(x, y))
         }
@@ -294,7 +326,12 @@ fn target_name(target: &Expr) -> String {
 fn data_member(base: &Value, field: &Symbol, graphemes: bool) -> Value {
     let f = field.as_str();
     match base {
-        Value::List(xs) if f == "len" => Value::Int(i64::try_from(xs.len()).unwrap_or(i64::MAX)),
+        Value::List(xs) | Value::Set(xs) if f == "len" => {
+            Value::Int(i64::try_from(xs.len()).unwrap_or(i64::MAX))
+        }
+        Value::Map(pairs) if f == "len" => {
+            Value::Int(i64::try_from(pairs.len()).unwrap_or(i64::MAX))
+        }
         Value::Str(s) if f == "len" => {
             Value::Int(i64::try_from(text_len(s, graphemes)).unwrap_or(i64::MAX))
         }
@@ -380,6 +417,11 @@ pub(super) fn index_value(base: &Value, index: &Value, graphemes: bool) -> Value
             .and_then(|i| xs.get(i))
             .cloned()
             .unwrap_or(Value::Unit),
+        // The value of a key, or nothing.
+        (Value::Map(pairs), key) => pairs
+            .iter()
+            .find(|(k, _)| structural_eq(k, key))
+            .map_or(Value::Unit, |(_, v)| v.clone()),
         _ => Value::Unit,
     }
 }
@@ -859,7 +901,7 @@ impl Interpreter {
             }
             // `u.score = 10` is `u = { ..u, score: 10 }`.
             Expr::Assign { target, .. } | Expr::Postfix { target, .. }
-                if matches!(**target, Expr::Member { .. })
+                if matches!(**target, Expr::Member { .. } | Expr::Index { .. })
                     && self.resolve_theme_scheme_target(target).is_none()
                     && expr.field_write().is_some() =>
             {
@@ -964,6 +1006,30 @@ impl Interpreter {
             // A `let` holds its value for the statements after it: its name is
             // read through the same stack a lambda's parameters are, pushed
             // when the statement runs and popped when the block ends.
+            // `["ada": 36]`: each key with its value; a key written twice keeps
+            // the place of the first and the value of the last.
+            Expr::MapLit(pairs, _) => {
+                let mut lowered: Vec<(Lowered, Lowered)> = pairs
+                    .iter()
+                    .map(|(k, v)| {
+                        (
+                            self.lower_expr(k, payload_name),
+                            self.lower_expr(v, payload_name),
+                        )
+                    })
+                    .collect();
+                Box::new(move |ctx| {
+                    let mut out: Vec<(Value, Value)> = Vec::with_capacity(lowered.len());
+                    for (k, v) in &mut lowered {
+                        let (k, v) = (k(ctx), v(ctx));
+                        match out.iter_mut().find(|(have, _)| structural_eq(have, &k)) {
+                            Some(pair) => pair.1 = v,
+                            None => out.push((k, v)),
+                        }
+                    }
+                    Value::Map(out)
+                })
+            }
             Expr::ForEach {
                 var,
                 index,
@@ -981,7 +1047,7 @@ impl Interpreter {
                 self.lambda_params.truncate(shadowed);
                 let (var, index) = (var.clone(), index.clone());
                 Box::new(move |ctx| {
-                    let Value::List(items) = items(ctx) else {
+                    let Some(items) = rows_of(items(ctx)) else {
                         return Value::Unit;
                     };
                     let base = LAMBDA_ARGS.with(|args| args.borrow().len());
@@ -1579,6 +1645,30 @@ impl Interpreter {
         args: &[crate::parser::ast::Arg],
         payload_name: Option<&Symbol>,
     ) -> Lowered {
+        // `Set([1, 2])`: the items of a list, each once; `Set()` has none.
+        if let Expr::Ident(name, _) = callee {
+            if name.as_str() == "Set"
+                && self.env.lookup(name).is_none()
+                && !self.lambda_params.contains(name)
+            {
+                let mut list = args
+                    .first()
+                    .map(|a| self.lower_expr(&a.value, payload_name));
+                return Box::new(move |ctx| {
+                    let items = match list.as_mut().map(|l| l(ctx)) {
+                        Some(Value::List(xs)) => xs,
+                        _ => Vec::new(),
+                    };
+                    let mut out: Vec<Value> = Vec::with_capacity(items.len());
+                    for item in items {
+                        if !out.iter().any(|x| structural_eq(x, &item)) {
+                            out.push(item);
+                        }
+                    }
+                    Value::Set(out)
+                });
+            }
+        }
         // RFC-0026 `navigate`/`back`/`replace`. Contextual: the names are only
         // special when their first argument really is a navigation container's
         // `var`, so nothing stops an app binding them for its own purposes.
@@ -1943,6 +2033,13 @@ impl Interpreter {
         args: &[crate::parser::ast::Arg],
         payload_name: Option<&Symbol>,
     ) -> Option<Lowered> {
+        // `store.set(k, v)` on an injected controller is its call, not a
+        // collection's: a controller has methods of its own.
+        if matches!(base, Expr::Ident(n, _)
+            if matches!(self.env.lookup(n), Some(Value::Controller(_))))
+        {
+            return None;
+        }
         let mut base_c = self.lower_expr(base, payload_name);
         match name.as_str() {
             "push" => {
@@ -2135,7 +2232,7 @@ impl Interpreter {
                 Some(Box::new(move |ctx| {
                     let needle = arg(ctx);
                     match base_c(ctx) {
-                        Value::List(xs) => {
+                        Value::List(xs) | Value::Set(xs) => {
                             Value::Bool(xs.iter().any(|x| structural_eq(x, &needle)))
                         }
                         Value::Str(s) => match needle {
@@ -2242,6 +2339,113 @@ impl Interpreter {
                     _ => Value::Unit,
                 }))
             }
+            // `m.set(k, v)` and `m.remove(k)` on a map, `s.add(x)` and
+            // `s.remove(x)` on a set: a new one. A key set again keeps its
+            // place; one that is not there is left as it was.
+            "set" => {
+                let mut key = self.lower_expr(&args.first()?.value, payload_name);
+                let mut value = self.lower_expr(&args.get(1)?.value, payload_name);
+                Some(Box::new(move |ctx| {
+                    let (key, value) = (key(ctx), value(ctx));
+                    match base_c(ctx) {
+                        Value::Map(mut pairs) => {
+                            match pairs.iter_mut().find(|(k, _)| structural_eq(k, &key)) {
+                                Some(pair) => pair.1 = value,
+                                None => pairs.push((key, value)),
+                            }
+                            Value::Map(pairs)
+                        }
+                        other => other,
+                    }
+                }))
+            }
+            "remove" => {
+                let mut item = self.lower_expr(&args.first()?.value, payload_name);
+                Some(Box::new(move |ctx| {
+                    let item = item(ctx);
+                    match base_c(ctx) {
+                        Value::Map(mut pairs) => {
+                            pairs.retain(|(k, _)| !structural_eq(k, &item));
+                            Value::Map(pairs)
+                        }
+                        Value::Set(mut xs) => {
+                            xs.retain(|x| !structural_eq(x, &item));
+                            Value::Set(xs)
+                        }
+                        other => other,
+                    }
+                }))
+            }
+            "add" => {
+                let mut item = self.lower_expr(&args.first()?.value, payload_name);
+                Some(Box::new(move |ctx| {
+                    let item = item(ctx);
+                    match base_c(ctx) {
+                        Value::Set(mut xs) => {
+                            if !xs.iter().any(|x| structural_eq(x, &item)) {
+                                xs.push(item);
+                            }
+                            Value::Set(xs)
+                        }
+                        other => other,
+                    }
+                }))
+            }
+            // `xs.first()` and `xs.last()`: the item at either end, or nothing.
+            "first" | "last" => {
+                let last = name.as_str() == "last";
+                Some(Box::new(move |ctx| match base_c(ctx) {
+                    Value::List(xs) if !xs.is_empty() => {
+                        let at = if last { xs.len() - 1 } else { 0 };
+                        xs[at].clone()
+                    }
+                    _ => Value::Unit,
+                }))
+            }
+            // `xs.sum()`: the items added up; nothing to add is `0`.
+            "sum" if args.is_empty() => {
+                let saturate = self.saturates();
+                Some(Box::new(move |ctx| match base_c(ctx) {
+                    Value::List(xs) => xs.into_iter().fold(Value::Int(0), |acc, x| {
+                        eval_binary_in(BinOp::Add, acc, x, saturate)
+                    }),
+                    _ => Value::Int(0),
+                }))
+            }
+            // `xs.insertAt(i, x)` and `xs.updateAt(i, x)`: a new list with `x`
+            // put before the item at `i` (`i` may be the length, to put it
+            // last), or in its place. A position the list does not have leaves
+            // it as it was.
+            "insertAt" | "updateAt" => {
+                let insert = name.as_str() == "insertAt";
+                let mut at = self.lower_expr(&args.first()?.value, payload_name);
+                let mut item = self.lower_expr(&args.get(1)?.value, payload_name);
+                Some(Box::new(move |ctx| {
+                    let at = at(ctx).as_int().and_then(|i| usize::try_from(i).ok());
+                    let item = item(ctx);
+                    match base_c(ctx) {
+                        Value::List(mut xs) => {
+                            // An `Int` put in a list of `Float`s is one.
+                            let item = match item {
+                                #[allow(clippy::cast_precision_loss)]
+                                Value::Int(i)
+                                    if xs.iter().any(|x| matches!(x, Value::Float(_))) =>
+                                {
+                                    Value::Float(i as f64)
+                                }
+                                item => item,
+                            };
+                            match at {
+                                Some(i) if insert && i <= xs.len() => xs.insert(i, item),
+                                Some(i) if !insert && i < xs.len() => xs[i] = item,
+                                _ => {}
+                            }
+                            Value::List(xs)
+                        }
+                        other => other,
+                    }
+                }))
+            }
             // `xs.get(i)`: the item at `i`, or nothing.
             "get" => {
                 let mut at = self.lower_expr(&args.first()?.value, payload_name);
@@ -2263,6 +2467,39 @@ impl Interpreter {
                         _ => None,
                     };
                     Value::Int(found.and_then(|i| i64::try_from(i).ok()).unwrap_or(-1))
+                }))
+            }
+            // `xs.any(f)`, `xs.all(f)` and `xs.count(f)`: whether some, whether
+            // every, or how many of the items `f` holds for.
+            "any" | "all" | "count" => {
+                let (param, body) = match &args.first()?.value {
+                    Expr::Lambda { params, body, .. } => (params.first().cloned(), body.clone()),
+                    _ => return None,
+                };
+                let (mut body_c, named) = self.lower_item_body(param, &body, payload_name);
+                let which = name.clone();
+                Some(Box::new(move |ctx| {
+                    let items = match base_c(ctx) {
+                        Value::List(xs) => xs,
+                        _ => Vec::new(),
+                    };
+                    let mut held = 0_i64;
+                    let mut all = true;
+                    for x in &items {
+                        if with_item(named.as_ref(), x.clone(), || body_c(ctx))
+                            .as_bool()
+                            .unwrap_or(false)
+                        {
+                            held += 1;
+                        } else {
+                            all = false;
+                        }
+                    }
+                    match which.as_str() {
+                        "any" => Value::Bool(held > 0),
+                        "all" => Value::Bool(all),
+                        _ => Value::Int(held),
+                    }
                 }))
             }
             "sortBy" | "find" => {
@@ -2376,7 +2613,7 @@ impl Interpreter {
     /// other than a `var`.
     pub fn eval_action(&mut self, expr: &Expr) -> Result<Value, CompileError> {
         if let Expr::Assign { target, .. } | Expr::Postfix { target, .. } = expr {
-            if matches!(**target, Expr::Member { .. })
+            if matches!(**target, Expr::Member { .. } | Expr::Index { .. })
                 && self.resolve_theme_scheme_target(target).is_none()
             {
                 if let Some(whole) = expr.field_write() {

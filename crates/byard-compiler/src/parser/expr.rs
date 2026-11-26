@@ -1181,14 +1181,35 @@ impl Parser<'_> {
     fn parse_array(&mut self) -> Expr {
         let start = self.cur_span();
         self.advance(); // [
+        // `[:]`, a map with nothing in it.
+        if matches!(self.cur(), Some(Token::Colon)) && matches!(self.peek2(), Some(Token::RBracket))
+        {
+            self.advance();
+            self.advance();
+            return Expr::MapLit(Vec::new(), self.span_from(start));
+        }
         let mut items = Vec::new();
+        let mut pairs: Vec<(Expr, Expr)> = Vec::new();
         while !matches!(self.cur(), Some(Token::RBracket) | None) {
-            items.push(self.parse_expr(0));
+            let item = self.parse_expr(0);
+            // A `:` after the first item makes this a map: `key: value, …`.
+            if (items.is_empty() || !pairs.is_empty()) && self.eat(&Token::Colon) {
+                let value = self.parse_expr(0);
+                pairs.push((item, value));
+            } else {
+                items.push(item);
+            }
             if !self.eat(&Token::Comma) {
                 break;
             }
         }
         self.expect(&Token::RBracket, "']'");
+        if !pairs.is_empty() {
+            if !items.is_empty() {
+                self.error("a `key: value` for each item of a map");
+            }
+            return Expr::MapLit(pairs, self.span_from(start));
+        }
         Expr::Array(items, self.span_from(start))
     }
 

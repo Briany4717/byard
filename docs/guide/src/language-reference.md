@@ -190,11 +190,12 @@ another, and the only thing that changes is which value a `var` holds.
 - a record literal given where a declared record is wanted (a `var`'s first value or a later
   one, an item of a list) writes only fields the record has (`UnknownField`), of the types it
   has (`TypeMismatch`), and all the fields it needs, the ones not marked `?`;
-- `for` goes over a list;
+- `for` goes over a list, a set or a map;
 - every type written is one: built in (`Int`, `Float`, `Str`, `Bool`, `Color`, `List<T>`,
-  `Fn(…)`, `Slot`, and the `Screen` and `Window` the language provides) or declared by the
-  program as a `type`, an `enum` or a `context`, or another package's as `package.Name`. Any
-  other name, `Qux` or `Map<Str, Int>`, is `UnknownType` and suggests the nearest;
+  `Map<K, V>`, `Set<T>`, `Fn(…)`, `Slot`, and the `Screen` and `Window` the language provides)
+  or declared by the program as a `type`, an `enum` or a `context`, or another package's as
+  `package.Name`. Any other name, `Qux` or `Dict<Str, Int>`, is `UnknownType` and suggests the
+  nearest;
 - the first value of a `var` or `let` has the type written for it, each item of a list on its
   own (`var n: Int = "a"` and `var xs: List<Int> = [1, "a"]` are `TypeMismatch`);
 - what is written to a `var` is a value it can hold: `n = e` a value of its type, `n += e` and
@@ -385,6 +386,12 @@ Every method returns a new value and leaves the list as it was.
 | `sortBy(f)` | Ordered by `f(item)`, smallest first. Items that tie stay in the order they had. |
 | `reduce(start, f)` | `f(acc, item)` over each, from `start`. `start` for an empty list. |
 | `min()`, `max()` | The smallest or largest, or nothing |
+| `first()`, `last()` | The item at either end, or nothing: a `T?` |
+| `any(f)`, `all(f)` | Whether `f(item)` is `true` for some, or for every, item (`all` of none is `true`) |
+| `count(f)` | How many items `f(item)` is `true` for |
+| `sum()` | The items added up, `0` for none. A list of anything but numbers is `TypeMismatch`. |
+| `insertAt(i, x)` | With `x` put before the item at `i`; `i` may be the length, to put it last. Unchanged for a position the list does not have. |
+| `updateAt(i, x)` | With `x` in the place of the item at `i`. Unchanged when there is none. |
 
 A function given to one of these must be *pure*: it computes and returns, and assigns
 nothing (`EffectInPureLambda`).
@@ -429,7 +436,42 @@ level down, so the other fields are kept and `u` has to be a `var` (`NotAssignab
 or a loop variable). `+=`, `-=`, `++` and `--` work on a field too. A field the record does not
 have, or a value it cannot hold, is `TypeMismatch`.
 
-> **Not yet.** `xs[i] = v` is accepted and changes nothing. (`05_records.byd`)
+`xs[i] = v` writes an item, as `u.score = 10` writes a field: it means `xs = xs.updateAt(i,
+v)`, and `todos[i].done = true` means `todos = todos.updateAt(i, { ..todos[i], done: true })`.
+`xs` has to be a `var`, `v` a value the list holds, and a position the list does not have
+changes nothing. `+=`, `-=`, `++` and `--` work on an item too.
+
+### Maps and sets
+
+```byld,fragment
+var stock: Map<Str, Int> = ["A-100": 3, "B-200": 0]
+var tags: Set<Str> = Set(["new", "sale"])
+
+on mount => {
+    stock = stock.set("C-300", 12)
+    tags = tags.add("clearance")
+}
+Text("{stock["A-100"] ?? 0} {stock.len} {tags.contains("sale")}")
+for sku, qty in stock { Text("{sku}: {qty}") }
+```
+
+A `Map<K, V>` holds each key once with its value, written `["ada": 36, "bo": 1]`, and `[:]` for
+one with nothing in it, which needs its type written (`CannotInfer`). The keys are of one type
+and so are the values; a pair that does not fit the type written is `TypeMismatch`, at the
+pair. A key written twice keeps its place and the last value. `m[k]` is the value, or nothing
+when the key is not there: a `V?`, which `??` defaults. `m.len` is how many there are,
+`m.set(k, v)` is the map with `k` set (its place kept if it was there, last if not), and
+`m.remove(k)` is the map without it. A `Set<T>` is made by `Set(["a", "b"])`, with each item
+once (`Set()` has none), and has `s.len`, `s.add(x)`, `s.remove(x)` and `s.contains(x)`.
+
+Both keep the order things were added in, so `for sku, qty in stock { … }` and
+`for tag in tags { … }` are the same every time; with one name over a map, it is the value.
+Methods return a new value and leave the old one, as a list's do. Two maps are equal when they
+have the same keys with equal values, and two sets when they have the same items, in any order.
+To a controller a set is the list of its items and a map the list of its `{ key, value }`.
+
+> **Not yet.** A lookup in a map or a set is a search through what was added, not a hash, so
+> it is as slow as `find`. (`04_lists.byd`)
 
 ### A value or a default: `??`
 

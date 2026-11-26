@@ -1220,6 +1220,9 @@ pub enum Expr {
         /// Source span.
         span: Span,
     },
+    /// `["ada": 36, "bo": 1]`, a map: each key with its value, in the order
+    /// written. `[:]` is the one with none.
+    MapLit(Vec<(Expr, Expr)>, Span),
     /// `for item in items { stmt* }` as an action statement: the block runs
     /// once for each item, in order, with `item` bound (and `i` for the
     /// `for i, item in items` form). Its structural counterpart in a view
@@ -1309,11 +1312,19 @@ pub enum Expr {
     Error(Span),
 }
 
+/// One step of the path an assignment writes through.
+enum Step {
+    /// `.name`
+    Field(Symbol),
+    /// `[index]`
+    Item(Expr),
+}
+
 impl Expr {
-    /// `u.score = 10`, `u.a.b += 1` and `u.n++` as the write to the whole
-    /// record they mean: `u = { ..u, score: 10 }`, one level down for each
-    /// field of the path. `None` for anything else, and for a path with an
-    /// index in it, which is not a record to rebuild.
+    /// `u.score = 10`, `u.a.b += 1`, `u.n++` and `xs[i] = v` as the write to the
+    /// whole value they mean: `u = { ..u, score: 10 }`, `xs = xs.updateAt(i, v)`,
+    /// one level down for each field or item of the path. `None` for anything
+    /// else.
     #[must_use]
     pub fn field_write(&self) -> Option<Expr> {
         let (target, op, value, span) = match self {
@@ -1333,32 +1344,49 @@ impl Expr {
             }
             _ => return None,
         };
-        // The path from the root: `u.a.b` is `u` and [`a`, `b`].
-        let mut fields: Vec<Symbol> = Vec::new();
+        // The path from the root: `u.a[i]` is `u` and [`.a`, `[i]`].
+        let mut steps: Vec<Step> = Vec::new();
         let mut at: &Self = target;
-        while let Self::Member { base, field, .. } = at {
-            fields.push(field.clone());
-            at = base;
+        loop {
+            match at {
+                Self::Member { base, field, .. } => {
+                    steps.push(Step::Field(field.clone()));
+                    at = base;
+                }
+                Self::Index { base, index, .. } => {
+                    steps.push(Step::Item((**index).clone()));
+                    at = base;
+                }
+                _ => break,
+            }
         }
         let Self::Ident(root, root_span) = at else {
             return None;
         };
-        if fields.is_empty() {
+        if steps.is_empty() {
             return None;
         }
-        fields.reverse();
-        // What the innermost field becomes.
+        steps.reverse();
+        // The value at the end of the first `depth` steps of the path.
         let read = |depth: usize| {
             let mut e = Self::Ident(root.clone(), *root_span);
-            for f in &fields[..depth] {
-                e = Self::Member {
-                    base: Box::new(e),
-                    field: f.clone(),
-                    span,
+            for step in &steps[..depth] {
+                e = match step {
+                    Step::Field(f) => Self::Member {
+                        base: Box::new(e),
+                        field: f.clone(),
+                        span,
+                    },
+                    Step::Item(i) => Self::Index {
+                        base: Box::new(e),
+                        index: Box::new(i.clone()),
+                        span,
+                    },
                 };
             }
             e
         };
+        // What the innermost field becomes.
         let mut new = match op {
             AssignOp::Assign => value,
             AssignOp::Add | AssignOp::Sub => Self::Binary {
@@ -1367,16 +1395,38 @@ impl Expr {
                 } else {
                     BinOp::Sub
                 },
-                lhs: Box::new(read(fields.len())),
+                lhs: Box::new(read(steps.len())),
                 rhs: Box::new(value),
                 span,
             },
         };
-        for depth in (0..fields.len()).rev() {
-            new = Self::Record {
-                fields: vec![(fields[depth].clone(), new)],
-                spread: Some(Box::new(read(depth))),
-                span,
+        for depth in (0..steps.len()).rev() {
+            new = match &steps[depth] {
+                Step::Field(f) => Self::Record {
+                    fields: vec![(f.clone(), new)],
+                    spread: Some(Box::new(read(depth))),
+                    span,
+                },
+                Step::Item(i) => Self::Call {
+                    callee: Box::new(Self::Member {
+                        base: Box::new(read(depth)),
+                        field: Symbol::intern("updateAt"),
+                        span,
+                    }),
+                    args: vec![
+                        Arg {
+                            name: None,
+                            value: i.clone(),
+                            bind: false,
+                        },
+                        Arg {
+                            name: None,
+                            value: new,
+                            bind: false,
+                        },
+                    ],
+                    span,
+                },
             };
         }
         Some(Self::Assign {
@@ -1421,6 +1471,7 @@ impl Expr {
             | Self::StyleValue { span, .. }
             | Self::Merge { span, .. }
             | Self::ForEach { span, .. }
+            | Self::MapLit(_, span)
             | Self::Return(span)
             | Self::Error(span) => *span,
         }

@@ -406,7 +406,30 @@ fn block_comment(lex: &mut Lexer<Token>) -> logos::FilterResult<(), LexError> {
     logos::FilterResult::Error(LexError::UnterminatedComment)
 }
 
+/// A string written over lines, `"""` to `"""`, after its first quote: it runs to
+/// the next three quotes that are not escaped.
+fn lex_triple_string(lex: &mut Lexer<Token>) -> Result<(), LexError> {
+    let rest = lex.remainder().as_bytes();
+    // The first quote is the token's own; `""` follows it.
+    let mut i = 2;
+    while i < rest.len() {
+        if rest[i] == b'\\' {
+            i += 2;
+        } else if rest[i..].starts_with(b"\"\"\"") {
+            lex.bump(i + 3);
+            return Ok(());
+        } else {
+            i += 1;
+        }
+    }
+    lex.bump(rest.len());
+    Err(LexError::UnterminatedString)
+}
+
 fn lex_string(lex: &mut Lexer<Token>) -> Result<(), LexError> {
+    if lex.remainder().starts_with("\"\"") {
+        return lex_triple_string(lex);
+    }
     // stack[0] is the opening quote's `InString` frame.
     let mut stack = vec![StrState::InString];
     let mut string_depth = 1usize; // number of `InString` frames currently open

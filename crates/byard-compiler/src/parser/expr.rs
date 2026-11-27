@@ -1477,19 +1477,30 @@ impl Parser<'_> {
     /// and interpolation parts, recursively parsing each `{ expr }` (PEP 701).
     pub(super) fn parse_string_literal(&mut self, span: Span) -> Vec<StrPart> {
         let raw = self.text(span);
+        // A string over lines, `"""` to `"""`: it drops the indentation of its
+        // closing quotes, and the line break after the opening ones and the one
+        // before the closing ones.
+        let triple = raw.len() >= 6 && raw.starts_with("\"\"\"") && raw.ends_with("\"\"\"");
+        let quotes = if triple { 3 } else { 1 };
         // Strip the surrounding quotes; a malformed (unclosed) literal is
         // already reported by the lexer, so guard the slice defensively.
-        let Some(inner) = raw.strip_prefix('"').and_then(|s| s.strip_suffix('"')) else {
+        let Some(inner) = raw
+            .get(quotes..raw.len().saturating_sub(quotes))
+            .filter(|_| raw.len() >= 2 * quotes)
+        else {
             return vec![StrPart::Text(String::new())];
         };
         // Each character of the inner text, paired with its file offset, so an
         // interpolation's spans can be placed where it is written.
-        let base = self.local_offset(span.start) + 1;
-        let cs: Vec<(char, u32)> = inner
+        let base = self.local_offset(span.start) + quotes;
+        let mut cs: Vec<(char, u32)> = inner
             .char_indices()
             .map(|(i, c)| (c, self.file_offset(base + i)))
             .collect();
         let end = self.file_offset(base + inner.len());
+        if triple {
+            cs = dedent(cs);
+        }
         self.split_interpolations(&cs, end)
     }
 
@@ -1565,6 +1576,52 @@ impl Parser<'_> {
     }
 }
 
+/// The text of a string written over lines: without the line break after the
+/// opening quotes, without the last line break and the indentation before the
+/// closing quotes, and with that indentation taken off the front of every
+/// line.
+fn dedent(cs: Vec<(char, u32)>) -> Vec<(char, u32)> {
+    let mut cs = cs;
+    if cs.first().is_some_and(|(c, _)| *c == '\r') && cs.get(1).is_some_and(|(c, _)| *c == '\n') {
+        cs.drain(..2);
+    } else if cs.first().is_some_and(|(c, _)| *c == '\n') {
+        cs.remove(0);
+    }
+    // What is after the last line break, when it is only white space, is the
+    // indentation of the closing quotes.
+    let mut indent = 0usize;
+    if let Some(last) = cs.iter().rposition(|(c, _)| *c == '\n') {
+        if cs[last + 1..].iter().all(|(c, _)| *c == ' ' || *c == '\t') {
+            indent = cs.len() - last - 1;
+            let cut = if last > 0 && cs[last - 1].0 == '\r' {
+                last - 1
+            } else {
+                last
+            };
+            cs.truncate(cut);
+        }
+    }
+    if indent == 0 {
+        return cs;
+    }
+    let mut out = Vec::with_capacity(cs.len());
+    let mut at_start = true;
+    let mut taken = 0usize;
+    for (c, offset) in cs {
+        if at_start && taken < indent && (c == ' ' || c == '\t') {
+            taken += 1;
+            continue;
+        }
+        at_start = false;
+        if c == '\n' {
+            at_start = true;
+            taken = 0;
+        }
+        out.push((c, offset));
+    }
+    out
+}
+
 /// Finds a trailing format spec (`:.N`, `:,` or `:,.N`) in an interpolation
 /// fragment and returns how many bytes of it are the expression: for
 /// `temp:.0`, 4 and a spec of no grouping and no decimals; with no spec, the
@@ -1577,49 +1634,88 @@ impl Parser<'_> {
 fn split_spec(frag: &str) -> (usize, Option<NumFormat>) {
     let mut depth = 0i32;
     let mut in_str = false;
+    // The `?` of a ternary still waiting for its `:`.
+    let mut ternary = 0u32;
     let mut colon = None;
-    for (i, c) in frag.char_indices() {
+    let chars: Vec<(usize, char)> = frag.char_indices().collect();
+    for (at, &(i, c)) in chars.iter().enumerate() {
         match c {
             '"' => in_str = !in_str,
             '(' | '[' | '{' if !in_str => depth += 1,
             ')' | ']' | '}' if !in_str => depth -= 1,
-            ':' if !in_str && depth == 0 => colon = Some(i),
+            '?' if !in_str && depth == 0 => {
+                // `??` and `?.` are not a ternary's.
+                let next = chars.get(at + 1).map(|(_, n)| *n);
+                let prev = at
+                    .checked_sub(1)
+                    .and_then(|p| chars.get(p))
+                    .map(|(_, p)| *p);
+                if next != Some('?') && next != Some('.') && prev != Some('?') {
+                    ternary += 1;
+                }
+            }
+            ':' if !in_str && depth == 0 => {
+                if ternary > 0 {
+                    ternary -= 1;
+                } else {
+                    colon = Some(i);
+                }
+            }
             _ => {}
         }
     }
     let Some(i) = colon else {
         return (frag.len(), None);
     };
-    let spec = frag[i + 1..].trim();
-    let (group, rest) = match spec.strip_prefix(',') {
-        Some(rest) => (true, rest),
-        None => (false, spec),
-    };
-    if rest.is_empty() {
-        return if group {
-            (
-                i,
-                Some(NumFormat {
-                    group,
-                    decimals: None,
-                }),
-            )
-        } else {
-            (frag.len(), None)
-        };
-    }
-    let digits = rest.strip_prefix('.').unwrap_or("");
-    match digits.parse::<u8>() {
-        Ok(n) if !digits.is_empty() && digits.bytes().all(|b| b.is_ascii_digit()) => (
-            i,
-            Some(NumFormat {
-                group,
-                decimals: Some(n),
-            }),
-        ),
-        _ => (frag.len(), None),
+    match parse_spec(frag[i + 1..].trim()) {
+        Some(spec) => (i, Some(spec)),
+        None => (frag.len(), None),
     }
 }
+
+/// What follows the colon of an interpolation, `[<>^][0][width][,][.N][%]`, or
+/// `None` when it is not one (so the colon was part of the expression).
+fn parse_spec(spec: &str) -> Option<NumFormat> {
+    if spec.is_empty() {
+        return None;
+    }
+    let mut rest = spec;
+    let mut out = NumFormat::default();
+    if let Some(a) = rest.chars().next().filter(|c| matches!(c, '<' | '>' | '^')) {
+        out.align = Some(a);
+        rest = &rest[1..];
+    }
+    // A leading zero with more digits after it fills with zeros.
+    if rest.starts_with('0') && rest[1..].starts_with(|c: char| c.is_ascii_digit()) {
+        out.zero = true;
+        rest = &rest[1..];
+    }
+    let digits = rest.bytes().take_while(u8::is_ascii_digit).count();
+    if digits > 0 {
+        out.width = Some(rest[..digits].parse::<u16>().ok()?.min(MAX_WIDTH));
+        rest = &rest[digits..];
+    }
+    if let Some(r) = rest.strip_prefix(',') {
+        out.group = true;
+        rest = r;
+    }
+    if let Some(r) = rest.strip_prefix('.') {
+        let d = r.bytes().take_while(u8::is_ascii_digit).count();
+        if d == 0 {
+            return None;
+        }
+        out.decimals = Some(r[..d].parse::<u8>().ok()?);
+        rest = &r[d..];
+    }
+    if let Some(r) = rest.strip_prefix('%') {
+        out.percent = true;
+        rest = r;
+    }
+    (rest.is_empty() && out != NumFormat::default()).then_some(out)
+}
+
+/// The widest a `{x:N}` spec makes a text; more is a mistake, not layout.
+const MAX_WIDTH: u16 = 200;
 
 /// The most decimals a `{x:.N}` spec shows; more is noise, not precision.
 const MAX_DECIMALS: u8 = 9;

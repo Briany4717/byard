@@ -99,7 +99,6 @@ let d = 200ms
 Text("{d + 0xFF0000}")
 
 //# case: multi-line-string
-//# gap: no multi-line string that drops its indentation
 //# fragment
 //# text: 3
 let s = """
@@ -115,7 +114,6 @@ View Card() { Text("a") }
 View Main() { Card() }
 
 //# case: string-format-width
-//# gap: no padding in an interpolation
 //# fragment
 //# text: [  7] [007]
 Text("[{7:3}] [{7:03}]")

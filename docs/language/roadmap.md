@@ -15,7 +15,7 @@ So every step below ends the same way: **its cases lose their `gap:` line, the r
 loses its note, and this file loses the step.** When this file is empty and the suite has no
 gap, the language is where this document wanted it.
 
-As written, the suite has 835 cases: 832 hold and 3 are gaps.
+As written, the suite has 849 cases: 848 hold and 1 is a gap.
 
 ```sh
 cargo test -p byard-cli --test it conformance -- --nocapture
@@ -268,10 +268,15 @@ an `inject` is a write of that field. What stays open:
 
 ### 21. The rest of text
 
-*Cases:* `multi-line-string`, `string-format-width`.
+*Done, but for doc comments.* `multi-line-string` and `string-format-width` hold, with the fourteen
+cases added with them. A text between `"""` drops the indentation of its closing quotes, and a
+format has a width, a fill, an alignment and a percentage. What stays open:
 
-Multi-line strings that drop their indentation, padding in a format, and doc comments that
-the language server and `byard doc` read.
+- `///` is still a comment. The language server does not show it on hover and there is no
+  `byard doc`: that is a command and a page format of its own, and no case asks for it.
+- A format cannot fill with a character other than a zero (`{x:*>8}`), and `%` is for numbers only.
+- A text over lines is not checked for a closing line that is less indented than a line above it:
+  that line keeps the whole of what it has.
 
 ## Part 4: freeze
 

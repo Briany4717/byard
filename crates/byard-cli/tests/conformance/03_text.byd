@@ -221,3 +221,97 @@ let c = b + b + b + b
 let d = c + c + c + c
 let e = d + d + d + d
 Text("{e.len}")
+
+//# case: format-pads-text-to-a-width
+//# fragment
+//# text: [ab    ] [    ab] [  ab  ]
+let name = "ab"
+Text("[{name:<6}] [{name:>6}] [{name:^6}]")
+
+//# case: format-pads-a-number-to-the-right-by-default
+//# fragment
+//# text: [   42] [42   ]
+Text("[{42:5}] [{42:<5}]")
+
+//# case: format-fills-a-number-with-zeros-after-its-sign
+//# fragment
+//# text: -0007 | 00042
+Text("{-7:05}")
+Text("{42:05}")
+
+//# case: format-width-and-decimals-together
+//# fragment
+//# text: [    3.14] [00003.14]
+Text("[{3.14159:8.2}] [{3.14159:08.2}]")
+
+//# case: format-a-percentage
+//# fragment
+//# text: 25.6% | 50%
+Text("{0.256:.1%}")
+Text("{0.5:%}")
+
+//# case: format-grouping-with-a-width
+//# fragment
+//# text: [ 1,234,567]
+Text("[{1234567:10,}]")
+
+//# case: format-width-does-not-cut-a-wider-text
+//# fragment
+//# text: abcdef
+let word = "abcdef"
+Text("{word:3}")
+
+//# case: a-ternary-in-an-interpolation-is-not-a-format
+//# fragment
+//# text: 1 | [  1]
+let on = true
+Text("{on ? 1 : 2}")
+Text("[{on ? 1 : 2:3}]")
+
+//# case: a-spec-that-is-not-one-stays-in-the-expression
+//# fragment
+//# error: UnexpectedToken
+//# diagnostics: 1
+let n = 1
+Text("{n:x}")
+
+//# case: multi-line-string-keeps-its-inner-indentation
+//# fragment
+//# text: a | 2
+let s = """
+    a
+      b
+    """
+Text("{s.slice(0, 1)}")
+Text("{s.split("\n").len}")
+
+//# case: multi-line-string-reads-interpolations
+//# fragment
+//# text: x=1
+let n = 1
+let s = """
+    x={n}
+    """
+Text(s)
+
+//# case: multi-line-string-with-its-quotes-on-the-text-line
+//# fragment
+//# text: ab
+let s = """
+ab"""
+Text(s)
+
+//# case: an-empty-multi-line-string
+//# fragment
+//# text: 0
+let s = """
+"""
+Text("{s.len}")
+
+//# case: multi-line-string-that-never-ends
+//# fragment
+//# error: UnterminatedString
+//# diagnostics: 1
+let s = """
+    a
+Text("x")

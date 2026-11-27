@@ -997,12 +997,21 @@ pub enum StrPart {
 }
 
 /// The spec after the colon of an interpolation: `:.2`, `:,` or `:,.2`.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct NumFormat {
     /// A comma between every three digits of the integer part (`,`).
     pub group: bool,
     /// A fixed number of decimals (`.N`), or the number as `{x}` writes it.
     pub decimals: Option<u8>,
+    /// The least width the text takes (`N`): it is padded to it.
+    pub width: Option<u16>,
+    /// A number padded with zeros after its sign and not with spaces (`0N`).
+    pub zero: bool,
+    /// Where the text sits in its width: `<` left, `>` right, `^` centred.
+    /// Numbers are right and everything else left, when none is written.
+    pub align: Option<char>,
+    /// The number times a hundred, and a `%` after it (`%`).
+    pub percent: bool,
 }
 
 /// An expression. Every variant carries its own [`Span`].

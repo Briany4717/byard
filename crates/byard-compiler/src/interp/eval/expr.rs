@@ -552,15 +552,57 @@ fn format_fixed(v: &Value, decimals: u8) -> String {
 /// the decimals produced, so the two cannot disagree about rounding. Only a
 /// number is grouped; anything else is written as `{x}` would write it.
 fn format_spec(v: &Value, spec: NumFormat) -> String {
-    let text = match spec.decimals {
+    let number = matches!(v, Value::Int(_) | Value::Float(_));
+    // A percentage is the number times a hundred.
+    let scaled;
+    let v = if spec.percent && number {
+        scaled = match v {
+            Value::Int(n) => Value::Float(*n as f64 * 100.0),
+            Value::Float(f) => Value::Float(f * 100.0),
+            other => other.clone(),
+        };
+        &scaled
+    } else {
+        v
+    };
+    let mut text = match spec.decimals {
         Some(n) => format_fixed(v, n),
         None => format_scalar(v),
     };
-    if spec.group && matches!(v, Value::Int(_) | Value::Float(_)) {
-        group_thousands(&text)
-    } else {
-        text
+    if spec.group && number {
+        text = group_thousands(&text);
     }
+    if spec.percent && number {
+        text.push('%');
+    }
+    pad_to_width(text, spec, number)
+}
+
+/// `text` made as wide as the spec says, with spaces or, for a number written
+/// `0N`, zeros after its sign. Text already that wide is left as it is.
+fn pad_to_width(text: String, spec: NumFormat, number: bool) -> String {
+    let Some(width) = spec.width.map(usize::from) else {
+        return text;
+    };
+    let len = text.chars().count();
+    if len >= width {
+        return text;
+    }
+    let gap = width - len;
+    if spec.zero && number && spec.align.is_none() {
+        let (sign, digits) = match text.strip_prefix('-') {
+            Some(rest) => ("-", rest),
+            None => ("", text.as_str()),
+        };
+        return format!("{sign}{}{digits}", "0".repeat(gap));
+    }
+    let align = spec.align.unwrap_or(if number { '>' } else { '<' });
+    let (left, right) = match align {
+        '<' => (0, gap),
+        '^' => (gap / 2, gap - gap / 2),
+        _ => (gap, 0),
+    };
+    format!("{}{text}{}", " ".repeat(left), " ".repeat(right))
 }
 
 /// `text` (a number as `{x}` writes it) with a `,` between every three digits

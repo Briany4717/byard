@@ -40,6 +40,7 @@ mod layout_motion_example;
 mod library_check;
 mod list_animations_example;
 mod looping_animations_example;
+mod migration;
 mod motion_tokens_check;
 mod native_views_declared;
 mod navigation_example;

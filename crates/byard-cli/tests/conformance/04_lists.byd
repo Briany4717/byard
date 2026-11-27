@@ -1,5 +1,7 @@
 // List<T>: literals, indexing, every method, and empty and out-of-range edges.
 
+//# covers: lists, maps-and-sets
+
 //# case: literal-and-len
 //# fragment
 //# text: 3 0

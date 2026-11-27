@@ -1,5 +1,7 @@
 // Bindings, contexts and optional values.
 
+//# covers: bindings, contexts, optional-values, provide-and-inject
+
 //# case: bind-writes-the-callers-var
 //# text: true
 View Switch(bind on: Bool) {

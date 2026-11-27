@@ -1,5 +1,7 @@
 // Logic, comparison, `??`, `?:` and how the operators group.
 
+//# covers: operators, expressions, truth, a-value-or-a-default-, colours-durations-and-angles
+
 //# case: and-or-not
 //# fragment
 //# text: true false true false true

@@ -15,7 +15,7 @@ So every step below ends the same way: **its cases lose their `gap:` line, the r
 loses its note, and this file loses the step.** When this file is empty and the suite has no
 gap, the language is where this document wanted it.
 
-As written, the suite has 849 cases: 848 hold and 1 is a gap.
+As written, the suite has 849 cases, and every one holds: there are no gaps.
 
 ```sh
 cargo test -p byard-cli --test it conformance -- --nocapture
@@ -282,6 +282,16 @@ format has a width, a fill, an alignment and a percentage. What stays open:
 
 22. **The specification.** The reference becomes the normative text. Every rule in it has
     a case, and a case with no rule is deleted or given one.
+
+    *Prepared, and needing the author to finish it.* The reference says it is the
+    specification. Every file of cases says which sections it is the cases of
+    (`//# covers:`), and `every_section_of_the_reference_has_cases` fails for a section with
+    none that is not in `uncovered.txt`, a list that can only shrink: 49 of 51 sections have
+    cases, and `use` and `built-in-names` have none (`use` needs a package the harness does not
+    have). What the test cannot say is whether each *rule* in a section has a case, or which
+    rule a case is the case of: that is a reading of the whole reference, and the suite does
+    not tie a case to a sentence. The last gap, `only-a-comment`, closed here: a program with
+    no `View` is a `Project` error that says so.
 23. **Fuzzing past the parser.** Today's fuzzing is random text into the lexer and parser.
     Add: random *well-formed* programs into the checker and the interpreter, which must
     never panic; and `fmt(fmt(x)) == fmt(x)` with the same tree, for every case in the

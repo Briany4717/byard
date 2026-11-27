@@ -1,5 +1,7 @@
 // `fn`, lambdas, named actions, and what is and is not checked about calls.
 
+//# covers: shared-functions, functions-as-values, functions-in-a-view, actions
+
 //# case: view-function
 //# fragment
 //# text: 72 is a B

@@ -4,6 +4,11 @@ The chapters before this one teach byld. This one states it: every form the lang
 what it means, and what happens at its edges. Read it when the guide leaves a question open,
 such as what `-7 % 3` is, or which of two operators binds tighter.
 
+This page is the specification of byld. Where it and the language disagree, one of them has
+a bug, and the conformance suite says which: a rule here is the rule, and a program that does
+otherwise is told in a case. A rule not written here is not a rule, and a case with nothing on
+this page to be the case of is to be given a rule or deleted.
+
 Three things keep this page true.
 
 - Every `byld` sample here is checked by `cargo test`, as every sample in the guide is.

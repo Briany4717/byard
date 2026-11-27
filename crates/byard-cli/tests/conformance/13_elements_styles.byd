@@ -1,5 +1,7 @@
 // Elements, attributes, styles, state blocks, `with`, and their checks.
 
+//# covers: elements, styles, motion
+
 //# case: element-forms
 //# fragment
 //# text: a | b | c

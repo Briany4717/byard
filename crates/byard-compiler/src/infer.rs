@@ -3110,6 +3110,13 @@ impl Checker<'_> {
                 self.value(right);
                 Ty::Unknown
             }
+            // `value as Type`: what arrived is checked against the type where
+            // it arrives, so from there on it is of that type, and a field it
+            // does not have is told.
+            Expr::Cast { value, ty, .. } => {
+                self.value(value);
+                self.resolve_written(ty)
+            }
             Expr::DurationLit(..) => Ty::Duration,
             Expr::AngleLit(..) if typed_units() => Ty::Angle,
             Expr::AngleLit(..) | Expr::ClassRef(..) | Expr::Return(_) | Expr::Error(_) => {

@@ -1,3 +1,15 @@
+// What the forecast host sends back: the numbers now, the day and the hours.
+type ForecastNow = {
+    temperature_2m: Float,
+    apparent_temperature: Float,
+    relative_humidity_2m: Int,
+    wind_speed_10m: Float,
+    weather_code: Int
+}
+type ForecastDay = { temperature_2m_max: List<Float>, temperature_2m_min: List<Float> }
+type ForecastHours = { time: List<Str>, temperature_2m: List<Float> }
+type ForecastReply = { current: ForecastNow, daily: ForecastDay, hourly: ForecastHours }
+
 // The forecast: the temperature now, how it feels, and the next twelve hours,
 // over live data from open-meteo (no API key). The request names a path, and
 // byard.toml names the host under `[http] base_url`, which is how the tests
@@ -29,15 +41,16 @@ View ForecastScreen(place: Str, lat: Float, lon: Float) {
         state = "loading"
         http.get("/v1/forecast?latitude={lat}&longitude={lon}&current=temperature_2m,apparent_temperature,relative_humidity_2m,wind_speed_10m,weather_code&hourly=temperature_2m&daily=temperature_2m_max,temperature_2m_min&forecast_days=1&forecast_hours=12&timezone=auto")
             ok res => {
-                temp = res.json.current.temperature_2m
-                feels = res.json.current.apparent_temperature
-                humidity = res.json.current.relative_humidity_2m
-                wind = res.json.current.wind_speed_10m
-                code = res.json.current.weather_code
-                high = res.json.daily.temperature_2m_max[0]
-                low = res.json.daily.temperature_2m_min[0]
-                hours = res.json.hourly.time
-                temps = res.json.hourly.temperature_2m
+                let forecast = res.json as ForecastReply
+                temp = forecast.current.temperature_2m
+                feels = forecast.current.apparent_temperature
+                humidity = forecast.current.relative_humidity_2m
+                wind = forecast.current.wind_speed_10m
+                code = forecast.current.weather_code
+                high = forecast.daily.temperature_2m_max[0]
+                low = forecast.daily.temperature_2m_min[0]
+                hours = forecast.hourly.time
+                temps = forecast.hourly.temperature_2m
                 state = "ok"
             }
             err e => {

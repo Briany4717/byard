@@ -1108,6 +1108,17 @@ pub enum CompileError {
         /// The view it belongs to.
         view: String,
     },
+    /// A field read of what a controller replied, whose shape nothing has
+    /// checked: `res.json.nmae`. A warning, `untyped-reply` in `[lints]`; the
+    /// fix is `res.json as Forecast`, after which a misspelt field is an error.
+    UntypedReply {
+        /// Source range of the read.
+        span: Span,
+        /// The name the reply is bound to.
+        reply: String,
+        /// The field read.
+        field: String,
+    },
     /// A `private View` that nothing in its package draws. A warning,
     /// `unused-view` in `[lints]`.
     UnusedView {
@@ -1816,6 +1827,7 @@ impl CompileError {
             | Self::UnusedVariable { span, .. }
             | Self::UnusedParam { span, .. }
             | Self::UnusedView { span, .. }
+            | Self::UntypedReply { span, .. }
             | Self::ShapeMismatch { span, .. } => *span,
         }
     }
@@ -1979,6 +1991,7 @@ impl CompileError {
             | Self::UnusedVariable { span, .. }
             | Self::UnusedParam { span, .. }
             | Self::UnusedView { span, .. }
+            | Self::UntypedReply { span, .. }
             | Self::ShapeMismatch { span, .. } => {
                 span.start = (i64::from(span.start) + delta).max(0) as u32;
                 span.end = (i64::from(span.end) + delta).max(0) as u32;
@@ -2145,6 +2158,7 @@ impl CompileError {
             Self::UnusedVariable { .. } => "UnusedVariable",
             Self::UnusedParam { .. } => "UnusedParam",
             Self::UnusedView { .. } => "UnusedView",
+            Self::UntypedReply { .. } => "UntypedReply",
         }
     }
 
@@ -2179,6 +2193,7 @@ impl CompileError {
                 | Self::UnusedVariable { .. }
                 | Self::UnusedParam { .. }
                 | Self::UnusedView { .. }
+                | Self::UntypedReply { .. }
         )
     }
 
@@ -3206,6 +3221,11 @@ impl CompileError {
             Self::UnusedView { name, .. } => {
                 format!("`private View {name}` is never drawn: use it, or delete it")
             }
+            Self::UntypedReply { reply, field, .. } => format!(
+                "`{field}` is read from `{reply}`, whose shape nothing checks: write \
+                 `{reply} as Type` with the `type` the reply should have, and a field it lacks \
+                 is an error here and not a nothing later"
+            ),
             Self::UnknownName { name, hint, .. } => {
                 with_hint(format!("nothing here is named `{name}`"), hint.as_deref())
             }

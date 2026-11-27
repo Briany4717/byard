@@ -244,7 +244,9 @@ pub(crate) fn expr(e: &mut Expr, f: &mut dyn FnMut(&mut Expr)) {
             expr(left, f);
             expr(right, f);
         }
-        Expr::KeyframeStep { value, .. } | Expr::Let { value, .. } => expr(value, f),
+        Expr::KeyframeStep { value, .. } | Expr::Let { value, .. } | Expr::Cast { value, .. } => {
+            expr(value, f);
+        }
         Expr::ControllerCall { call, ok, err, .. } => {
             expr(call, f);
             for a in [ok, err].into_iter().flatten() {
@@ -286,7 +288,7 @@ pub(crate) fn expr_types(e: &mut Expr, f: &mut dyn FnMut(&mut Type)) {
                 ty(t, f);
             }
         }
-        Expr::Let { ty: Some(t), .. } => ty(t, f),
+        Expr::Let { ty: Some(t), .. } | Expr::Cast { ty: t, .. } => ty(t, f),
         _ => {}
     }
 }

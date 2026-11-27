@@ -47,7 +47,7 @@ use std::path::{Path, PathBuf};
 use byard_compiler::CompileError;
 use byard_compiler::interp::eval::Interpreter;
 use byard_compiler::interp::theme::Theme;
-use byard_compiler::resolve::{PackageProvider, SourceFile, resolve_program};
+use byard_compiler::resolve::{PackageProvider, SourceFile};
 
 /// The repository, as the book links to it.
 const REPO_URL: &str = "https://github.com/Briany4717/byard/";

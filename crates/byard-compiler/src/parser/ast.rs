@@ -1220,6 +1220,18 @@ pub enum Expr {
         /// Source span.
         span: Span,
     },
+    /// `value as Type`: what arrived, compared with a type at the place it
+    /// arrives, and from there a value of that type. A reply of another shape
+    /// goes to the `err` arm of the call that brought it, with the path of the
+    /// first field that does not fit.
+    Cast {
+        /// What is compared.
+        value: Box<Expr>,
+        /// The type it is compared with.
+        ty: Type,
+        /// Source span.
+        span: Span,
+    },
     /// `200ms`, from edition 2027: a length of time, in milliseconds, which is
     /// not a whole number. Before it, and once the checks are done, it is the
     /// [`Expr::IntLit`] of its milliseconds.
@@ -1477,6 +1489,7 @@ impl Expr {
             | Self::ForEach { span, .. }
             | Self::MapLit(_, span)
             | Self::DurationLit(_, span)
+            | Self::Cast { span, .. }
             | Self::Return(span)
             | Self::Error(span) => *span,
         }

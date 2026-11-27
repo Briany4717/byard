@@ -563,6 +563,14 @@ thread_local! {
     /// the rest of the action does not run. The action that was started clears
     /// it when it ends, so it never reaches the next one.
     static RETURNING: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+
+    /// How many `ok` arms are running. A `value as Type` inside one that finds
+    /// the value of another shape does not carry on: the arm's call is told.
+    static IN_ARM: std::cell::Cell<u32> = const { std::cell::Cell::new(0) };
+
+    /// Where, and how, the `value as Type` of the arm that just ran did not
+    /// fit: the path of the first field, and what is wrong with it.
+    static SHAPE_FAILURE: std::cell::RefCell<Option<(String, String)>> = const { std::cell::RefCell::new(None) };
 }
 
 /// The Dev-mode interpreter for one `View` instance: a reactive context plus
@@ -1943,6 +1951,9 @@ impl Interpreter {
         self.ctx.push_scope_tracker();
         self.render_frame(tree, frame, width, height, None);
         self.frame_scopes = self.ctx.pop_scope_tracker();
+        // What a value raised while it was being read (a `value as Type` that
+        // did not fit) is told with this frame, not the next tick's.
+        self.drain_closure_diagnostics();
     }
 
     /// Hands back the scopes the previous frame's painting opened. Called once

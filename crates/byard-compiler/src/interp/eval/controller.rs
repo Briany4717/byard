@@ -716,7 +716,32 @@ impl Interpreter {
             args.extend(continuation.captured.iter().cloned());
             base
         });
+        super::IN_ARM.with(|n| n.set(n.get() + 1));
+        super::SHAPE_FAILURE.with(|f| *f.borrow_mut() = None);
         arm(&mut self.ctx, Some(&value));
+        super::IN_ARM.with(|n| n.set(n.get().saturating_sub(1)));
+        // A `value as Type` in the arm met a reply of another shape: that is
+        // an error of the call, told to its `err` arm as one of kind `shape`.
+        let failure = super::SHAPE_FAILURE.with(|f| f.borrow_mut().take());
+        if let (true, Some((path, why))) = (is_ok, failure) {
+            let message = if path.is_empty() {
+                why
+            } else {
+                format!("`{path}` {why}")
+            };
+            if let Some(err) = arms.err.as_mut() {
+                let record = Value::Record(vec![
+                    (Symbol::intern("kind"), Value::Str("shape".to_string())),
+                    (Symbol::intern("message"), Value::Str(message)),
+                    (Symbol::intern("path"), Value::Str(path)),
+                ]);
+                err(&mut self.ctx, Some(&record));
+            } else {
+                drop(arms);
+                self.errors
+                    .push(CompileError::ControllerCallFailed { span, message });
+            }
+        }
         super::LAMBDA_ARGS.with(|args| args.borrow_mut().truncate(base));
         true
     }

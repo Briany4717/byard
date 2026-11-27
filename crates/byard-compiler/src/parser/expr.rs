@@ -974,7 +974,9 @@ impl Parser<'_> {
             //
             // `a..b` is there too: `0..n + 1` is `0..(n + 1)`, and `0..n == xs`
             // compares the list.
-            Token::Merge | Token::QuestionQuestion | Token::DotDot => Some(Bp {
+            // `value as Type` is there too, as loose as a range:
+            // `res.json as Forecast` and `(v as Reply).field`.
+            Token::Merge | Token::QuestionQuestion | Token::DotDot | Token::As => Some(Bp {
                 left: 11,
                 right: 12,
             }),
@@ -1125,6 +1127,15 @@ impl Parser<'_> {
                     op,
                     lhs: Box::new(lhs),
                     rhs,
+                    span: self.span_from(start),
+                }
+            }
+            Some(Token::As) => {
+                self.advance();
+                let ty = self.parse_type();
+                Expr::Cast {
+                    value: Box::new(lhs),
+                    ty,
                     span: self.span_from(start),
                 }
             }

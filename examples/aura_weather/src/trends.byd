@@ -2,6 +2,14 @@
 // area under it faded to the baseline, the lows as a thinner line beneath.
 // Both are drawn from the lists the API sends, by a `for` inside the path,
 // on a canvas as wide as the card it sits in.
+// What the forecast host sends back for a week: the day and its two extremes.
+type TrendsDays = {
+    time: List<Str>,
+    temperature_2m_max: List<Float>,
+    temperature_2m_min: List<Float>
+}
+type TrendsReply = { daily: TrendsDays }
+
 View TrendsScreen(place: Str, lat: Float, lon: Float) {
     inject Theme as t
     inject Http as http
@@ -35,9 +43,10 @@ View TrendsScreen(place: Str, lat: Float, lon: Float) {
         state = "loading"
         http.get("/v1/forecast?latitude={lat}&longitude={lon}&daily=temperature_2m_max,temperature_2m_min&forecast_days=7&timezone=auto")
             ok res => {
-                days = res.json.daily.time
-                highs = res.json.daily.temperature_2m_max
-                lows = res.json.daily.temperature_2m_min
+                let trends = res.json as TrendsReply
+                days = trends.daily.time
+                highs = trends.daily.temperature_2m_max
+                lows = trends.daily.temperature_2m_min
                 state = "ok"
             }
             err e => {

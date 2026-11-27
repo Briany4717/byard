@@ -296,6 +296,7 @@ pub(super) fn children(expr: &Expr) -> Vec<&Expr> {
             .collect(),
         Expr::ForEach { iter, body, .. } => vec![iter.as_ref(), body.as_ref()],
         Expr::MapLit(pairs, _) => pairs.iter().flat_map(|(k, v)| [k, v]).collect(),
+        Expr::Cast { value, .. } => vec![value.as_ref()],
         Expr::If {
             cond, then, els, ..
         } => [cond.as_ref(), then.as_ref()]

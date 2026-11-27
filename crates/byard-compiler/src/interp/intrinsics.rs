@@ -2035,7 +2035,9 @@ fn animated_anywhere(value: &Expr) -> bool {
                 || animated_anywhere(then)
                 || els.as_deref().is_some_and(animated_anywhere)
         }
-        Expr::KeyframeStep { value, .. } | Expr::Let { value, .. } => animated_anywhere(value),
+        Expr::KeyframeStep { value, .. }
+        | Expr::Let { value, .. }
+        | Expr::Cast { value, .. } => animated_anywhere(value),
 
     }
 }

@@ -3,6 +3,8 @@
 type Place = { name: Str, country: Str?, latitude: Float, longitude: Float }
 // The geocoder's reply. It leaves `results` out when it finds nothing.
 type GeoReply = { results: List<Place>? }
+// What the app kept of the last place chosen. Nothing, the first time.
+type SavedPlace = { name: Str?, latitude: Float?, longitude: Float? }
 
 // Aura Weather: the app shell. A search field, five screens in a tab host, a
 // tab bar, and the theme's two typefaces. Each screen lives in its own file
@@ -20,11 +22,12 @@ View Main() {
 
     on mount => {
         store.get("place", {})
-            ok saved => {
+            ok kept => {
+                let saved = kept as SavedPlace
                 if (saved.name ?? "") != "" {
-                    place = saved.name
-                    lat = saved.latitude
-                    lon = saved.longitude
+                    place = saved.name ?? place
+                    lat = saved.latitude ?? lat
+                    lon = saved.longitude ?? lon
                 }
             }
             err e => {}
@@ -49,7 +52,7 @@ View Main() {
             http.get("geo:/v1/search?name={asked.urlEncoded()}&count=5&language=en&format=json")
                 ok res => {
                     if asked == query {
-                        let reply: GeoReply = res.json
+                        let reply = res.json as GeoReply
                         found = reply.results ?? []
                         searching = false
                     }

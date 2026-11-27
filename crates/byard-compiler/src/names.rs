@@ -63,6 +63,7 @@ pub const LINTS: &[(&str, &str)] = &[
     ("unused-variable", "UnusedVariable"),
     ("unused-parameter", "UnusedParam"),
     ("unused-view", "UnusedView"),
+    ("untyped-reply", "UntypedReply"),
 ];
 
 fn check_view(view: &ViewDecl, out: &mut Vec<CompileError>) {
@@ -426,7 +427,45 @@ fn views_drawn_in(list: &[Member], drawn: &mut HashSet<Symbol>) {
     }
 }
 
+/// A field read of what an `ok` arm was handed, with nothing between that
+/// says what shape it has (`res.json.x`, and not `(res.json as Forecast).x`).
+fn untyped_reads(binding: &Symbol, action: &Expr, out: &mut Vec<CompileError>) {
+    let mut copy = action.clone();
+    // The reads that are the operand of a cast are the reads the cast is for.
+    let mut typed: HashSet<(u32, u32)> = HashSet::new();
+    walk::expr(&mut copy, &mut |e| {
+        if let Expr::Cast { value, .. } = e {
+            let mut at: &Expr = value;
+            while let Expr::Member { base, span, .. } = at {
+                typed.insert((span.start, span.end));
+                at = base;
+            }
+        }
+    });
+    walk::expr(&mut copy, &mut |e| {
+        let Expr::Member { base, field, span } = e else {
+            return;
+        };
+        let is_the_reply = matches!(&**base, Expr::Ident(name, _) if name == binding);
+        if is_the_reply && field.as_str() != "len" && !typed.contains(&(span.start, span.end)) {
+            out.push(CompileError::UntypedReply {
+                span: *span,
+                reply: binding.as_str().to_string(),
+                field: field.as_str().to_string(),
+            });
+        }
+    });
+}
+
 fn lint_view(view: &ViewDecl, drawn: &HashSet<Symbol>, out: &mut Vec<CompileError>) {
+    for member in &view.body {
+        let mut copy = member.clone();
+        walk::member_exprs(&mut copy, &mut |e| {
+            if let Expr::ControllerCall { ok: Some(arm), .. } = e {
+                untyped_reads(&arm.binding, &arm.action, out);
+            }
+        });
+    }
     if view.private && !drawn.contains(&view.name) {
         out.push(CompileError::UnusedView {
             span: view.span,

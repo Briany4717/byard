@@ -79,7 +79,7 @@ In a library package, it checks the package's own files.
 
 Each diagnostic starts with `file:line:column: error[Kind]: message`, in plain text. A warning is
 printed in full and counted apart, and does not fail the command. Exit status 0 is no errors.
-The warnings about names (`unused-variable`, `unused-parameter`, `unused-view`) can be switched off
+The warnings about names and replies (`unused-variable`, `unused-parameter`, `unused-view`, `untyped-reply`) can be switched off
 in `byard.toml` under `[lints]`, as `unused-variable = "allow"`; `"warn"`, the default, keeps one on.
 
 ## `byard shot`
@@ -315,7 +315,7 @@ Removes `.byard/cache` and `.byard/generated` from the project. Package checkout
 | `[native_views.Name]` | Elements the Rust half draws | [Native views](rust-native-views.md) |
 | `[bundle]` | `name`, `id`, `version`, and for Linux `categories`, `summary`, `license` | [Shipping](shipping.md) |
 | `[dev]` | `frame_budget`, `hud`, `statusline` | [The dev loop](dev-loop.md) |
-| `[lints]` | `unused-variable`, `unused-parameter`, `unused-view`, each `"warn"` or `"allow"` | `byard check` above |
+| `[lints]` | `unused-variable`, `unused-parameter`, `unused-view`, `untyped-reply`, each `"warn"` or `"allow"` | `byard check` above |
 
 An unknown key is an error that names it and suggests the closest known one, at the top level and inside
 `[project]`, `[package]`, `[assets]`, `[theme]` (and `[theme.color]`), `[dependencies]`, `[dev]`, `[http]`,

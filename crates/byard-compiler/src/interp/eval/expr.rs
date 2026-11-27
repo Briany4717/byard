@@ -9,7 +9,7 @@
 //! lowering of an action: a mutation, a bare expression, or a callback body.
 
 use super::animation::mix_hex_oklab;
-use super::{CURRENT_PAYLOAD, Interpreter, LAMBDA_ARGS, Lowered, RETURNING};
+use super::{CURRENT_PAYLOAD, IN_ARM, Interpreter, LAMBDA_ARGS, Lowered, RETURNING, SHAPE_FAILURE};
 use crate::diagnostics::{CompileError, Span};
 use crate::interp::env::{Env, SignalId, Value};
 use crate::interp::events::Action;
@@ -660,6 +660,40 @@ impl Interpreter {
             }
             // Already canonicalized to radians by the lexer (RFC-0011 T1),
             // from here on an angle is just a plain `Float`.
+            // `value as Type`: the value, when it has the shape; when it has
+            // not, the `ok` arm it is in stops and the call's `err` arm is run
+            // with the path of the first field that does not fit. Outside an
+            // arm there is none to run, and the difference is reported.
+            Expr::Cast { value, ty, span } => {
+                let mut compute = self.lower_expr(value, payload_name);
+                let records = std::rc::Rc::clone(&self.records);
+                let diagnostics = std::rc::Rc::clone(&self.bridge.diagnostics);
+                let (ty, span) = (ty.clone(), *span);
+                Box::new(move |ctx| {
+                    let found = compute(ctx);
+                    let Some((path, why)) =
+                        super::super::shape::difference_at(&found, &ty, &records)
+                    else {
+                        return found;
+                    };
+                    if IN_ARM.with(std::cell::Cell::get) > 0 {
+                        SHAPE_FAILURE.with(|f| *f.borrow_mut() = Some((path, why)));
+                        RETURNING.with(|r| r.set(true));
+                    } else {
+                        diagnostics.borrow_mut().push(CompileError::ShapeMismatch {
+                            span,
+                            var: "this value".to_string(),
+                            expected: super::super::shape::written(&ty),
+                            problem: if path.is_empty() {
+                                why
+                            } else {
+                                format!("at `{path}` {why}")
+                            },
+                        });
+                    }
+                    Value::Unit
+                })
+            }
             Expr::DurationLit(ms, _) => {
                 let ms = *ms;
                 Box::new(move |_| Value::Int(ms))
@@ -977,6 +1011,11 @@ impl Interpreter {
                     });
                     Box::new(move |ctx| {
                         let val = rhs(ctx);
+                        // What was being written stopped the action (a
+                        // `value as Type` that did not fit): nothing is.
+                        if RETURNING.with(std::cell::Cell::get) {
+                            return Value::Unit;
+                        }
                         let new = assigned(op, &ctx.peek_signal(sig), val, saturate);
                         if let Some((ty, records, diagnostics, told, var, span)) = &shape {
                             let at = (span.start, span.end);

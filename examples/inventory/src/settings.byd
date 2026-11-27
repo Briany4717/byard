@@ -1,6 +1,9 @@
 // Settings: export the catalogue, put the sample data back, and the minimum a
 // new product starts with.
 
+// What `exportCsv` answers: how many rows it wrote, and where.
+type Exported = { rows: Int, path: Str }
+
 View Settings(products: List<Product>, min_default: Int, on_min: Fn(Int) = {|_| }, on_reset: Fn() = {}) {
     inject Theme as t
     inject Stockroom as room
@@ -18,7 +21,10 @@ View Settings(products: List<Product>, min_default: Int, on_min: Fn(Int) = {|_| 
         exported = ""
         exportError = ""
         room.exportCsv(products)
-            ok done => { exported = "Wrote {done.rows} products to {done.path}" }
+            ok reply => {
+                let done = reply as Exported
+                exported = "Wrote {done.rows} products to {done.path}"
+            }
             err e => { exportError = e.message }
     }
 

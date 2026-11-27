@@ -15,7 +15,7 @@ So every step below ends the same way: **its cases lose their `gap:` line, the r
 loses its note, and this file loses the step.** When this file is empty and the suite has no
 gap, the language is where this document wanted it.
 
-As written, the suite has 814 cases: 809 hold and 5 are gaps.
+As written, the suite has 822 cases: 818 hold and 4 are gaps.
 
 ```sh
 cargo test -p byard-cli --test it conformance -- --nocapture
@@ -244,12 +244,16 @@ is as it was (`colour-is-still-a-number-before-2027`). What stays open:
 
 ### 19. Data from outside, with a type
 
-*Case:* `typed-json`.
+*Done.* `typed-json` holds, with the eight cases added with it and a Rust test file for the half the
+suite cannot run (`typed_reply.rs`: a call that waits for its reply). What stays open:
 
-`value as Type` checks a reply's shape where it arrives and fails into the `err` arm with
-the path of the first field that does not fit. Reading a field of an untyped reply becomes
-a warning. With step 6, this ends the misspelt-JSON-field problem both reference apps
-recorded.
+- `as` checks a record, a list or a scalar, and a record's optional fields; it does not check an
+  enum case or a `Map` against what arrives, and a number written as text is not told apart
+  from a number.
+- `untyped-reply` is a lint of the field read: `res.json` and `res.status` are both reads of the
+  reply and both told. A reply passed whole to a function is not a read.
+- The three examples that read replies, `aura_weather`, `weather` and `inventory`, now give
+  theirs a type.
 
 ### 20. State above the views
 

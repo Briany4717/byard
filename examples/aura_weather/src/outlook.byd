@@ -1,3 +1,13 @@
+// What the forecast host sends back for ten days: one list for each column.
+type OutlookDays = {
+    time: List<Str>,
+    weather_code: List<Int>,
+    temperature_2m_max: List<Float>,
+    temperature_2m_min: List<Float>,
+    precipitation_probability_max: List<Int>
+}
+type OutlookReply = { daily: OutlookDays }
+
 // The next ten days, one row each: the date, what it will be like, the
 // chance of rain, and the low and the high.
 View OutlookScreen(place: Str, lat: Float, lon: Float) {
@@ -18,11 +28,12 @@ View OutlookScreen(place: Str, lat: Float, lon: Float) {
         state = "loading"
         http.get("/v1/forecast?latitude={lat}&longitude={lon}&daily=weather_code,temperature_2m_max,temperature_2m_min,precipitation_probability_max&forecast_days=10&timezone=auto")
             ok res => {
-                days = res.json.daily.time
-                codes = res.json.daily.weather_code
-                highs = res.json.daily.temperature_2m_max
-                lows = res.json.daily.temperature_2m_min
-                rain = res.json.daily.precipitation_probability_max
+                let outlook = res.json as OutlookReply
+                days = outlook.daily.time
+                codes = outlook.daily.weather_code
+                highs = outlook.daily.temperature_2m_max
+                lows = outlook.daily.temperature_2m_min
+                rain = outlook.daily.precipitation_probability_max
                 state = "ok"
             }
             err e => {

@@ -292,6 +292,7 @@ fn collect_name_spans_in_expr(expr: &Expr, target_name: &str, out: &mut Vec<Span
                 collect_name_spans_in_expr(&arm.body, target_name, out);
             }
         }
+        Expr::Cast { value, .. } => collect_name_spans_in_expr(value, target_name, out),
         Expr::MapLit(pairs, _) => {
             for (k, v) in pairs {
                 collect_name_spans_in_expr(k, target_name, out);

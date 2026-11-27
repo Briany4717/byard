@@ -72,14 +72,13 @@ Text("{xs.first() ?? 0} {xs.last() ?? 0} {xs.any(x => x > 2)} {xs.all(x => x > 2
 Text("{[1, 2].insertAt(0, 0).join(",")} {[1, 2].updateAt(1, 9).join(",")}")
 
 //# case: typed-json
-//# gap: a reply has no checked type until it is written to a typed `let`
 //# error: UnknownField
 type Reply = { results: List<Str> }
 View Main() {
     inject Json as json
     var n = 0
     on mount => {
-        json.parse("{}")
+        json.parse("\{\}")
             ok v => { n = (v as Reply).resluts.len }
     }
     Text("{n}")
@@ -143,4 +142,93 @@ View Main() {
     inject Session as s
     Bump()
     Text("{s.count}")
+}
+
+//# case: cast-gives-the-value-the-type-it-was-cast-to
+//# error: UnknownField
+//# diagnostics: 1
+type Place = { name: Str, latitude: Float }
+type Reply = { results: List<Place> }
+View Main() {
+    inject Json as json
+    var n = ""
+    on mount => {
+        json.parse("\{\}")
+            ok v => { n = (v as Reply).results[0].lat }
+    }
+    Text("{n}")
+}
+
+//# case: cast-to-a-type-that-is-not-one
+//# error: UnknownType
+//# diagnostics: 1
+View Main() {
+    inject Json as json
+    var n = 0
+    on mount => {
+        json.parse("\{\}")
+            ok v => { n = (v as Nope).count }
+    }
+    Text("{n}")
+}
+
+//# case: cast-of-a-value-that-fits
+//# text: 3
+type Point = { x: Int, y: Int }
+View Main() {
+    let p = { x: 1, y: 2 } as Point
+    Text("{p.x + p.y}")
+}
+
+//# case: cast-of-a-value-that-does-not-fit-is-told-where
+//# error: ShapeMismatch
+//# diagnostics: 1
+type Point = { x: Int, y: Int }
+View Main() {
+    let p = { x: 1, y: "two" } as Point
+    Text("{p.x}")
+}
+
+//# case: cast-to-a-scalar
+//# text: 5
+View Main() {
+    let n = 5 as Int
+    Text("{n}")
+}
+
+//# case: reading-a-field-of-a-reply-nothing-checks-is-a-warning
+//# warning: UntypedReply
+//# diagnostics: 1
+View Main() {
+    inject Json as json
+    var n = 0
+    on mount => {
+        json.parse("\{\}")
+            ok v => { n = v.count }
+    }
+    Text("{n}")
+}
+
+//# case: reading-a-field-of-a-reply-that-was-cast-is-not
+type Reply = { count: Int }
+View Main() {
+    inject Json as json
+    var n = 0
+    on mount => {
+        json.parse("\{\}")
+            ok v => { n = (v as Reply).count }
+    }
+    Text("{n}")
+}
+
+//# case: a-reply-passed-on-whole-is-not-a-read
+View Main() {
+    inject Json as json
+    var n = 0
+    fn size(x: Int) -> Int => x
+    on mount => {
+        json.parse("\{\}")
+            ok v => { n = size(v) }
+    }
+    Text("{n}")
 }

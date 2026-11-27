@@ -296,6 +296,14 @@ format has a width, a fill, an alignment and a percentage. What stays open:
     Add: random *well-formed* programs into the checker and the interpreter, which must
     never panic; and `fmt(fmt(x)) == fmt(x)` with the same tree, for every case in the
     suite.
+
+    *Done.* `crates/byard-cli/tests/it/conformance.rs` formats every case's program to a fixed
+    point (774 of them parse), damages each of them six ways and runs the result through
+    `byard check` and a frame (5,094 programs), and writes 2,400 programs from the grammar in
+    both editions, a fifth of which reach a frame. None panics. It found `byard fmt` refusing
+    files that use the syntax of steps 8 to 21; that was fixed in step 19. What it is not: the
+    generator is typed by hand and a seeded one, so it does not shrink a failure or explore
+    what it did not write, and a coverage-guided fuzzer (`cargo fuzz`) over the checker would.
 24. **Three applications nobody on the project wrote**, each run through the edition
     migration, before the edition is named 1.0.
 25. **The promise.** A program that checks under an edition keeps its meaning for as long

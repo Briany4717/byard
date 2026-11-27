@@ -306,6 +306,11 @@ format has a width, a fill, an alignment and a percentage. What stays open:
     what it did not write, and a coverage-guided fuzzer (`cargo fuzz`) over the checker would.
 24. **Three applications nobody on the project wrote**, each run through the edition
     migration, before the edition is named 1.0.
+
+    *Prepared, and needing people.* `migration.rs` runs the migration over the seventy-six
+    projects of the repository, which is the half that needs no one, and
+    [third-party-trial.md](third-party-trial.md) says how the other half goes and what ends
+    it. Choosing the three people is not something this repository can do.
 25. **The promise.** A program that checks under an edition keeps its meaning for as long
     as that edition exists. The suite, frozen per edition, is the test of that promise.
 

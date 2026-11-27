@@ -29,8 +29,10 @@ first_frame_ms = 3000
 aura_weather_stripped_bytes = 24_400_000
 
 [bench]
-# How much slower, in percent, a `byard-core` benchmark may get against the
-# baseline before CI warns. Read by the `budgets` job in ci.yml.
+# How much slower, in percent, a benchmark of `byard-core` (the engine) or of
+# `byard-compiler --bench language` (lexing, parsing, checking, formatting and
+# running a program) may get against the baseline before CI warns. Read by the
+# `budgets` job in ci.yml.
 regression_percent = 10
 
 [inventory]

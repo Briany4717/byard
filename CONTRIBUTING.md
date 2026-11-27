@@ -103,6 +103,16 @@ cargo bench
 Run them before merging changes to performance-sensitive code (signal
 read/write paths, arena allocation, drop registry).
 
+The language has its own, `crates/byard-compiler/benches/language.rs`: lexing,
+parsing, checking and formatting a program of 20 and of 200 views, its first
+frame, a frame with nothing changed, and a frame after a write that recomputes
+a list pipeline. Two sizes of one program say whether a phase grows with the
+program as it should. CI runs it beside the engine's, the same way.
+
+```sh
+cargo bench -p byard-compiler --bench language
+```
+
 ### Resource budgets
 
 Byard's promise is to spend least, so CI holds four numbers to a ceiling, the

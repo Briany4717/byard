@@ -27,7 +27,7 @@ use std::collections::{HashMap, HashSet};
 
 use crate::consts::names_read;
 use crate::diagnostics::{CompileError, Span};
-use crate::parser::ast::{AttrKind, ElementNode, Expr, Member, StateBlock, ViewDecl};
+use crate::parser::ast::{AttrKind, ElementNode, Expr, Member, StateBlock, Type, ViewDecl};
 use crate::resolve::walk;
 use crate::symbol::Symbol;
 
@@ -428,8 +428,12 @@ fn views_drawn_in(list: &[Member], drawn: &mut HashSet<Symbol>) {
 }
 
 /// A field read of what an `ok` arm was handed, with nothing between that
-/// says what shape it has (`res.json.x`, and not `(res.json as Forecast).x`).
-fn untyped_reads(binding: &Symbol, action: &Expr, out: &mut Vec<CompileError>) {
+/// says what shape it has (`res.x`, and not `(res as Forecast).x`).
+///
+/// An `Http` answer is a record the framework builds, `status`, `ok`, `body`
+/// and `json`, so those four are known and only what is read out of `json`
+/// is unchecked (`res.json.x`, and not `(res.json as Forecast).x`).
+fn untyped_reads(binding: &Symbol, http: bool, action: &Expr, out: &mut Vec<CompileError>) {
     let mut copy = action.clone();
     // The reads that are the operand of a cast are the reads the cast is for.
     let mut typed: HashSet<(u32, u32)> = HashSet::new();
@@ -442,27 +446,79 @@ fn untyped_reads(binding: &Symbol, action: &Expr, out: &mut Vec<CompileError>) {
             }
         }
     });
+    let is_the_reply = |e: &Expr| matches!(e, Expr::Ident(name, _) if name == binding);
     walk::expr(&mut copy, &mut |e| {
         let Expr::Member { base, field, span } = e else {
             return;
         };
-        let is_the_reply = matches!(&**base, Expr::Ident(name, _) if name == binding);
-        if is_the_reply && field.as_str() != "len" && !typed.contains(&(span.start, span.end)) {
-            out.push(CompileError::UntypedReply {
-                span: *span,
-                reply: binding.as_str().to_string(),
-                field: field.as_str().to_string(),
-            });
+        if field.as_str() == "len" || typed.contains(&(span.start, span.end)) {
+            return;
         }
+        let reply = if http {
+            match &**base {
+                Expr::Member {
+                    base: inner,
+                    field: json,
+                    ..
+                } if json.as_str() == "json" && is_the_reply(inner) => {
+                    format!("{}.json", binding.as_str())
+                }
+                _ => return,
+            }
+        } else if is_the_reply(base) {
+            binding.as_str().to_string()
+        } else {
+            return;
+        };
+        out.push(CompileError::UntypedReply {
+            span: *span,
+            reply,
+            field: field.as_str().to_string(),
+        });
     });
 }
 
+/// The names a view binds an `Http` to (`inject Http as http`).
+fn http_handles(body: &[Member]) -> HashSet<Symbol> {
+    body.iter()
+        .filter_map(|m| match m {
+            Member::Inject {
+                ty: Type::Named { name: ty, .. },
+                name,
+                ..
+            } if ty.as_str() == "Http" => Some(name.clone()),
+            _ => None,
+        })
+        .collect()
+}
+
+/// The handle a controller call is made on: `http` in `http.get(url)`.
+fn handle_of(call: &Expr) -> Option<&Symbol> {
+    let Expr::Call { callee, .. } = call else {
+        return None;
+    };
+    let Expr::Member { base, .. } = &**callee else {
+        return None;
+    };
+    match &**base {
+        Expr::Ident(name, _) => Some(name),
+        _ => None,
+    }
+}
+
 fn lint_view(view: &ViewDecl, drawn: &HashSet<Symbol>, out: &mut Vec<CompileError>) {
+    let http = http_handles(&view.body);
     for member in &view.body {
         let mut copy = member.clone();
         walk::member_exprs(&mut copy, &mut |e| {
-            if let Expr::ControllerCall { ok: Some(arm), .. } = e {
-                untyped_reads(&arm.binding, &arm.action, out);
+            if let Expr::ControllerCall {
+                call,
+                ok: Some(arm),
+                ..
+            } = e
+            {
+                let on_http = handle_of(call).is_some_and(|h| http.contains(h));
+                untyped_reads(&arm.binding, on_http, &arm.action, out);
             }
         });
     }

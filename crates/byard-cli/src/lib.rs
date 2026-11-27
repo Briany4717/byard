@@ -262,6 +262,12 @@ enum Command {
         /// Path to a `.byd` file or project dir. Defaults to `byard.toml`.
         file: Option<PathBuf>,
     },
+    /// Say what an error means: the name in its brackets, as in
+    /// `error[UnknownAttribute]`, gives its section of the error index.
+    Explain {
+        /// The error's name (`UnknownAttribute`).
+        name: String,
+    },
 }
 
 /// The list `--screens` takes, as one value (clap would read a `Vec` as
@@ -431,6 +437,7 @@ pub fn main() {
             archive,
         ),
         Command::Clean { file } => commands::clean::run(file.as_deref()),
+        Command::Explain { name } => commands::explain::run(&name),
         Command::Add {
             name,
             path,

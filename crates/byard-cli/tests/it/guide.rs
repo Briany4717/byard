@@ -44,8 +44,6 @@
 use std::fmt::Write as _;
 use std::path::{Path, PathBuf};
 
-use byard_compiler::CompileError;
-use byard_compiler::interp::eval::Interpreter;
 use byard_compiler::interp::theme::Theme;
 use byard_compiler::resolve::{PackageProvider, SourceFile};
 
@@ -102,7 +100,7 @@ impl Block {
 
     /// Where the block is, as an editor would jump to it.
     fn place(&self) -> String {
-        format!("docs/guide/src/{}:{}", self.file, self.line)
+        format!("{}:{}", self.file, self.line)
     }
 }
 
@@ -184,13 +182,45 @@ fn blocks_of(file: &str, text: &str) -> Vec<Block> {
     blocks
 }
 
-/// Every block of every chapter.
+/// Every block of every chapter, named by its path from the repository's
+/// root.
+///
+/// A chapter line that is only `{{#include path}}` is replaced by that file
+/// when mdBook builds the book, so its blocks are read too, under its own
+/// name and line numbers: the error index lives in `byard-compiler`, where
+/// `byard explain` reads it, and the guide includes it.
 fn all_blocks() -> Vec<Block> {
+    let root = repo_root();
     let src = guide_dir().join("src");
     let mut blocks = Vec::new();
+    let name = |path: &Path| {
+        path.strip_prefix(&root)
+            .expect("under the repository")
+            .to_string_lossy()
+            .replace('\\', "/")
+    };
     for rel in markdown_files(&src) {
-        let text = std::fs::read_to_string(src.join(&rel)).expect("a readable chapter");
-        blocks.extend(blocks_of(&rel.to_string_lossy().replace('\\', "/"), &text));
+        let path = src.join(&rel);
+        let text = std::fs::read_to_string(&path).expect("a readable chapter");
+        blocks.extend(blocks_of(&name(&path), &text));
+        for line in text.lines() {
+            let Some(included) = line
+                .trim()
+                .strip_prefix("{{#include ")
+                .and_then(|l| l.strip_suffix("}}"))
+            else {
+                continue;
+            };
+            let target = path
+                .parent()
+                .expect("a chapter is in a directory")
+                .join(included.trim());
+            let target = target
+                .canonicalize()
+                .unwrap_or_else(|e| panic!("{}: `{line}`: {e}", name(&path)));
+            let text = std::fs::read_to_string(&target).expect("a readable include");
+            blocks.extend(blocks_of(&name(&target), &text));
+        }
     }
     blocks
 }
@@ -210,10 +240,11 @@ impl PackageProvider for NoPackages {
 /// The diagnostics of one complete file, as `file:line:col: error[Kind]:
 /// message` lines.
 ///
-/// The same steps `byard check` takes for a project: resolve the program
-/// (parse and type check), then lower and render every view into a throwaway
-/// frame, so the checks that run while lowering are exercised too. If
-/// `byard_project::check::check_program` changes, change this with it.
+/// What `byard check` reports for a project: the program is resolved (parse
+/// and type check), then [`check_program`](byard_project::check::check_program)
+/// lowers and renders every view and adds the lints, the one function the
+/// command and the language server call, so a sample is judged exactly as a
+/// reader's file would be.
 fn diagnostics_of(src: &str, edition: byard_compiler::edition::Edition) -> Vec<String> {
     let program = byard_compiler::resolve::resolve_program_in(
         vec![SourceFile {
@@ -223,24 +254,7 @@ fn diagnostics_of(src: &str, edition: byard_compiler::edition::Edition) -> Vec<S
         &mut NoPackages,
         edition,
     );
-    let errors: Vec<CompileError> = if program.errors.is_empty() {
-        let known: Vec<&str> = program.views.iter().map(|v| v.name.as_str()).collect();
-        let mut interp = Interpreter::new();
-        interp.set_theme(Theme::byard_base());
-        interp.declare_controllers(&byard_core::cap::provided_names());
-        interp.load_views(&program.views);
-        let mut frame = byard_core::frame::RenderFrame::new();
-        for view in &program.views {
-            let tree = interp.lower_view(view, &known);
-            interp.tick();
-            interp.render(&tree, &mut frame, 1024.0, 768.0);
-            frame.clear();
-        }
-        interp.errors().to_vec()
-    } else {
-        program.errors.clone()
-    };
-    errors
+    byard_project::check::check_program(&program, Theme::byard_base())
         .iter()
         .map(|err| program.source_map.render_line(err))
         .collect()
@@ -268,7 +282,7 @@ fn in_chapter_lines(block: &Block, added: usize, diagnostic: &str) -> String {
         return diagnostic.to_string();
     };
     let line = block.line + line.saturating_sub(added);
-    format!("docs/guide/src/{}:{line}:{col}:{message}", block.file)
+    format!("{}:{line}:{col}:{message}", block.file)
 }
 
 fn mode_of(block: &Block) -> Result<Mode, String> {
@@ -426,7 +440,7 @@ fn every_byld_sample_in_the_guide_checks() {
 /// matching, are reported: the harness is tested against samples written here.
 #[test]
 fn the_harness_reports_what_it_should() {
-    let chapter = |text: &str| blocks_of("probe.md", text);
+    let chapter = |text: &str| blocks_of("docs/guide/src/probe.md", text);
 
     // A good file, a good fragment.
     let ok = chapter(
@@ -561,7 +575,7 @@ fn missing_excerpt_lines(
                 continue;
             }
             missing.push(format!(
-                "docs/guide/src/{}:{}: not a line of any Rust file in the repository: {line}",
+                "{}:{}: not a line of any Rust file in the repository: {line}",
                 block.file,
                 block.line + 1 + i
             ));

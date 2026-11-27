@@ -208,6 +208,34 @@ View Main() {
     Text("{n}")
 }
 
+//# case: the-four-fields-of-an-http-answer-are-known
+View Main() {
+    inject Http as http
+    var code = 0
+    var text = ""
+    Button("load") => {
+        http.get("https://example.com/items")
+            ok res => {
+                code = res.status
+                text = res.ok ? res.body : ""
+            }
+    }
+    Text("{code} {text}")
+}
+
+//# case: a-field-read-out-of-the-json-of-an-http-answer-is-a-warning
+//# warning: UntypedReply
+//# diagnostics: 1
+View Main() {
+    inject Http as http
+    var n = 0
+    Button("load") => {
+        http.get("https://example.com/items")
+            ok res => { n = res.json.count }
+    }
+    Text("{n}")
+}
+
 //# case: reading-a-field-of-a-reply-that-was-cast-is-not
 type Reply = { count: Int }
 View Main() {

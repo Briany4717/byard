@@ -355,6 +355,7 @@ var xs = [1, 2, 3]
 let doubled = xs.map(x => x * 2)
 let sum = xs.reduce(0, (acc, x) => acc + x)
 let big = xs.filter(|x| x > 1)
+Text("{doubled} {sum} {big}")
 ```
 
 `x => …` is one parameter, `(a, b) => …` several, and `|x| …` is another way to
@@ -382,6 +383,7 @@ var products = [{ category: "a", qty: 3 }, { category: "b", qty: 40 }]
 fn isLow(qty: Int) -> Bool => qty < 10
 let perCategory = ["a", "b"].map(c => products.filter(p => p.category == c).len)
 let low = products.filter(p => isLow(p.qty))
+Text("{perCategory} {low.len}")
 ```
 
 A lambda with a block body is an *action*, and may assign. See [state](state.md)

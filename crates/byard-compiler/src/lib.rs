@@ -21,6 +21,7 @@ pub mod consts;
 pub(crate) mod desugar;
 pub mod diagnostics;
 pub mod edition;
+pub mod explain;
 pub mod fmt;
 pub mod icons;
 pub mod infer;

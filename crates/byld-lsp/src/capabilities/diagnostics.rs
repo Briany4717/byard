@@ -1,6 +1,11 @@
 //! Diagnostic generation capability for `.byd` documents.
 
-use lsp_types::{Diagnostic, DiagnosticSeverity, NumberOrString, PublishDiagnosticsParams, Range};
+use std::str::FromStr as _;
+
+use lsp_types::{
+    CodeDescription, Diagnostic, DiagnosticSeverity, NumberOrString, PublishDiagnosticsParams,
+    Range, Uri,
+};
 
 use crate::state::document::{Document, DocumentStore};
 use crate::state::project::{Analysis, ProjectCache, analyze_alone};
@@ -24,6 +29,20 @@ pub fn compute_project_diagnostics(
     publish(doc, &projects.analyze(doc, open))
 }
 
+/// Where the error index explains the error `kind`: its section of
+/// `errors.md`, the file `byard explain` prints from, so an editor can link
+/// the code to it.
+fn explained_at(kind: &str) -> Option<CodeDescription> {
+    byard_compiler::explain::explain(kind)?;
+    let href = format!(
+        "https://github.com/Briany4717/byard/blob/main/crates/byard-compiler/errors.md#{}",
+        kind.to_ascii_lowercase()
+    );
+    Some(CodeDescription {
+        href: Uri::from_str(&href).ok()?,
+    })
+}
+
 fn publish(doc: &Document, analysis: &Analysis) -> PublishDiagnosticsParams {
     let mut diagnostics = Vec::with_capacity(analysis.errors.len() + analysis.notices.len());
     for err in &analysis.errors {
@@ -40,7 +59,7 @@ fn publish(doc: &Document, analysis: &Analysis) -> PublishDiagnosticsParams {
             // The variant's name, so a quick fix matches the kind of problem
             // and not the wording of its message.
             code: Some(NumberOrString::String(err.kind().to_string())),
-            code_description: None,
+            code_description: explained_at(err.kind()),
             source: Some("byld-compiler".to_string()),
             message: err.headline(),
             related_information: None,
@@ -70,5 +89,23 @@ fn publish(doc: &Document, analysis: &Analysis) -> PublishDiagnosticsParams {
         uri: doc.uri.clone(),
         diagnostics,
         version: doc.version,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn an_error_links_to_its_section_of_the_index() {
+        let link = explained_at("UnknownAttribute").expect("a section");
+        assert!(
+            link.href
+                .as_str()
+                .ends_with("crates/byard-compiler/errors.md#unknownattribute"),
+            "{}",
+            link.href.as_str()
+        );
+        assert!(explained_at("NoSuchError").is_none());
     }
 }

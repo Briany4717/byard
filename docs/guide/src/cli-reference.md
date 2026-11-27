@@ -12,12 +12,14 @@ byard <COMMAND>
 | [`shot`](#byard-shot) | Draw the project to a PNG without a window |
 | [`test`](#byard-test) | Run the project's scenarios in `tests/` without a window or a GPU |
 | [`fmt`](#byard-fmt) | Format `.byd` files in place |
+| [`fix`](#byard-fix) | Move a project to the next edition |
 | [`build`](#byard-build) | Bake the vector icon atlas |
 | [`bundle`](#byard-bundle) | Package a built app with its project |
 | [`add`](#byard-add) | Add a dependency, then fetch and lock it |
 | [`get`](#byard-get) | Fetch dependencies and write `byard.lock` |
 | [`publish`](#byard-publish) | Publish a package to a registry |
 | [`clean`](#byard-clean) | Remove generated files and caches |
+| [`explain`](#byard-explain) | Say what an error means |
 | `help` | Print help for the program or a command |
 
 `byard --help` and `byard <command> --help` print the same descriptions as this page. `byard
@@ -81,6 +83,8 @@ Each diagnostic starts with `file:line:column: error[Kind]: message`, in plain t
 printed in full and counted apart, and does not fail the command. Exit status 0 is no errors.
 The warnings about names and replies (`unused-variable`, `unused-parameter`, `unused-view`, `untyped-reply`) can be switched off
 in `byard.toml` under `[lints]`, as `unused-variable = "allow"`; `"warn"`, the default, keeps one on.
+The `Kind` in brackets is the error's name, which stays the same from release to release, and
+`byard explain Kind` says what it means.
 
 ## `byard shot`
 
@@ -300,6 +304,21 @@ Removes `.byard/cache` and `.byard/generated` from the project. Package checkout
 | Argument | |
 |----------|-|
 | `[FILE]` | The project or `.byd` file. Defaults to `byard.toml`. |
+
+## `byard explain`
+
+```text
+byard explain <NAME>
+```
+
+Prints what the error `NAME` means, why it is one, and a program that has it: its section of the
+[error index](errors.md). The name is the word in the brackets of a diagnostic, and
+`byard explain error[UnknownAttribute]`, pasted as it was printed, works too. A name no error has is
+an error that suggests the closest one.
+
+| Argument | |
+|----------|-|
+| `<NAME>` | The error's name, as `UnknownAttribute`. |
 
 ## `byard.toml` at a glance
 

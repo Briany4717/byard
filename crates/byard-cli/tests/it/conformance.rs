@@ -912,3 +912,150 @@ fn generated_programs_are_told_or_run_and_never_panic() {
     );
     println!("conformance: {runs} generated programs told or run ({drawn} drawn), none panicked");
 }
+
+// ---- the promise --------------------------------------------------------
+//
+// A program that checks under an edition keeps its meaning for as long as that
+// edition exists. The suite is the test of that, and what it can be a test of
+// is a suite that does not change: once an edition is named stable, the cases
+// written in it are locked, and a change to one, or its removal, is a change
+// to the language, which is a new edition.
+
+/// FNV-1a: a hash that is the same on every machine and every compiler, which
+/// the standard library's is not promised to be.
+fn fnv1a(text: &str) -> u64 {
+    let mut hash = 0xCBF2_9CE4_8422_2325_u64;
+    for byte in text.bytes() {
+        hash ^= u64::from(byte);
+        hash = hash.wrapping_mul(0x0100_0000_01B3);
+    }
+    hash
+}
+
+/// What a case is: its name, the edition it is written in, everything it
+/// expects and the program. A header written in another order is the same case.
+fn fingerprint(case: &Case) -> String {
+    let join = |set: &BTreeSet<String>| set.iter().cloned().collect::<Vec<_>>().join(",");
+    format!(
+        "{:016x}",
+        fnv1a(&format!(
+            "{}\n{}\n{}\n{:?}\n{}\n{:?}\n{}\n{}\n{}",
+            case.name,
+            case.edition.as_str(),
+            case.fragment,
+            case.text,
+            case.wait,
+            case.diagnostics,
+            join(&case.errors),
+            join(&case.warnings),
+            case.source
+        ))
+    )
+}
+
+fn frozen_dir() -> PathBuf {
+    cases_dir().join("frozen")
+}
+
+/// The lock of an edition: `file:name<TAB>fingerprint` for each of its cases.
+fn lock_of(edition: byard_compiler::edition::Edition) -> String {
+    let mut lines: Vec<String> = all_cases()
+        .iter()
+        .filter(|c| c.edition == edition && c.gap.is_none())
+        .map(|c| format!("{}:{}\t{}", c.file, c.name, fingerprint(c)))
+        .collect();
+    lines.sort();
+    lines.join("\n") + "\n"
+}
+
+/// An edition with a lock keeps every case it had, exactly as written. New
+/// cases may join it: they are the language being found to do what it does.
+#[test]
+fn a_frozen_edition_keeps_its_cases() {
+    let Ok(entries) = std::fs::read_dir(frozen_dir()) else {
+        return;
+    };
+    let mut problems = Vec::new();
+    for entry in entries.flatten() {
+        let path = entry.path();
+        if path.extension().is_none_or(|e| e != "lock") {
+            continue;
+        }
+        let label = path.file_stem().unwrap().to_string_lossy().into_owned();
+        let Ok(edition) = byard_compiler::edition::Edition::parse(&label) else {
+            problems.push(format!("{}: `{label}` is not an edition", path.display()));
+            continue;
+        };
+        let now: std::collections::BTreeMap<String, String> = all_cases()
+            .iter()
+            .filter(|c| c.edition == edition)
+            .map(|c| (format!("{}:{}", c.file, c.name), fingerprint(c)))
+            .collect();
+        for line in std::fs::read_to_string(&path).unwrap_or_default().lines() {
+            let Some((name, locked)) = line.split_once('\t') else {
+                continue;
+            };
+            match now.get(name) {
+                None => problems.push(format!(
+                    "edition {label} is frozen and `{name}` is gone: a rule an edition had is a \
+                     rule it keeps, so a change goes in a new edition"
+                )),
+                Some(found) if found != locked => problems.push(format!(
+                    "edition {label} is frozen and `{name}` was changed: a case of a frozen \
+                     edition is not edited, a change goes in a new edition"
+                )),
+                Some(_) => {}
+            }
+        }
+    }
+    assert!(problems.is_empty(), "{}", problems.join("\n"));
+}
+
+/// Writes the lock of the edition named in `BYARD_FREEZE`, which is how an
+/// edition is frozen:
+///
+/// ```text
+/// BYARD_FREEZE=2026 cargo test -p byard-cli --test it write_the_lock -- --ignored
+/// ```
+#[test]
+#[ignore = "run on purpose, to freeze an edition"]
+fn write_the_lock_of_an_edition() {
+    let label = std::env::var("BYARD_FREEZE").expect("BYARD_FREEZE names the edition");
+    let edition = byard_compiler::edition::Edition::parse(&label).expect("an edition");
+    std::fs::create_dir_all(frozen_dir()).expect("frozen dir");
+    let path = frozen_dir().join(format!("{}.lock", edition.as_str()));
+    std::fs::write(&path, lock_of(edition)).expect("write the lock");
+    println!("froze {}", path.display());
+}
+
+/// The lock of an edition is what `lock_of` writes: a case changed after it was
+/// written is told, and one added is not.
+#[test]
+fn the_lock_tells_a_changed_case_from_a_new_one() {
+    let cases = all_cases();
+    let mut one = cases
+        .iter()
+        .find(|c| c.edition == byard_compiler::edition::Edition::BASELINE && c.gap.is_none())
+        .expect("a baseline case")
+        .clone();
+    let before = fingerprint(&one);
+    one.source.push_str("// changed\n");
+    assert_ne!(
+        before,
+        fingerprint(&one),
+        "a changed program is a changed case"
+    );
+    one.source = one.source.replace("// changed\n", "");
+    assert_eq!(before, fingerprint(&one));
+    one.errors.insert("Anything".to_string());
+    assert_ne!(
+        before,
+        fingerprint(&one),
+        "what it expects is part of the case"
+    );
+    let lock = lock_of(byard_compiler::edition::Edition::BASELINE);
+    assert!(
+        lock.lines().count() > 600,
+        "the baseline has most of the suite"
+    );
+}

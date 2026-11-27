@@ -39,6 +39,12 @@ editions: none may panic. The generator writes an expression for the type that i
 what it makes checks, and now and then one of any shape, so the refusals are reached too. Its seeds are
 fixed, so a failure is the same failure next time and prints the program.
 
+Freezing an edition: `BYARD_FREEZE=2026 cargo test -p byard-cli --test it write_the_lock -- --ignored`
+writes `frozen/2026.lock`, a fingerprint for each case written in that edition (a case with no
+`edition:` header is in the baseline). From then on `a_frozen_edition_keeps_its_cases` fails for a
+case of it that was edited or removed, and says to put the change in a new edition. Nothing is locked
+until the lock is committed; that is the decision to name an edition stable.
+
 These files are not programs to run: several declare `Main`, and many are wrong on
 purpose. `byard fmt` and `byard check` are not meant for them.
 

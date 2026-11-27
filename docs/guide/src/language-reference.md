@@ -1261,9 +1261,20 @@ overflows stops at the largest or the smallest instead of wrapping, a character 
 grapheme cluster and not a code point, a list or a record in a text shows its contents
 instead of nothing, and `Color`, `Duration` and `Angle` are types of their own. `byard fix`
 writes the parentheses that keep the first one's meaning. For the other four no rewrite can tell
-which programs relied on the old behaviour, so it changes no source. The other changes marked *(edition)* in
-[the roadmap](https://github.com/Briany4717/byard/blob/main/docs/language/roadmap.md) will land
-in `2027` too.
+which programs relied on the old behaviour, so it changes no source. Every change the
+[roadmap](https://github.com/Briany4717/byard/blob/main/docs/language/roadmap.md) marked
+*(edition)* is in `2027`.
+
+**The promise.** A program that checks under an edition keeps its meaning for as long as that edition exists:
+what it drew, it draws; what it refused, it refuses; no release changes it. Anything that would
+is a new edition, which a project moves to when it chooses, with `byard fix`.
+
+The conformance suite is the test of that promise, and what it can test is a suite that does not
+change. Once an edition is named stable, the cases written in it are *locked*
+(`crates/byard-cli/tests/conformance/frozen/<edition>.lock`, one fingerprint for each case), and
+`a_frozen_edition_keeps_its_cases` fails for a locked case that was edited or removed. New cases may
+join an edition: they are the language being found to do what it always did. No edition is locked
+yet.
 
 ## One mistake, one error
 

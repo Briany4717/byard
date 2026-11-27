@@ -101,10 +101,10 @@ Each of these was found by building a screen, and each is now in Byard.
 
 ## What it still could not be built with
 
-Worked around in the app, and not yet fixed in Byard:
+Worked around in the app, and not yet fixed in Byard. (A misspelt JSON field
+used to be here: every reply is now given a `type` with `as`, so `reply.resluts`
+is a check error.)
 
-- **A misspelt JSON field reads as nothing.** `??` gives a missing field a
-  default, but `res.json.resluts` is a missing field too, and nothing says so.
 - **One kind of misspelling still checks clean**: a name passed to an
   intrinsic's named argument, where the argument may also be a word.
 - **The Rust half itself does not reload.** `cargo run -p aura-weather --

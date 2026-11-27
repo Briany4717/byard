@@ -214,6 +214,9 @@ pub struct RecordDecl {
     /// Declared `context Name { … }` rather than `type` (RFC-0065): the fields
     /// carry defaults, and a view `provide`s and `inject`s it.
     pub context: bool,
+    /// Declared `store Name { … }` (a context with one instance for the whole
+    /// program, which any view reads and writes): `context` is set as well.
+    pub store: bool,
     /// Source span.
     pub span: Span,
 }

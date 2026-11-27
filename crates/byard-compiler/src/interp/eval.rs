@@ -697,6 +697,12 @@ pub struct Interpreter {
     ctx_chain: Option<std::rc::Rc<CtxNode>>,
     /// The program's contexts: name → fields, with their defaults.
     contexts: std::collections::HashMap<Symbol, std::rc::Rc<Vec<crate::parser::ast::RecordField>>>,
+    /// The program's stores: the contexts with one instance for the whole
+    /// program, by name.
+    store_names: std::collections::HashSet<Symbol>,
+    /// The signal of each field of each store, made the first time it is
+    /// injected.
+    stores: std::collections::HashMap<Symbol, Vec<(Symbol, SignalId)>>,
     /// Reactive `for` body pools (RFC-0018), indexed by [`RenderNode::For::pool`].
     /// Grows as `for` loops are lowered; each pool holds that loop's reusable
     /// per-slot bodies and element signals. Reconciled once per frame before the
@@ -1419,10 +1425,15 @@ impl Interpreter {
         self.consts.clear();
         self.enums.clear();
         self.contexts.clear();
+        self.store_names.clear();
+        self.stores.clear();
         if let Some(first) = views.first() {
             for decl in first.records.iter().filter(|r| r.context) {
                 self.contexts
                     .insert(decl.name.clone(), std::rc::Rc::new(decl.fields.clone()));
+                if decl.store {
+                    self.store_names.insert(decl.name.clone());
+                }
             }
             for decl in first.enums.iter() {
                 let cases = decl.cases.iter().map(|(c, _)| c.clone()).collect();

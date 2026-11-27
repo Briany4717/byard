@@ -555,3 +555,127 @@ View Main() {
     var xs: List<Place> = [p]
     Text("{p.name} {s} {n} {xs.len}")
 }
+
+//# case: store-starts-at-its-default
+//# text: 5
+store Counter { n: Int = 5 }
+View Main() {
+    inject Counter as c
+    Text("{c.n}")
+}
+
+//# case: store-is-one-for-the-whole-program
+//# text: 2
+store Session { count: Int = 0 }
+View Bump() {
+    inject Session as s
+    on mount => { s.count++ }
+    Box {}
+}
+View Main() {
+    inject Session as s
+    Bump()
+    Bump()
+    Text("{s.count}")
+}
+
+//# case: store-field-is-written-with-an-operator
+//# text: 7
+store Counter { n: Int = 5 }
+View Main() {
+    inject Counter as c
+    on mount => { c.n += 3  c.n-- }
+    Text("{c.n}")
+}
+
+//# case: store-field-may-be-nothing
+//# text: Guest
+type User = { name: Str }
+store Session { user: User? = none }
+View Main() {
+    inject Session as s
+    Text("{s.user?.name ?? "Guest"}")
+}
+
+//# case: store-field-set-in-one-view-is-read-in-another
+//# text: Ada
+type User = { name: Str }
+store Session { user: User? = none }
+View Reader() {
+    inject Session as s
+    Text("{s.user?.name ?? "Guest"}")
+}
+View Main() {
+    inject Session as s
+    on mount => { s.user = { name: "Ada" } }
+    Reader()
+}
+
+//# case: store-field-is-set-back-to-nothing
+//# text: Guest
+type User = { name: Str }
+store Session { user: User? = none }
+View Main() {
+    inject Session as s
+    on mount => { s.user = { name: "Ada" }  s.user = none }
+    Text("{s.user?.name ?? "Guest"}")
+}
+
+//# case: store-field-written-with-a-wrong-type
+//# error: TypeMismatch
+//# diagnostics: 1
+store Counter { n: Int = 5 }
+View Main() {
+    inject Counter as c
+    on mount => { c.n = "a" }
+    Text("{c.n}")
+}
+
+//# case: store-field-it-does-not-have
+//# error: UnknownField
+//# diagnostics: 1
+store Counter { n: Int = 5 }
+View Main() {
+    inject Counter as c
+    on mount => { c.m = 1 }
+    Text("{c.n}")
+}
+
+//# case: store-field-needs-a-default
+//# error: ContextFieldNeedsDefault
+//# diagnostics: 1
+store Counter { n: Int }
+View Main() {
+    inject Counter as c
+    Text("{c.n}")
+}
+
+//# case: store-is-not-provided
+//# error: StoreProvided
+//# diagnostics: 1
+store Counter { n: Int = 5 }
+View Main() {
+    provide Counter(n: 1)
+    Text("x")
+}
+
+//# case: store-with-an-enum-field
+//# text: system
+enum Scheme { system, light, dark }
+store Prefs { scheme: Scheme = .system }
+View Main() {
+    inject Prefs as p
+    Text("{p.scheme}")
+}
+
+//# case: store-persist-is-not-available-yet
+//# error: UnexpectedToken
+//# diagnostics: 1
+store Session persist "session" { n: Int = 0 }
+View Main() { Text("x") }
+
+//# case: store-is-still-a-name
+//# fragment
+//# text: 3
+let store = 3
+Text("{store}")

@@ -383,6 +383,7 @@ fn check_all(views: &[ViewDecl]) -> Inference {
             generics: HashMap::new(),
             map_loops: Vec::new(),
             shown: Vec::new(),
+            stores: HashSet::new(),
         };
         for decl in record_decls.iter() {
             for field in &decl.fields {
@@ -393,6 +394,11 @@ fn check_all(views: &[ViewDecl]) -> Inference {
             }
         }
     }
+    let stores: HashSet<Symbol> = record_decls
+        .iter()
+        .filter(|r| r.store)
+        .map(|r| r.name.clone())
+        .collect();
     for view in views {
         let mut checker = Checker {
             errors: &mut out.errors,
@@ -424,6 +430,7 @@ fn check_all(views: &[ViewDecl]) -> Inference {
             generics: top_generics.clone(),
             map_loops: Vec::new(),
             shown: Vec::new(),
+            stores: stores.clone(),
         };
         checker.check_view(view);
         let loops = std::mem::take(&mut checker.map_loops);
@@ -498,6 +505,7 @@ fn check_top_fns(
         generics: generics_of(helpers),
         map_loops: Vec::new(),
         shown: Vec::new(),
+        stores: HashSet::new(),
     };
     let mut top = HashMap::new();
     for decl in helpers {
@@ -685,6 +693,7 @@ fn check_consts(
                 generics: generics_of(helpers),
                 map_loops: Vec::new(),
                 shown: Vec::new(),
+                stores: HashSet::new(),
             };
             let declared = decl.ty.as_ref().map(|t| checker.resolve_written(t));
             let found = if declared.is_some() {
@@ -870,6 +879,9 @@ struct Checker<'a> {
     map_loops: Vec<Span>,
     /// The `{ }` of a text that hold a `Color`, a `Duration` or an `Angle`.
     shown: Vec<(Span, Shown)>,
+    /// The contexts that are stores, which have one instance and are not
+    /// provided.
+    stores: HashSet<Symbol>,
 }
 
 /// The program's contexts, by name: each field with its type, and whether it
@@ -1228,6 +1240,16 @@ impl Checker<'_> {
         let Type::Named { name, .. } = ty else {
             return;
         };
+        if self.stores.contains(name) {
+            self.errors.push(CompileError::StoreProvided {
+                span,
+                name: name.as_str().to_string(),
+            });
+            for arg in fields {
+                self.value(&arg.value);
+            }
+            return;
+        }
         if !top_level {
             self.errors.push(CompileError::MisplacedProvide {
                 span,
@@ -2465,6 +2487,20 @@ impl Checker<'_> {
     /// The type of the `var` (or binding) an assignment writes, when the
     /// target is a name the checker knows the type of.
     fn written_ty(&self, target: &Expr) -> Option<Ty> {
+        // A field of a store holds what it was declared to.
+        if let Expr::Member { base, field, .. } = target {
+            let Expr::Ident(handle, _) = &**base else {
+                return None;
+            };
+            let Some(Ty::Named(store)) = self.env.get(handle) else {
+                return None;
+            };
+            if !self.stores.contains(store) {
+                return None;
+            }
+            let (_, ty) = self.records.get(store)?.iter().find(|(f, _)| f == field)?;
+            return Some(plain_ty(ty)).filter(|ty| judged(ty) || self.is_record(ty));
+        }
         let Expr::Ident(name, _) = target else {
             return None;
         };

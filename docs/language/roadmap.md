@@ -15,7 +15,7 @@ So every step below ends the same way: **its cases lose their `gap:` line, the r
 loses its note, and this file loses the step.** When this file is empty and the suite has no
 gap, the language is where this document wanted it.
 
-As written, the suite has 822 cases: 818 hold and 4 are gaps.
+As written, the suite has 835 cases: 832 hold and 3 are gaps.
 
 ```sh
 cargo test -p byard-cli --test it conformance -- --nocapture
@@ -257,10 +257,14 @@ suite cannot run (`typed_reply.rs`: a call that waits for its reply). What stays
 
 ### 20. State above the views
 
-*Case:* `global-store`.
+*Done, except what is kept between runs.* `global-store` holds, with the twelve cases added with it.
+A `store` is a context with one instance for the program, whose fields are signals; a write through
+an `inject` is a write of that field. What stays open:
 
-`store Name { field: Type = default }`, read and written through `inject`. One instance
-for the program, optionally kept between runs.
+- `store Name persist "key" { … }`, kept between runs over the `Store` capability. It is a syntax
+  error that says so, and not read as something else. It needs the interpreter to load the fields
+  from the host's `Store` when the program starts and write them when they change.
+- A store is made again by a hot reload: the state of the program is not held across one.
 
 ### 21. The rest of text
 

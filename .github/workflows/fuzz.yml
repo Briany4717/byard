@@ -1,0 +1,89 @@
+name: fuzz
+
+# The fuzz targets of byld (fuzz/), each for a quarter of an hour, every night.
+#
+# The pull request checks cannot do this: they run the same targets on stable
+# over the seeds (crates/byard-cli/tests/it/fuzz_targets.rs), which keeps them
+# compiling and passing on what is known, but finding what nobody wrote takes
+# time a pull request does not have. So this runs on its own clock, keeps the
+# corpus it grows from one night to the next, and fails, with the input that
+# panicked attached, when a target panics or hangs.
+#
+# What a failure means: some text makes the parser, the checker, the formatter
+# or the interpreter panic or hang, which the language promises never happens.
+# Download the artifact, reduce it (`cargo +nightly fuzz tmin <target> <file>`),
+# fix the cause, and add the reduced input to fuzz/regressions so the fix
+# cannot come undone.
+
+on:
+  schedule:
+    # Every night, after the day's merges.
+    - cron: "0 3 * * *"
+  # And on demand, to fuzz a change before it merges.
+  workflow_dispatch:
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  fuzz:
+    name: Fuzz ${{ matrix.target }}
+    runs-on: ubuntu-latest
+    strategy:
+      # One target's panic must not stop the others from running.
+      fail-fast: false
+      matrix:
+        target: [parse, check, format, run]
+
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Install nightly toolchain
+        uses: dtolnay/rust-toolchain@nightly
+
+      - name: Cache cargo
+        uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: fuzz
+
+      - name: Install Linux GPU dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libegl1-mesa-dev libgl1-mesa-dev
+
+      - name: Install cargo-fuzz
+        run: cargo install cargo-fuzz --locked
+
+      # What the target grew on earlier nights, so each night starts where the
+      # last one stopped instead of from the seeds.
+      - name: Restore the corpus
+        uses: actions/cache/restore@v4
+        with:
+          path: fuzz/corpus/${{ matrix.target }}
+          key: fuzz-corpus-${{ matrix.target }}-${{ github.run_id }}
+          restore-keys: fuzz-corpus-${{ matrix.target }}-
+
+      - name: Write the seeds
+        run: python3 ci/fuzz-seeds.py fuzz/corpus/seeds
+
+      - name: Fuzz
+        working-directory: fuzz
+        run: |
+          mkdir -p corpus/${{ matrix.target }}
+          cargo fuzz run ${{ matrix.target }} corpus/${{ matrix.target }} corpus/seeds -- \
+            -max_total_time=900 -timeout=10 -max_len=8192 -rss_limit_mb=2048 -print_final_stats=1
+
+      - name: Save the corpus
+        if: always()
+        uses: actions/cache/save@v4
+        with:
+          path: fuzz/corpus/${{ matrix.target }}
+          key: fuzz-corpus-${{ matrix.target }}-${{ github.run_id }}
+
+      - name: Upload what panicked
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: fuzz-${{ matrix.target }}-artifacts
+          path: fuzz/artifacts/${{ matrix.target }}
+          if-no-files-found: ignore

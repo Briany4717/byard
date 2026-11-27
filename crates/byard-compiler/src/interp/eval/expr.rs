@@ -23,7 +23,7 @@ use unicode_segmentation::UnicodeSegmentation;
 /// context, so [`Interpreter::eval_pure`] answers them without lowering.
 const fn numeric_literal(expr: &Expr) -> Option<Value> {
     match expr {
-        Expr::IntLit(n, _) => Some(Value::Int(*n)),
+        Expr::IntLit(n, _) | Expr::DurationLit(n, _) => Some(Value::Int(*n)),
         // An angle is already in radians (RFC-0011 T1), a plain `Float`.
         Expr::FloatLit(f, _) | Expr::AngleLit(f, _) => Some(Value::Float(*f)),
         _ => None,
@@ -39,6 +39,24 @@ enum NoneTest<'e> {
     Static(bool),
     /// A value to read: it is none when it reads as none.
     Read(&'e Expr),
+}
+
+/// A colour as a text writes it: `#RRGGBB`, and `#RRGGBBAA` when it has an
+/// alpha.
+fn shown_color(color: i64) -> String {
+    let rgb = color & 0x00FF_FFFF;
+    if color & crate::lexer::COLOR_HAS_ALPHA_TAG != 0 {
+        format!("#{rgb:06X}{:02X}", (color >> 24) & 0xFF)
+    } else {
+        format!("#{rgb:06X}")
+    }
+}
+
+/// An angle, which is held in radians, as a text writes it: in degrees, to
+/// two places and no more than it needs.
+fn shown_angle(radians: f64) -> String {
+    let degrees = (radians.to_degrees() * 100.0).round() / 100.0;
+    format!("{degrees}deg")
 }
 
 /// The rows a `for` runs over: a list's items, a set's items, or a map's
@@ -642,6 +660,10 @@ impl Interpreter {
             }
             // Already canonicalized to radians by the lexer (RFC-0011 T1),
             // from here on an angle is just a plain `Float`.
+            Expr::DurationLit(ms, _) => {
+                let ms = *ms;
+                Box::new(move |_| Value::Int(ms))
+            }
             Expr::AngleLit(rad, _) => {
                 let rad = *rad;
                 Box::new(move |_| Value::Float(rad))
@@ -1645,6 +1667,25 @@ impl Interpreter {
         args: &[crate::parser::ast::Arg],
         payload_name: Option<&Symbol>,
     ) -> Lowered {
+        // What a text shows of a `Color`, a `Duration` or an `Angle`, written
+        // in by the pass after the checks.
+        if let Expr::Ident(name, _) = callee {
+            if matches!(name.as_str(), "__color" | "__duration" | "__angle") {
+                let Some(first) = args.first() else {
+                    return Box::new(|_| Value::Unit);
+                };
+                let mut value = self.lower_expr(&first.value, payload_name);
+                let which = name.clone();
+                return Box::new(move |ctx| {
+                    Value::Str(match (which.as_str(), value(ctx)) {
+                        ("__color", Value::Int(n)) => shown_color(n),
+                        ("__duration", Value::Int(ms)) => format!("{ms}ms"),
+                        ("__angle", Value::Float(rad)) => shown_angle(rad),
+                        (_, other) => other.to_text(),
+                    })
+                });
+            }
+        }
         // `Set([1, 2])`: the items of a list, each once; `Set()` has none.
         if let Expr::Ident(name, _) = callee {
             if name.as_str() == "Set"

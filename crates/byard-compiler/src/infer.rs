@@ -24,6 +24,28 @@ use crate::parser::ast::{
 };
 use crate::symbol::Symbol;
 
+thread_local! {
+    /// Whether the program being checked is of an edition that has `Color`,
+    /// `Duration` and `Angle` as types of their own (from 2027).
+    static TYPED_UNITS: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+}
+
+/// Whether `Color`, `Duration` and `Angle` are types of their own here.
+fn typed_units() -> bool {
+    TYPED_UNITS.with(std::cell::Cell::get)
+}
+
+/// What a text shows a value of one of those types as.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Shown {
+    /// `#FF0000`.
+    Color,
+    /// `200ms`.
+    Duration,
+    /// `90deg`.
+    Angle,
+}
+
 /// The closed set of list methods (RFC-0027 §4), used for the `UnknownMethod`
 /// suggestion.
 const LIST_METHODS: [&str; 24] = [
@@ -34,6 +56,8 @@ const LIST_METHODS: [&str; 24] = [
 
 /// The methods of a `Map`, and of a `Set`.
 const MAP_METHODS: [&str; 2] = ["set", "remove"];
+/// The methods of a `Color`.
+const COLOR_METHODS: [&str; 1] = ["alpha"];
 const SET_METHODS: [&str; 3] = ["add", "remove", "contains"];
 
 /// The methods a `Str` has at runtime (`len` is a field). Any other call on a
@@ -127,6 +151,12 @@ pub enum Ty {
     Map(Box<Ty>, Box<Ty>),
     /// `Set<T>`.
     Set(Box<Ty>),
+    /// `Color`, from edition 2027: before it a colour is an `Int`.
+    Color,
+    /// `Duration`, a length of time (`200ms`), from edition 2027.
+    Duration,
+    /// `Angle` (`90deg`), from edition 2027.
+    Angle,
     /// `Fn(params) -> ret`.
     Fn(Vec<Ty>, Option<Box<Ty>>),
     /// `T?` (RFC-0065): a value that may be none. Only a parameter or a context
@@ -158,6 +188,9 @@ pub struct Inference {
     /// The `for` loops that go over a map, by their spans: what each runs for
     /// is an entry, `{ key, value }`, which the loop's two names are read from.
     pub map_loops: Vec<Span>,
+    /// The values a text shows as what they are, a `Color`, a `Duration` or an
+    /// `Angle`, by the span of the expression in the `{ }`.
+    pub shown: Vec<(Span, Shown)>,
 }
 
 /// What the value a handler may name is, by event (RFC-0063 §2).
@@ -202,6 +235,16 @@ fn event_record_fields(record: &str) -> Option<&'static [&'static str]> {
 /// Runs the D9 checks and local inference over `views`.
 #[must_use]
 pub fn check_views(views: &[ViewDecl]) -> Inference {
+    let units = views
+        .first()
+        .is_some_and(|v| v.edition >= crate::edition::Edition::E2027);
+    let was = TYPED_UNITS.with(|u| u.replace(units));
+    let out = check_all(views);
+    TYPED_UNITS.with(|u| u.set(was));
+    out
+}
+
+fn check_all(views: &[ViewDecl]) -> Inference {
     let mut out = Inference::default();
     // Every view carries the same table of top-level functions, constants and
     // enums.
@@ -339,6 +382,7 @@ pub fn check_views(views: &[ViewDecl]) -> Inference {
             type_vars: HashSet::new(),
             generics: HashMap::new(),
             map_loops: Vec::new(),
+            shown: Vec::new(),
         };
         for decl in record_decls.iter() {
             for field in &decl.fields {
@@ -379,10 +423,13 @@ pub fn check_views(views: &[ViewDecl]) -> Inference {
             type_vars: HashSet::new(),
             generics: top_generics.clone(),
             map_loops: Vec::new(),
+            shown: Vec::new(),
         };
         checker.check_view(view);
         let loops = std::mem::take(&mut checker.map_loops);
+        let shown = std::mem::take(&mut checker.shown);
         out.map_loops.extend(loops);
+        out.shown.extend(shown);
     }
     out.surfaces = crate::surfaces::check_surfaces(views, &mut out.errors);
     crate::names::check(views, &mut out.errors);
@@ -450,6 +497,7 @@ fn check_top_fns(
         type_vars: HashSet::new(),
         generics: generics_of(helpers),
         map_loops: Vec::new(),
+        shown: Vec::new(),
     };
     let mut top = HashMap::new();
     for decl in helpers {
@@ -636,6 +684,7 @@ fn check_consts(
                 type_vars: HashSet::new(),
                 generics: generics_of(helpers),
                 map_loops: Vec::new(),
+                shown: Vec::new(),
             };
             let declared = decl.ty.as_ref().map(|t| checker.resolve_written(t));
             let found = if declared.is_some() {
@@ -819,6 +868,8 @@ struct Checker<'a> {
     generics: HashMap<Symbol, Vec<Symbol>>,
     /// The `for` loops over a map the checker has met.
     map_loops: Vec<Span>,
+    /// The `{ }` of a text that hold a `Color`, a `Duration` or an `Angle`.
+    shown: Vec<(Span, Shown)>,
 }
 
 /// The program's contexts, by name: each field with its type, and whether it
@@ -2484,7 +2535,15 @@ impl Checker<'_> {
             Expr::StrLit(parts, _) => {
                 for part in parts {
                     if let StrPart::Interp(e, _) = part {
-                        self.value(e);
+                        let shown = match self.value(e) {
+                            Ty::Color => Some(Shown::Color),
+                            Ty::Duration => Some(Shown::Duration),
+                            Ty::Angle => Some(Shown::Angle),
+                            _ => None,
+                        };
+                        if let Some(shown) = shown {
+                            self.shown.push((e.span(), shown));
+                        }
                     }
                 }
                 Ty::Str
@@ -3051,6 +3110,8 @@ impl Checker<'_> {
                 self.value(right);
                 Ty::Unknown
             }
+            Expr::DurationLit(..) => Ty::Duration,
+            Expr::AngleLit(..) if typed_units() => Ty::Angle,
             Expr::AngleLit(..) | Expr::ClassRef(..) | Expr::Return(_) | Expr::Error(_) => {
                 Ty::Unknown
             }
@@ -3633,6 +3694,7 @@ impl Checker<'_> {
         let known: Option<&[&str]> = match recv {
             Ty::List(_) => Some(&LIST_METHODS),
             Ty::Map(..) => Some(&MAP_METHODS),
+            Ty::Color => Some(&COLOR_METHODS),
             Ty::Set(_) => Some(&SET_METHODS),
             Ty::Str => Some(&STR_METHODS),
             Ty::Int => Some(&INT_METHODS),
@@ -3770,6 +3832,7 @@ impl Checker<'_> {
         match (recv, name.as_str()) {
             (Ty::Map(..), "set" | "remove")
             | (Ty::Set(_), "add" | "remove")
+            | (Ty::Color, "alpha")
             | (
                 Ty::List(_),
                 "push" | "removeAt" | "filter" | "slice" | "sort" | "sortBy" | "reverse"
@@ -3842,6 +3905,53 @@ impl Checker<'_> {
                 rhs_ty: ty_name(r),
             });
         };
+        // A colour, a duration and an angle have their own arithmetic: a
+        // duration adds to a duration and is scaled by a number, and a colour
+        // has none.
+        let unit = |t: &Ty| matches!(t, Ty::Color | Ty::Duration | Ty::Angle);
+        if (unit(l) || unit(r))
+            && matches!(
+                op,
+                BinOp::Add
+                    | BinOp::Sub
+                    | BinOp::Mul
+                    | BinOp::Div
+                    | BinOp::Rem
+                    | BinOp::Lt
+                    | BinOp::Le
+                    | BinOp::Gt
+                    | BinOp::Ge
+            )
+        {
+            if !both_concrete {
+                return Ty::Unknown;
+            }
+            let number = |t: &Ty| matches!(t, Ty::Int | Ty::Float);
+            let result = match (op, l, r) {
+                (BinOp::Add | BinOp::Sub, Ty::Duration, Ty::Duration) => Some(Ty::Duration),
+                (BinOp::Add | BinOp::Sub, Ty::Angle, Ty::Angle) => Some(Ty::Angle),
+                (BinOp::Mul, Ty::Duration, n) | (BinOp::Mul, n, Ty::Duration) if number(n) => {
+                    Some(Ty::Duration)
+                }
+                (BinOp::Mul, Ty::Angle, n) | (BinOp::Mul, n, Ty::Angle) if number(n) => {
+                    Some(Ty::Angle)
+                }
+                (BinOp::Div, Ty::Duration, n) if number(n) => Some(Ty::Duration),
+                (BinOp::Div, Ty::Angle, n) if number(n) => Some(Ty::Angle),
+                (BinOp::Div, Ty::Duration, Ty::Duration) | (BinOp::Div, Ty::Angle, Ty::Angle) => {
+                    Some(Ty::Float)
+                }
+                (BinOp::Lt | BinOp::Le | BinOp::Gt | BinOp::Ge, Ty::Duration, Ty::Duration)
+                | (BinOp::Lt | BinOp::Le | BinOp::Gt | BinOp::Ge, Ty::Angle, Ty::Angle) => {
+                    Some(Ty::Bool)
+                }
+                _ => None,
+            };
+            return result.unwrap_or_else(|| {
+                mismatch(self);
+                Ty::Unknown
+            });
+        }
         match op {
             BinOp::And | BinOp::Or => Ty::Bool,
             // Whichever side is known; when both are, they must agree.
@@ -3996,7 +4106,8 @@ impl Checker<'_> {
                         | "Text"
                         | "Screen"
                         | "Window"
-                ) || text.contains('.')
+                ) || (typed_units() && matches!(text, "Duration" | "Angle"))
+                    || text.contains('.')
                     || self.type_names.contains(name)
                     || self.type_vars.contains(name);
                 if !known {
@@ -4038,6 +4149,9 @@ impl Checker<'_> {
                     return Ty::Unknown;
                 }
                 match name.as_str() {
+                    "Color" if typed_units() => Ty::Color,
+                    "Duration" if typed_units() => Ty::Duration,
+                    "Angle" if typed_units() => Ty::Angle,
                     // A colour is an integer (RFC-0065 writes `Color?`).
                     "Int" | "Color" => Ty::Int,
                     "Float" => Ty::Float,
@@ -4090,6 +4204,9 @@ fn is_slot_param(p: &Param) -> bool {
 fn plain_ty(ty: &Type) -> Ty {
     match ty {
         Type::Named { name, args, .. } => match name.as_str() {
+            "Color" if typed_units() => Ty::Color,
+            "Duration" if typed_units() => Ty::Duration,
+            "Angle" if typed_units() => Ty::Angle,
             "Int" | "Color" => Ty::Int,
             "Float" => Ty::Float,
             "Str" => Ty::Str,
@@ -4130,7 +4247,7 @@ fn same_ty(a: &Ty, b: &Ty) -> bool {
 /// the step of the roadmap that checks it, and is let through until then.
 fn judged(t: &Ty) -> bool {
     match t {
-        Ty::Int | Ty::Float | Ty::Str | Ty::Bool => true,
+        Ty::Int | Ty::Float | Ty::Str | Ty::Bool | Ty::Color | Ty::Duration | Ty::Angle => true,
         Ty::List(item) | Ty::Set(item) => judged(item) || **item == Ty::Unknown,
         Ty::Map(key, value) => {
             (judged(key) || **key == Ty::Unknown) && (judged(value) || **value == Ty::Unknown)
@@ -4187,9 +4304,13 @@ fn fits(expected: &Ty, found: &Ty) -> bool {
 
 fn assignable(expected: &Ty, found: &Ty) -> bool {
     match (expected, found) {
-        (Ty::Unknown | Ty::Fn(..), _) | (_, Ty::Unknown | Ty::Fn(..)) | (Ty::Float, Ty::Int) => {
-            true
-        }
+        (Ty::Unknown | Ty::Fn(..), _)
+        | (_, Ty::Unknown | Ty::Fn(..))
+        // A colour is a number written as one, and an angle a decimal.
+        | (Ty::Float, Ty::Int | Ty::Angle)
+        | (Ty::Color, Ty::Int)
+        | (Ty::Int, Ty::Color)
+        | (Ty::Angle, Ty::Float | Ty::Int) => true,
         (Ty::List(e), Ty::List(f)) | (Ty::Set(e), Ty::Set(f)) => assignable(e, f),
         (Ty::Map(ke, ve), Ty::Map(kf, vf)) => assignable(ke, kf) && assignable(ve, vf),
         _ => expected == found,
@@ -4225,6 +4346,9 @@ fn ty_name(t: &Ty) -> String {
         Ty::List(e) => format!("List<{}>", ty_name(e)),
         Ty::Map(k, v) => format!("Map<{}, {}>", ty_name(k), ty_name(v)),
         Ty::Set(e) => format!("Set<{}>", ty_name(e)),
+        Ty::Color => "Color".to_string(),
+        Ty::Duration => "Duration".to_string(),
+        Ty::Angle => "Angle".to_string(),
         Ty::Fn(..) => "Fn".to_string(),
         Ty::Optional(t) => format!("{}?", ty_name(t)),
         Ty::Named(n) => n.as_str().to_string(),
@@ -4273,7 +4397,12 @@ fn eq_compatible(l: &Ty, r: &Ty) -> bool {
         (Ty::Str, Ty::Str)
         | (Ty::Bool, Ty::Bool)
         | (Ty::Shape(_), Ty::Shape(_) | Ty::Named(_))
-        | (Ty::Named(_), Ty::Shape(_)) => true,
+        | (Ty::Named(_), Ty::Shape(_))
+        | (Ty::Color, Ty::Color | Ty::Int)
+        | (Ty::Int, Ty::Color)
+        | (Ty::Duration, Ty::Duration)
+        | (Ty::Angle, Ty::Angle | Ty::Float)
+        | (Ty::Float, Ty::Angle) => true,
         (Ty::List(a), Ty::List(b)) | (Ty::Set(a), Ty::Set(b)) => {
             a == b || matches!(**a, Ty::Unknown) || matches!(**b, Ty::Unknown)
         }

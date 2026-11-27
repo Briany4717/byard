@@ -54,6 +54,7 @@ pub fn parse(source: &str) -> ParsedFile {
 pub fn parse_in(source: &str, edition: crate::edition::Edition) -> ParsedFile {
     let mut parser = Parser::new(source);
     parser.loose_ternary = edition >= crate::edition::Edition::E2027;
+    parser.typed_units = edition >= crate::edition::Edition::E2027;
     let Items {
         imports,
         mut views,
@@ -112,6 +113,8 @@ pub(crate) struct Parser<'a> {
     offsets: Option<Vec<u32>>,
     /// Whether `? :` binds looser than `||` (edition 2027), and not tighter.
     loose_ternary: bool,
+    /// Whether `200ms` is a `Duration` and not a count (edition 2027).
+    typed_units: bool,
 }
 
 impl<'a> Parser<'a> {
@@ -127,6 +130,7 @@ impl<'a> Parser<'a> {
             gaps: lexed.gaps,
             offsets: None,
             loose_ternary: false,
+            typed_units: false,
         }
     }
 
@@ -146,6 +150,7 @@ impl<'a> Parser<'a> {
             gaps: lexed.gaps,
             offsets: Some(offsets),
             loose_ternary: false,
+            typed_units: false,
         }
     }
 

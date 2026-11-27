@@ -86,14 +86,14 @@ View Main() {
 }
 
 //# case: colour-type-shows-as-a-colour
-//# gap: a colour is an `Int` and shows as one
+//# edition: 2027
 //# fragment
 //# text: #FF0000
 let c: Color = 0xFF0000
 Text("{c}")
 
 //# case: duration-type-keeps-its-unit
-//# gap: a duration is a count of milliseconds with no type
+//# edition: 2027
 //# fragment
 //# error: TypeMismatch
 let d = 200ms

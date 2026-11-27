@@ -305,6 +305,7 @@ fn shift_expr(expr: &mut Expr, delta: u32) {
         Expr::IntLit(_, span)
         | Expr::FloatLit(_, span)
         | Expr::AngleLit(_, span)
+        | Expr::DurationLit(_, span)
         | Expr::Ident(_, span)
         | Expr::ClassRef(_, span)
         | Expr::Return(span)

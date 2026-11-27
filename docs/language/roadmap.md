@@ -314,11 +314,30 @@ format has a width, a fill, an alignment and a percentage. What stays open:
 25. **The promise.** A program that checks under an edition keeps its meaning for as long
     as that edition exists. The suite, frozen per edition, is the test of that promise.
 
+    *Prepared, and needing the author to decide.* The reference states the promise. A lock file
+    for an edition (`BYARD_FREEZE=2026 cargo test … write_the_lock -- --ignored`) fingerprints each
+    case written in it, and `a_frozen_edition_keeps_its_cases` fails for a locked case that was
+    edited or removed. No lock is committed: freezing is the decision to name the edition stable,
+    and it cannot be taken back without breaking the promise.
+
 ## How to tell it is done
 
-- `cargo test -p byard-cli --test it conformance` prints `0 gaps open`.
-- No `Not yet` is left in the language reference.
+As of the last step:
+
+- `cargo test -p byard-cli --test it conformance` prints `0 gaps open`. **Done.**
+- No `Not yet` is left in the language reference. **Not done:** there are eight, each a thing
+  a step left out on purpose, listed in "What stays open" under that step: `///` doc comments
+  (twice), that `T?` and enums are let through in a few places, a hash for `Map` and `Set`,
+  default values on a `fn` and parameters on a `type`, a store kept between runs, a `var` only
+  ever written counting as used, and attribute errors reported only after the others.
 - Every example in the repository and every sample in the guide checks under the newest
-  edition with no warning.
+  edition with no warning. **Mostly:** every project moves to `2027` and checks clean
+  (`migration.rs`), and every guide sample checks; the one warning left is `inventory`'s
+  `UncheckableInject`, which says its Rust controller cannot be seen from `byard check`.
 - Aura Weather and Stockroom have deleted the workarounds their READMEs list under "still
-  could not be built with".
+  could not be built with". **Partly:** Aura Weather's misspelt-JSON-field workaround is gone
+  (every reply has a type); what is left in both READMEs is not the language's (the Rust half
+  not reloading, a `for` that builds every row, autofocus, a label that is part of a `Toggle`).
+
+Steps 22, 24 and 25 are prepared and need the author: the reading of the whole reference, the
+three people, and the decision to freeze an edition.

@@ -1139,7 +1139,13 @@ fn interpolation_node_spans_cover_their_source() {
     let src = "View Main() {\n    Text(\"{temp + 1:.0}\u{b0}\")\n}\n";
     let parts = text_parts(src);
     assert_eq!(at(src, interp(&parts, 0)), "temp + 1");
-    let decimals = |group, decimals| Some(NumFormat { group, decimals });
+    let decimals = |group, decimals| {
+        Some(NumFormat {
+            group,
+            decimals,
+            ..NumFormat::default()
+        })
+    };
     assert!(
         matches!(&parts[0], StrPart::Interp(_, f) if *f == decimals(false, Some(0))),
         "{parts:?}"

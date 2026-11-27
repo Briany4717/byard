@@ -104,6 +104,21 @@ part of the text.
 
 Any other character after a backslash is kept with its backslash: `"a\qb"` is `a\qb`.
 
+A text over lines is written between `"""` and `"""`. It drops the line break after the
+opening quotes and the one before the closing ones, and the indentation of the closing quotes
+from the front of every line, so it reads as it is laid out:
+
+```byld,fragment
+let notes = """
+    Run it with
+      byard dev
+    """
+Text(notes)
+```
+
+That text is `Run it with` and, on the next line, `  byard dev`. It escapes and interpolates as
+a text between single quotes does. One that never closes is `UnterminatedString`.
+
 An expression between braces is *interpolated*: it is evaluated and its text form takes its
 place. A text inside the braces is written with plain quotes, and may interpolate in turn.
 Text can nest three deep; a fourth level is `StringNestingTooDeep`.
@@ -123,16 +138,24 @@ A *format* after a `:` shapes a number:
 | `{x:.2}` | Exactly that many decimals, from 0 to 9 | `1234567.89` |
 | `{x:,}` | A comma between every three digits of the whole part | `1,234,567.891` |
 | `{x:,.2}` | Both | `1,234,567.89` |
+| `{x:12}` | At least that wide, with spaces on the left of a number and on the right of a text | `   1234567.891` |
+| `{x:<12}`, `{x:>12}`, `{x:^12}` | Padded on the right, on the left, or both | |
+| `{x:012}` | A number filled with zeros after its sign | `00001234567.891` |
+| `{x:.1%}` | The number times a hundred, and a `%` | `123456789.1%` |
 
-An `Int` takes a format too: `{7:.2}` is `7.00`. A format on something that is not a number
-is ignored. Rounding is of the number as it is stored, so `{0.125:.2}` is `0.12` and
+A format is `[<>^][0][width][,][.decimals][%]`, in that order. A width is up to 200, and a text
+already wider is not cut. A colon that belongs to a `? :` is not a format: `{on ? 1 : 2}` is `1`,
+and `{on ? 1 : 2:3}` is `1` padded to three. An `Int` takes a format too: `{7:.2}` is `7.00`.
+The decimals and the grouping are for a number and are ignored on anything else; a width and an
+alignment are for any text. Rounding is of the number as it is stored, so `{0.125:.2}` is `0.12` and
 `{2.675:.2}` is `2.67`. There is no locale: the separator is always `,` and the point
 always `.`.
 
 What follows the expression inside the braces is `UnexpectedToken`: `"{1 2 3}"` is an error, a
 `{ }` holds one expression. So is more than nine decimals.
 
-> **Not yet.** There is no padding or width. (`15_wanted_for_1_0.byd`)
+> **Not yet.** A `///` comment is a comment: the language server does not show it on hover and
+> there is no `byard doc` that writes it into a page. (`14_syntax_and_recovery.byd`)
 
 ## Types
 

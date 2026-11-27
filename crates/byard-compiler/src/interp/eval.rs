@@ -1585,7 +1585,7 @@ impl Interpreter {
                         return;
                     }
                 }
-                let sig = self.define_var(name.clone(), init);
+                let sig = self.define_typed_var(name.clone(), init, ty.as_ref());
                 if let Some(ty) = ty
                     .as_ref()
                     .filter(|t| super::shape::names_a_record(t, &self.records))
@@ -1666,7 +1666,17 @@ impl Interpreter {
 
     /// `var x = init`, evaluate `init` once, create a reactive source from it.
     pub fn define_var(&mut self, name: Symbol, init: &Expr) -> SignalId {
-        let initial = self.eval_pure(init);
+        self.define_typed_var(name, init, None)
+    }
+
+    /// [`Self::define_var`] for a `var` that may have a written type. An `Int`
+    /// where a `Float` was written is a `Float`: `var w: Float = 3` holds `3.0`,
+    /// so `w / 2` is `1.5`.
+    fn define_typed_var(&mut self, name: Symbol, init: &Expr, ty: Option<&Type>) -> SignalId {
+        let mut initial = self.eval_pure(init);
+        if let Some(ty) = ty {
+            initial = coerce_to(initial, ty);
+        }
         let sig = self.ctx.create_signal(initial);
         self.env.push(name.clone(), Value::Signal(sig));
         self.var_sigs.insert(name, sig);
@@ -1759,7 +1769,7 @@ impl Interpreter {
         }
         for member in &new_view.body {
             match member {
-                Member::Var { name, init, .. } => {
+                Member::Var { name, init, ty, .. } => {
                     if matches!(kind, ReloadKind::ReactiveCompatible) {
                         if let Some(&sig) = old.get(name) {
                             // Keep the live Signal (and its value).
@@ -1769,7 +1779,7 @@ impl Interpreter {
                             continue;
                         }
                     }
-                    self.define_var(name.clone(), init);
+                    self.define_typed_var(name.clone(), init, ty.as_ref());
                 }
                 Member::Let { name, init, .. } => self.define_let_or_fn(name, init),
                 Member::Fn {
@@ -2557,3 +2567,22 @@ fn floor_char_boundary(s: &str, i: usize) -> usize {
 #[cfg(test)]
 #[allow(clippy::float_cmp)]
 mod tests;
+
+/// `value` as the type written for it: an `Int` is a `Float` where a `Float` is
+/// wanted, and so is each item of a `List<Float>`. Anything else is as it was.
+fn coerce_to(value: Value, ty: &Type) -> Value {
+    let Type::Named { name, args, .. } = ty else {
+        return value;
+    };
+    match (value, name.as_str()) {
+        #[allow(clippy::cast_precision_loss)]
+        (Value::Int(i), "Float") => Value::Float(i as f64),
+        (Value::List(items), "List") if args.len() == 1 => Value::List(
+            items
+                .into_iter()
+                .map(|item| coerce_to(item, &args[0]))
+                .collect(),
+        ),
+        (value, _) => value,
+    }
+}

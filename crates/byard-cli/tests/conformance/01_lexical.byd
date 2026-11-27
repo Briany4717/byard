@@ -1,0 +1,227 @@
+// Lexical structure: comments, literals, strings and their escapes.
+
+//# case: line-comment-is-ignored
+//# text: a
+View Main() {
+    // a comment
+    Text("a") // trailing
+}
+
+//# case: block-comment
+//# gap: `/* */` is not a comment
+//# text: a
+View Main() {
+    /* a block comment */
+    Text("a")
+}
+
+//# case: int-literal-decimal
+//# fragment
+//# text: 42 0 7
+Text("{42} {0} {007}")
+
+//# case: int-literal-hex
+//# fragment
+//# text: 255 255 16777215
+Text("{0xFF} {0xff} {0xFFFFFF}")
+
+//# case: int-literal-max
+//# fragment
+//# text: 9223372036854775807
+Text("{9223372036854775807}")
+
+//# case: int-literal-too-large-is-an-error
+//# fragment
+//# error: UnexpectedChar
+Text("{9223372036854775808}")
+
+//# case: int-literal-with-separators
+//# gap: `1_000` lexes as `1` and a name
+//# fragment
+//# text: 1000
+Text("{1_000}")
+
+//# case: int-literal-binary
+//# gap: no binary literals
+//# fragment
+//# text: 5
+Text("{0b101}")
+
+//# case: float-literal
+//# fragment
+//# text: 0.5 12.25 3
+Text("{0.5} {12.25} {3.0}")
+
+//# case: float-literal-needs-digits-both-sides
+//# fragment
+//# error: UnexpectedToken
+Text("{.5}")
+
+//# case: float-literal-exponent
+//# gap: `1e3` reads as `1` and the rest is dropped
+//# fragment
+//# text: 1000
+Text("{1e3}")
+
+//# case: negative-literals
+//# fragment
+//# text: -3 -0.5 3
+Text("{-3} {-0.5} {- -3}")
+
+//# case: duration-literals-are-milliseconds
+//# fragment
+//# text: 200 1400 300000 1500
+Text("{200ms} {1.4s} {5min} {1.5s}")
+
+//# case: angle-literals-are-radians
+//# fragment
+//# text: 3.14 1.50
+Text("{180deg:.2} {1.5rad:.2}")
+
+//# case: bool-literals
+//# fragment
+//# text: true false
+Text("{true} {false}")
+
+//# case: string-plain
+//# fragment
+//# text: hello
+Text("hello")
+
+//# case: string-escapes
+//# fragment
+//# text: a "q" {b} \ end
+Text("a \"q\" \{b\} \\ end")
+
+//# case: string-newline-and-tab-escapes
+//# fragment
+//# text: 3
+Text("{"a\nb".len}")
+
+//# case: string-unknown-escape-is-kept
+//# fragment
+//# text: a\qb
+Text("a\qb")
+
+//# case: string-literal-newline-inside
+//# fragment
+//# text: 3
+Text("{"a
+b".len}")
+
+//# case: string-unterminated
+//# fragment
+//# error: UnterminatedString
+Text("abc)
+
+//# case: string-interpolation-expression
+//# fragment
+//# text: 1 + 2 = 3
+Text("1 + 2 = {1 + 2}")
+
+//# case: string-interpolation-nested-string
+//# fragment
+//# text: items
+Text("{2 == 1 ? "item" : "items"}")
+
+//# case: string-interpolation-nested-interpolation
+//# fragment
+//# text: a-b-c
+Text("a-{"b-{"c"}"}")
+
+//# case: string-interpolation-empty-braces
+//# fragment
+//# error: UnexpectedToken
+Text("a {} b")
+
+//# case: string-interpolation-trailing-junk
+//# gap: what follows the expression inside `{ }` is dropped without a word
+//# fragment
+//# error: UnexpectedToken
+Text("{1 2 3}")
+
+//# case: string-interpolation-unclosed
+//# fragment
+//# error: UnterminatedString
+Text("a {1 + 2")
+
+//# case: format-fixed-decimals
+//# fragment
+//# text: 3.14 3 3.1416 2.50
+Text("{3.14159:.2} {3.14159:.0} {3.14159:.4} {2.5:.2}")
+
+//# case: format-decimals-on-int
+//# fragment
+//# text: 7.00
+Text("{7:.2}")
+
+//# case: format-thousands
+//# fragment
+//# text: 1,234,567 -1,234 193,440.70 999
+Text("{1234567:,} {-1234:,} {193440.7:,.2} {999:,}")
+
+//# case: format-thousands-keeps-the-fraction
+//# fragment
+//# text: 1,234,567.891 1,234,567.89
+Text("{1234567.891:,} {1234567.891:,.2}")
+
+//# case: format-rounds-the-float-as-it-is-stored
+//# fragment
+//# text: 0.12 2.67
+Text("{0.125:.2} {2.675:.2}")
+
+//# case: format-too-many-decimals
+//# gap: more than nine decimals is accepted without a word
+//# fragment
+//# error: UnexpectedToken
+Text("{1.0:.10}")
+
+//# case: format-on-text-is-ignored
+//# fragment
+//# text: ab
+Text("{"ab":.2}")
+
+//# case: unexpected-character
+//# fragment
+//# error: UnexpectedChar
+Text("a") @
+
+//# case: identifier-with-underscore-and-digits
+//# fragment
+//# text: 3
+let _a1_b = 3
+Text("{_a1_b}")
+
+//# case: identifier-unicode-is-rejected
+//# fragment
+//# error: UnexpectedChar
+let año = 3
+Text("{año}")
+
+//# case: keyword-as-a-name
+//# error: KeywordAsName
+fn when(at: Str) -> Str => at
+View Main() { Text("x") }
+
+//# case: contextual-words-are-names
+//# fragment
+//# text: 1 2 3 4 5 6
+let on = 1
+let key = 2
+let bind = 3
+let type = 4
+let every = 5
+let if = 6
+Text("{on} {key} {bind} {type} {every} {if}")
+
+//# case: empty-file
+//# text: a
+// only a view
+View Main() { Text("a") }
+
+//# case: trailing-commas
+//# fragment
+//# text: 3 2
+let xs = [1, 2, 3,]
+let r = { a: 1, b: 2, }
+Text("{xs.len} {r.b}") #[size: 12,]

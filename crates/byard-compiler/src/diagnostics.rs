@@ -199,6 +199,8 @@ pub enum CompileError {
         name: String,
         /// Whether the attribute *should* be a property (`:`), else an event.
         expected_property: bool,
+        /// The separator that was written: `=>`, `:` or `=`.
+        written: String,
     },
     /// An intrinsic received the wrong number of positional `(...)` content
     /// arguments (RFC-0005 §5).
@@ -1484,6 +1486,16 @@ pub enum CompileError {
         /// The closest context the program declares, if any.
         hint: Option<String>,
     },
+    /// A type was written that is not built in and that nothing in the
+    /// program declares: `Qux`, or `Map<Str, Int>`.
+    UnknownType {
+        /// Source range of the type's name.
+        span: Span,
+        /// The name as written.
+        name: String,
+        /// The closest type there is, if any.
+        hint: Option<String>,
+    },
     /// A context field with no default: every field has one, so an `inject`
     /// with no provider above has something to read (RFC-0065 §1).
     ContextFieldNeedsDefault {
@@ -1673,6 +1685,7 @@ impl CompileError {
             | Self::NoneNotHandled { span, .. }
             | Self::DuplicateProvide { span, .. }
             | Self::UnknownContext { span, .. }
+            | Self::UnknownType { span, .. }
             | Self::ContextFieldNeedsDefault { span, .. }
             | Self::MisplacedProvide { span, .. }
             | Self::BadOptionalDefault { span, .. }
@@ -1826,6 +1839,7 @@ impl CompileError {
             | Self::NoneNotHandled { span, .. }
             | Self::DuplicateProvide { span, .. }
             | Self::UnknownContext { span, .. }
+            | Self::UnknownType { span, .. }
             | Self::ContextFieldNeedsDefault { span, .. }
             | Self::MisplacedProvide { span, .. }
             | Self::BadOptionalDefault { span, .. }
@@ -1981,6 +1995,7 @@ impl CompileError {
             Self::NoneNotHandled { .. } => "NoneNotHandled",
             Self::DuplicateProvide { .. } => "DuplicateProvide",
             Self::UnknownContext { .. } => "UnknownContext",
+            Self::UnknownType { .. } => "UnknownType",
             Self::ContextFieldNeedsDefault { .. } => "ContextFieldNeedsDefault",
             Self::MisplacedProvide { .. } => "MisplacedProvide",
             Self::BadOptionalDefault { .. } => "BadOptionalDefault",
@@ -2238,12 +2253,13 @@ impl CompileError {
             Self::WrongAttributeSeparator {
                 name,
                 expected_property,
+                written,
                 ..
             } => {
                 if *expected_property {
-                    format!("`{name}` is a property; use `:` not `=>`")
+                    format!("`{name}` is a property; use `:` not `{written}`")
                 } else {
-                    format!("`{name}` is an event; use `=>` not `:`")
+                    format!("`{name}` is an event; use `=>` not `{written}`")
                 }
             }
             Self::ArityMismatch {
@@ -2748,6 +2764,13 @@ impl CompileError {
                 ),
                 hint.as_deref(),
             ),
+            Self::UnknownType { name, hint, .. } => with_hint(
+                format!(
+                    "`{name}` is not a type: the types are `Int`, `Float`, `Str`, `Bool`, `List<T>`, \
+                     `Fn(…)`, and the `type`s and `enum`s the program declares"
+                ),
+                hint.as_deref(),
+            ),
             Self::ContextFieldNeedsDefault { context, name, .. } => format!(
                 "field `{name}` of context `{context}` needs a default: write \
                  `{name}: Type = value`, so a view with no provider above it has something to read"
@@ -2815,7 +2838,16 @@ impl CompileError {
             ),
             Self::TypeMismatch {
                 op, lhs_ty, rhs_ty, ..
-            } => format!("operator `{op}` cannot compare `{lhs_ty}` with `{rhs_ty}`"),
+            } => match op.as_str() {
+                "=" => format!(
+                    "a `{rhs_ty}` is not a `{lhs_ty}`: write a `{lhs_ty}` here, or change the type that was written"
+                ),
+                "+=" | "-=" => format!(
+                    "`{op}` takes a number and keeps it in a number, and a `{rhs_ty}` does not fit a `{lhs_ty}`"
+                ),
+                "++" | "--" => format!("`{op}` needs a number, and this is a `{lhs_ty}`"),
+                _ => format!("operator `{op}` cannot compare `{lhs_ty}` with `{rhs_ty}`"),
+            },
             Self::PredicateNotBool { .. } => "this predicate must evaluate to `Bool`".to_string(),
             Self::EffectInPureLambda { .. } => {
                 "a `map`/`filter` lambda must be a pure expression, no assignment or action \

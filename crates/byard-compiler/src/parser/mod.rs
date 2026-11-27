@@ -93,6 +93,9 @@ pub(crate) struct Parser<'a> {
     tokens: Vec<SpannedToken>,
     pos: usize,
     errors: Vec<CompileError>,
+    /// Where lex errors ended, in file offsets: the parser's surprise at the
+    /// first token after one is not reported again (see [`Parser::error`]).
+    gaps: Vec<u32>,
     /// For a sub-parser over a string interpolation's fragment: the file byte
     /// offset of each fragment byte, plus one past the end. The fragment is
     /// not a verbatim slice of the file (nested quotes arrive escaped as `\"`),
@@ -111,6 +114,7 @@ impl<'a> Parser<'a> {
             tokens: lexed.tokens,
             pos: 0,
             errors: lexed.errors,
+            gaps: lexed.gaps,
             offsets: None,
         }
     }
@@ -128,6 +132,7 @@ impl<'a> Parser<'a> {
             tokens: lexed.tokens,
             pos: 0,
             errors: lexed.errors,
+            gaps: lexed.gaps,
             offsets: Some(offsets),
         }
     }
@@ -314,9 +319,93 @@ impl<'a> Parser<'a> {
         Span::new(start.start, end.max(start.start))
     }
 
+    /// Consumes the `)` that closes an argument list. With something else
+    /// there it is one error, and the parser skips to the `)` that does close
+    /// the list, counting what is opened on the way, so that what is left of
+    /// the call is not read as declarations of its own. It stops short of a
+    /// `}` or `]` that closes something outside the call, and of a word that
+    /// can only begin a declaration.
+    fn expect_close_paren(&mut self) {
+        if self.eat(&Token::RParen) {
+            return;
+        }
+        self.error("')'");
+        let mut depth = 0usize;
+        while let Some(token) = self.cur() {
+            match token {
+                Token::LParen | Token::LBrace | Token::LBrack | Token::HashBracket => depth += 1,
+                Token::RParen if depth == 0 => {
+                    self.advance();
+                    return;
+                }
+                Token::RBrace | Token::RBracket if depth == 0 => return,
+                Token::RBrace | Token::RBracket | Token::RParen => depth -= 1,
+                Token::View | Token::Use | Token::Fn | Token::Let | Token::Var if depth == 0 => {
+                    return;
+                }
+                _ => {}
+            }
+            self.advance();
+        }
+    }
+
+    /// Parses what follows a lambda's `=>`. A line that begins with one of the
+    /// engine's elements is not a body but the next member, and the arrow was
+    /// left without one: that is one error here, not the element taken for a
+    /// call to a function that does not exist.
+    pub(super) fn parse_lambda_body(&mut self) -> Expr {
+        if self.at_element_on_a_new_line() {
+            self.error("a body for the lambda after `=>`, and not the next element");
+            return Expr::Error(self.cur_span());
+        }
+        self.parse_expr(0)
+    }
+
+    /// Whether the cursor is on the name of a built-in element, written as
+    /// one (`Text(`, `Box {`, `Box #[`), on a later line than the token before
+    /// it.
+    fn at_element_on_a_new_line(&self) -> bool {
+        let Some(Token::Ident(name)) = self.cur() else {
+            return false;
+        };
+        if !matches!(
+            self.peek2(),
+            Some(Token::LParen | Token::LBrace | Token::HashBracket)
+        ) || crate::interp::intrinsics::lookup(name.as_str()).is_none()
+        {
+            return false;
+        }
+        let Some((_, before)) = self.pos.checked_sub(1).and_then(|i| self.tokens.get(i)) else {
+            return false;
+        };
+        let between = self.local_offset(before.end)..self.local_offset(self.cur_span().start);
+        self.source
+            .get(between)
+            .is_some_and(|gap| gap.contains('\n'))
+    }
+
+    /// Records "expected `expected`" at the cursor, unless the cursor is on
+    /// the first token after a lex error (or at the end of the input it
+    /// swallowed): that mistake has been reported, and what the parser makes
+    /// of what is left of it is not a second one.
     fn error(&mut self, expected: &str) {
+        if self.after_lex_error() {
+            return;
+        }
         let span = self.cur_span();
         self.error_at(span, expected);
+    }
+
+    /// Whether the cursor is on the first token after the place a lex error
+    /// left behind.
+    fn after_lex_error(&self) -> bool {
+        let at = self.cur_span().start;
+        let before = self
+            .pos
+            .checked_sub(1)
+            .and_then(|i| self.tokens.get(i))
+            .map_or(0, |(_, span)| span.end);
+        self.gaps.iter().any(|gap| *gap <= at && *gap >= before)
     }
 
     fn error_at(&mut self, span: Span, expected: &str) {
@@ -468,9 +557,15 @@ impl<'a> Parser<'a> {
     /// (a `View`, `fn`, `use` or `type` outside any braces), so one mistake is
     /// one error, not one per token that follows it.
     fn skip_to_next_item(&mut self) {
-        let mut depth = 0usize;
         // The stray token itself is never the start of an item.
         self.advance();
+        self.skip_to_item_start();
+    }
+
+    /// Skips to the next token that starts an item (a `View`, `fn`, `use`,
+    /// `let` or `type` outside any braces), or to the end of the file.
+    fn skip_to_item_start(&mut self) {
+        let mut depth = 0usize;
         while let Some(tok) = self.cur() {
             match tok {
                 Token::LBrace => depth += 1,
@@ -498,8 +593,20 @@ impl<'a> Parser<'a> {
             .expect_decl_name("a type", "a type name")
             .unwrap_or_else(|| Symbol::intern(""));
         self.expect(&Token::Eq, "'='");
-        self.expect(&Token::LBrace, "'{'");
         let mut fields = Vec::new();
+        // `type P = Int` is one mistake: the braces are missing, and what
+        // follows is not a list of fields. Skip to the next item instead of
+        // reading it as one.
+        if !self.expect(&Token::LBrace, "'{'") {
+            self.skip_to_item_start();
+            return RecordDecl {
+                name,
+                fields,
+                private: false,
+                context: false,
+                span: self.span_from(start),
+            };
+        }
         while !matches!(self.cur(), Some(Token::RBrace) | None) {
             let Some(field) = self.expect_decl_name("a field", "a field name") else {
                 break;
@@ -1028,7 +1135,7 @@ impl<'a> Parser<'a> {
         let ty = self.parse_type();
         self.expect(&Token::LParen, "'('");
         let fields = self.parse_arg_list(&Token::RParen);
-        self.expect(&Token::RParen, "')'");
+        self.expect_close_paren();
         Member::Provide {
             ty,
             fields,
@@ -1206,7 +1313,7 @@ impl<'a> Parser<'a> {
         let content = if matches!(self.cur(), Some(Token::LParen)) {
             self.advance();
             let args = self.parse_arg_list(&Token::RParen);
-            self.expect(&Token::RParen, "')'");
+            self.expect_close_paren();
             args
         } else {
             Vec::new()
@@ -1342,6 +1449,25 @@ impl<'a> Parser<'a> {
                 axis: None,
                 kind: AttrKind::Prop { value },
                 span: self.span_from(start),
+            })
+        } else if matches!(self.cur(), Some(Token::Eq)) {
+            // `size = 12`: a property written as an assignment. Say so once,
+            // and read the value as a property's, so nothing after it is a
+            // second mistake.
+            self.advance();
+            let value = self.parse_arg_value();
+            let span = self.span_from(start);
+            self.errors.push(CompileError::WrongAttributeSeparator {
+                span,
+                name: name.as_str().to_string(),
+                expected_property: true,
+                written: "=".to_string(),
+            });
+            Some(Attr {
+                name,
+                axis: None,
+                kind: AttrKind::Prop { value },
+                span,
             })
         } else if self.eat(&Token::Arrow) {
             let action = self.parse_expr(0);

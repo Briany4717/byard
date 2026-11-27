@@ -1,0 +1,320 @@
+// Views: declaring, calling, parameters, defaults, slots, callbacks.
+
+//# case: view-call-positional-and-named
+//# text: a 1 | b 2 | c 3
+View Card(label: Str, n: Int) { Text("{label} {n}") }
+View Main() {
+    Card("a", 1)
+    Card(label: "b", n: 2)
+    Card("c", n: 3)
+}
+
+//# case: view-declared-after-its-use
+//# text: late
+View Main() { Late() }
+View Late() { Text("late") }
+
+//# case: view-default-parameter
+//# text: new blue | sale red
+View Badge(label: Str, color: Str = "blue") { Text("{label} {color}") }
+View Main() {
+    Badge("new")
+    Badge("sale", "red")
+}
+
+//# case: view-default-reads-an-earlier-parameter
+//# text: 2 4
+View Pair(a: Int, b: Int = a * 2) { Text("{a} {b}") }
+View Main() { Pair(2) }
+
+//# case: view-parameter-needs-a-type
+//# error: MissingAnnotation
+View Card(label) { Text(label) }
+View Main() { Card("a") }
+
+//# case: view-missing-argument
+//# error: MissingParam
+View Card(label: Str, n: Int) { Text("{label}{n}") }
+View Main() { Card("a") }
+
+//# case: view-unknown-parameter
+//# error: UnknownParam
+//# error: MissingParam
+View Badge(label: Str) { Text(label) }
+View Main() { Badge(lable: "new") }
+
+//# case: view-too-many-arguments
+//# error: ViewArityMismatch
+View Badge(label: Str) { Text(label) }
+View Main() { Badge("a", "b") }
+
+//# case: view-argument-type
+//# error: ArgumentTypeMismatch
+View Badge(label: Str) { Text(label) }
+View Main() {
+    var failed = false
+    Badge(failed)
+}
+
+//# case: view-int-where-float-is-wanted
+//# text: 3
+View Bar(w: Float) { Text("{w}") }
+View Main() { Bar(3) }
+
+//# case: view-int-argument-divides-as-a-float
+//# gap: an `Int` given to a `Float` parameter stays an `Int`, so `w / 2` truncates
+//# text: 1.5
+View Bar(w: Float) { Text("{w / 2}") }
+View Main() { Bar(3) }
+
+//# case: view-float-where-int-is-wanted
+//# error: ArgumentTypeMismatch
+View Bar(w: Int) { Text("{w}") }
+View Main() { Bar(3.5) }
+
+//# case: view-named-before-positional
+//# gap: a positional argument after a named one is accepted
+//# error: UnexpectedToken
+View Card(label: Str, n: Int) { Text("{label} {n}") }
+View Main() { Card(label: "a", 1) }
+
+//# case: view-same-argument-twice
+//# error: DuplicateParam
+View Card(label: Str) { Text(label) }
+View Main() { Card("a", label: "b") }
+
+//# case: view-duplicate-parameter
+//# gap: two parameters of one name are accepted in the declaration
+//# error: DuplicateParam
+View Card(a: Int, a: Int) { Text("{a}") }
+View Main() { Card(1, 2) }
+
+//# case: view-duplicate-name
+//# error: DuplicateViewName
+View A() { Text("a") }
+View A() { Text("b") }
+View Main() { A() }
+
+//# case: view-unknown
+//# error: UnknownView
+View Main() { Colum { Text("hi") } }
+
+//# case: view-shadows-an-element
+//# error: IntrinsicShadowed
+View Text(s: Str) { Box {} }
+View Main() { Text("a") }
+
+//# case: view-calls-itself-under-a-condition
+//# text: 2 | 1 | 0
+View Tree(n: Int) {
+    Text("{n}")
+    when n > 0 { Tree(n - 1) }
+}
+View Main() { Tree(2) }
+
+//# case: view-mutual-recursion
+//# error: RecursiveView
+View A() { B() }
+View B() { A() }
+View Main() { A() }
+
+//# case: view-lowercase-name
+//# gap: a view named in lower case is accepted, against the guide
+//# error: UnexpectedToken
+View card() { Text("a") }
+View Main() { card() }
+
+//# case: view-without-main
+//# text: only
+View Only() { Text("only") }
+
+//# case: view-state-is-per-instance
+//# text: 1 | 0
+View Counter(start: Bool) {
+    var n = 0
+    on mount => { if start { n++ } }
+    Text("{n}")
+}
+View Main() {
+    Counter(true)
+    Counter(false)
+}
+
+//# case: view-parameter-follows-the-caller
+//# text: Lima
+View Card(place: Str) { Text(place) }
+View Main() {
+    var city = "Tokyo"
+    on mount => { city = "Lima" }
+    Card(place: city)
+}
+
+//# case: view-layout-attributes-on-a-call
+//# text: a
+View Dot() { Box #[width: 12, height: 12] { Text("a") } }
+View Main() { Row { Dot() #[ml: 8, grow: 1, align_self: center] } }
+
+//# case: view-other-attribute-on-a-call
+//# error: UnknownParam
+View Dot() { Box #[width: 12, height: 12] {} }
+View Main() { Dot() #[bg: 0xFF0000] }
+
+//# case: view-trailing-action
+//# error: ViewCallAction
+View Card(label: Str, on_tap: Fn() = {}) { Box #[tap => on_tap()] { Text(label) } }
+View Main() {
+    var count = 0
+    Column { Card("Add") => count++ }
+}
+
+//# case: content-slot
+//# text: tip | Save often.
+View Callout(kind: Str, content) {
+    Column {
+        Text(kind)
+        content
+    }
+}
+View Main() { Callout(kind: "tip") { Text("Save often.") } }
+
+//# case: content-slot-sees-the-callers-names
+//# text: 5
+View Wrap(content) {
+    var n = 99
+    Column { content }
+}
+View Main() {
+    var n = 5
+    Wrap { Text("{n}") }
+}
+
+//# case: content-slot-placed-twice
+//# text: x | x
+View Twice(content) { Column { content content } }
+View Main() { Twice { Text("x") } }
+
+//# case: content-given-to-a-view-without-a-slot
+//# error: UnexpectedChildren
+View Plain() { Text("p") }
+View Main() { Plain { Text("x") } }
+
+//# case: named-slots
+//# text: W | Wi-Fi | T | About
+View Item(headline: Str, leading: Slot = none, trailing: Slot = none) {
+    Row {
+        when leading != none { leading }
+        Text(headline)
+        when trailing != none { trailing }
+    }
+}
+View Main() {
+    Item("Wi-Fi", leading: { Text("W") }, trailing: { Text("T") })
+    Item("About")
+}
+
+//# case: slot-required-and-missing
+//# error: MissingParam
+View Item(leading: Slot) { Row { leading } }
+View Main() { Item() }
+
+//# case: slot-given-a-value
+//# error: SlotArgument
+View Item(leading: Slot) { Row { leading } }
+View Main() { Item(leading: 5) }
+
+//# case: slot-passed-on
+//# gap: a required `Slot` handed to another view is `MissingParam`; the guide says it can be passed on
+//# text: deep
+View Inner(icon: Slot) { Row { icon } }
+View Outer(icon: Slot) { Inner(icon: icon) }
+View Main() { Outer(icon: { Text("deep") }) }
+
+//# case: slot-in-each-row-of-a-for
+//# text: s | s
+View Rows(content) { Column { for i in [1, 2] { content } } }
+View Main() { Rows { Text("s") } }
+
+//# case: callback
+//# text: go | 1
+View Go(on_tap: Fn() = {}) {
+    on mount => on_tap()
+    Text("go")
+}
+View Main() {
+    var count = 0
+    Go(on_tap: { count++ })
+    Text("{count}")
+}
+
+//# case: callback-with-a-value
+//# text: go | red
+View Choice(on_pick: Fn(Str) = {|_| }) {
+    on mount => on_pick("red")
+    Text("go")
+}
+View Main() {
+    var picked = "none"
+    Choice(on_pick: {|c| picked = c })
+    Text(picked)
+}
+
+//# case: callback-runs-in-the-callers-scope
+//# text: go | 1
+View Go(on_tap: Fn() = {}) {
+    var count = 50
+    on mount => on_tap()
+    Text("go")
+}
+View Main() {
+    var count = 0
+    Go(on_tap: { count++ })
+    Text("{count}")
+}
+
+//# case: callback-optional-with-none
+//# text: no | yes
+View Card(on_tap: Fn() = none) {
+    when on_tap != none { Text("yes") } else { Text("no") }
+}
+View Main() {
+    Card()
+    Card(on_tap: {})
+}
+
+//# case: callback-not-given-does-nothing
+//# text: ok
+View Card(on_tap: Fn() = none) {
+    on mount => on_tap()
+    Text("ok")
+}
+View Main() { Card() }
+
+//# case: callback-wrong-arity
+//# error: CallbackArityMismatch
+View Choice(on_pick: Fn(Str) = {|_| }) {
+    on mount => on_pick("a", "b")
+    Text("x")
+}
+View Main() { Choice() }
+
+//# case: callback-argument-of-the-wrong-type
+//# gap: what a callback is called with is not checked against `Fn(Str)`
+//# error: CallbackTypeMismatch
+View Choice(on_pick: Fn(Str) = {|_| }) {
+    on mount => on_pick(5)
+    Text("x")
+}
+View Main() { Choice() }
+
+//# case: none-compared-with-a-plain-value
+//# error: NoneNeedsOptional
+View Main() {
+    var n = 0
+    when n != none { Text("x") }
+}
+
+//# case: view-parameter-of-an-unknown-type
+//# error: UnknownType
+//# diagnostics: 1
+View Card(title: Strng) { Text("x") }
+View Main() { Text("x") }

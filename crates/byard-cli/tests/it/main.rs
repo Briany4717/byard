@@ -18,6 +18,7 @@ mod colour_motion_example;
 mod composed_controls_example;
 mod composed_slider_example;
 mod composing_components_example;
+mod conformance;
 mod context_and_optional_example;
 mod corner_smoothing_example;
 mod data_ops_example;

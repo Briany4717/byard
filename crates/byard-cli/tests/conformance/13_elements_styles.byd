@@ -1,0 +1,273 @@
+// Elements, attributes, styles, state blocks, `with`, and their checks.
+
+//# case: element-forms
+//# fragment
+//# text: a | b | c
+Text("a")
+Text("b") #[size: 12]
+Column #[gap: 4] { Text("c") }
+
+//# case: element-without-parentheses-or-attributes
+//# fragment
+//# text: a
+Column { Text("a") }
+
+//# case: attribute-unknown
+//# fragment
+//# error: UnknownAttribute
+Text("a") #[bgg: 1]
+
+//# case: attribute-keyword-typo
+//# fragment
+//# error: AttributeTypeMismatch
+Column #[align: centre] { Text("x") }
+
+//# case: attribute-value-of-the-wrong-type
+//# fragment
+//# error: AttributeTypeMismatch
+Text("a") #[size: "big"]
+
+//# case: attribute-written-twice
+//# gap: the same attribute twice is accepted; the last wins
+//# fragment
+//# error: DuplicateAttribute
+Text("a") #[size: 12, size: 14]
+
+//# case: attribute-with-equals
+//# fragment
+//# error: WrongAttributeSeparator
+Text("a") #[size = 12]
+
+//# case: attribute-sub-property
+//# fragment
+//# text: a
+Box #[translate.y: 2] { Text("a") }
+
+//# case: attribute-block-unclosed
+//# fragment
+//# error: UnexpectedToken
+Text("a") #[size: 12
+
+//# case: event-unknown
+//# fragment
+//# error: UnknownAttribute
+Button("a") #[tapp => {}]
+
+//# case: event-on-an-element-that-lacks-it
+//# fragment
+//# error: UnknownAttribute
+Text("a") #[submit => {}]
+
+//# case: event-forms
+//# fragment
+//# text: ok
+var n = 0
+Button("ok") => n++
+Box #[tap => n++, pointer_down(e) => n = n + 1] {}
+Box #[tap => { n++ n++ }] {}
+
+//# case: event-value-fields
+//# fragment
+//# text: ok
+var x = 0.0
+Box #[pointer_down(e) => x = e.x + e.y + e.width + e.height] { Text("ok") }
+
+//# case: event-value-unknown-field
+//# fragment
+//# error: UnknownField
+var x = 0.0
+Box #[pointer_down(e) => x = e.z] {}
+
+//# case: event-that-has-no-value
+//# fragment
+//# error: EventHasNoValue
+var n = 0
+Box #[tap(e) => n++] {}
+
+//# case: key-event-on-an-unreachable-box
+//# fragment
+//# error: KeyNeedsFocus
+var n = 0
+Box #[key_down => n++] {}
+
+//# case: children-on-an-element-that-takes-none
+//# fragment
+//# error: UnexpectedChildren
+Text("a") { Text("b") }
+
+//# case: trailing-action-on-an-element-that-takes-none
+//# gap: `Text("a") => n++` is accepted and never runs
+//# fragment
+//# error: ViewCallAction
+var n = 0
+Text("a") => n++
+
+//# case: style-value-and-spread
+//# fragment
+//# text: a
+let card = style { bg: 0x222222, radius: 8, p: 12 }
+Box #[..card] { Text("a") }
+
+//# case: style-spread-then-override
+//# fragment
+//# text: a
+let card = style { bg: 0x222222, p: 12 }
+Box #[..card, p: 4] { Text("a") }
+
+//# case: style-merge
+//# fragment
+//# text: a
+let base = style { bg: 0x222222 }
+let big = style { p: 24 }
+Box #[..base merge big] { Text("a") }
+
+//# case: style-class-block
+//# fragment
+//# text: a
+style {
+    .title #[size: 24, weight: bold]
+}
+Text("a") #[style: .title]
+
+//# case: style-spread-of-something-that-is-no-style
+//# fragment
+//# error: NotAStyle
+let n = 5
+Box #[..n] { Text("a") }
+
+//# case: style-with-an-unknown-attribute
+//# fragment
+//# error: UnknownAttribute
+let card = style { bgg: 0x222222 }
+Box #[..card] { Text("a") }
+
+//# case: state-block-in-a-style
+//# fragment
+//# text: a
+let btn = style {
+    bg: 0x222222
+    on hover { bg: 0x333333 }
+    on pressed { bg: 0x444444 }
+}
+Box #[..btn] { Text("a") }
+
+//# case: state-block-in-an-element
+//# fragment
+//# text: a
+Box #[bg: 0x222222] {
+    on hover { bg: 0x333333 }
+    on hover + pressed { bg: 0x444444 }
+    Text("a")
+}
+
+//# case: state-block-unknown-state
+//# fragment
+//# error: UnknownStyleState
+Box { on hovr { bg: 0x333333 } }
+
+//# case: state-block-twice
+//# gap: the same state twice in an element is accepted, though it is an error in a `style`
+//# fragment
+//# error: DuplicateStateBlock
+Box {
+    on hover { bg: 0x333333 }
+    on hover { bg: 0x444444 }
+}
+
+//# case: state-block-with-layout
+//# fragment
+//# error: LayoutInStateBlock
+Box #[tap => {}] as field {}
+Box { on field.hover { width: 10 } }
+
+//# case: state-of-another-element
+//# fragment
+//# text: a
+Box #[tap => {}] as field {}
+Box {
+    on field.hover { opacity: 0.5 }
+    Text("a")
+}
+
+//# case: state-of-an-element-nobody-named
+//# fragment
+//# error: UnknownStateTarget
+Box { on nobody.hover { opacity: 0.5 } }
+
+//# case: responsive-block
+//# fragment
+//# text: a
+Box #[p: 8] {
+    on width >= 600 { p: 24 }
+    Text("a")
+}
+
+//# case: responsive-block-unknown-breakpoint
+//# fragment
+//# error: UnknownBreakpoint
+Box { on width >= huge { p: 24 } }
+
+//# case: with-animates-a-paint-attribute
+//# fragment
+//# text: a
+var on = false
+Box #[opacity: on ? 1.0 : 0.4 with anim.spring()] { Text("a") }
+
+//# case: with-on-something-that-cannot-move
+//# fragment
+//# error: LayoutPropNotAnimatable
+var on = false
+Box #[grow: on ? 1 : 0 with anim.spring()] { Text("a") }
+
+//# case: with-an-unknown-curve
+//# fragment
+//# error: UnknownAnimation
+Box #[opacity: 1.0 with anim.sprang()] { Text("a") }
+
+//# case: with-outside-an-attribute
+//# gap: `with` on a plain `let` is accepted and does nothing
+//# fragment
+//# error: NotAnimatable
+let x = 1 with anim.spring()
+Text("{x}")
+
+//# case: keyframes
+//# fragment
+//# text: a
+Box #[opacity: anim.keyframes(0%: 0.0, 50%: 1.0 easeOut, 100%: 0.5, duration: 2s)] { Text("a") }
+
+//# case: keyframes-after-with
+//# fragment
+//# error: InvalidAnimation
+Box #[opacity: 1.0 with anim.keyframes(0%: 0.0, 100%: 0.5)] { Text("a") }
+
+//# case: anchor-name
+//# fragment
+//# text: a
+Box as field { Text("a") }
+
+//# case: text-content-must-be-text
+//# fragment
+//# error: AttributeTypeMismatch
+Text(5)
+
+//# case: intrinsic-missing-content
+//# fragment
+//# error: ArityMismatch
+Text()
+
+//# case: intrinsic-unknown-named-argument
+//# gap: a named argument an element does not have is accepted
+//# fragment
+//# error: UnknownParam
+Text("a", nope: 1)
+
+//# case: tuple-spacing-forms
+//# fragment
+//# text: a
+Box #[p: 8, m: (4, 8), radius: (4, 4, 0, 0)] { Text("a") }
+
+//# case: tuple-conflicting-fields
+//# fragment
+//# error: ConflictingSpacingField
+Box #[p: (top: 4, vertical: 8)] { Text("a") }

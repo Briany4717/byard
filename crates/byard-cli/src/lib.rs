@@ -84,6 +84,12 @@ enum Command {
         #[arg(long)]
         check: bool,
     },
+    /// Move a project to the next byld edition: rewrite its sources so they
+    /// mean what they meant, and name the edition in `byard.toml`.
+    Fix {
+        /// The project directory. Defaults to the current project.
+        path: Option<PathBuf>,
+    },
     /// Bake the AOT vector atlas for the project (RFC-0009 §4).
     Build {
         /// Path to a `.byd` file or project dir. Defaults to `byard.toml`.
@@ -409,6 +415,7 @@ pub fn main() {
         }),
         Command::Check { file, short } => commands::check::run(file.as_deref(), short),
         Command::Fmt { paths, check } => commands::fmt::run(&paths, check),
+        Command::Fix { path } => commands::fix::run(path.as_deref()),
         Command::Build { file } => commands::build::run(file.as_deref()),
         Command::Bundle {
             path,

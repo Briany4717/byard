@@ -73,7 +73,7 @@ impl Parser<'_> {
                 // by `map`/`filter`). `IDENT` not followed by `=>` is a plain
                 // identifier reference.
                 if self.eat(&Token::Arrow) {
-                    let body = Box::new(self.parse_expr(0));
+                    let body = Box::new(self.parse_lambda_body());
                     Expr::Lambda {
                         params: vec![sym],
                         types: vec![None],
@@ -740,7 +740,7 @@ impl Parser<'_> {
             Some(Token::LParen) => {
                 self.advance();
                 let args = self.parse_arg_list(&Token::RParen);
-                self.expect(&Token::RParen, "')'");
+                self.expect_close_paren();
                 let call = Expr::Call {
                     callee: Box::new(lhs),
                     args,
@@ -919,7 +919,7 @@ impl Parser<'_> {
         // Empty parens: only valid as a zero-arg lambda `() => body`.
         if self.eat(&Token::RParen) {
             if self.eat(&Token::Arrow) {
-                let body = Box::new(self.parse_expr(0));
+                let body = Box::new(self.parse_lambda_body());
                 return Expr::Lambda {
                     params: Vec::new(),
                     types: Vec::new(),
@@ -949,7 +949,7 @@ impl Parser<'_> {
             }
             self.expect(&Token::RParen, "')'");
             self.expect(&Token::Arrow, "'=>'");
-            let body = Box::new(self.parse_expr(0));
+            let body = Box::new(self.parse_lambda_body());
             return Expr::Lambda {
                 params,
                 types,
@@ -960,7 +960,7 @@ impl Parser<'_> {
         }
 
         let args = self.parse_arg_list(&Token::RParen);
-        self.expect(&Token::RParen, "')'");
+        self.expect_close_paren();
 
         if args.len() == 1 && args[0].name.is_none() {
             // Grouped expression, unwrap to the inner node.

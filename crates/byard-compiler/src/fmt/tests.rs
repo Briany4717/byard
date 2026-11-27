@@ -504,7 +504,10 @@ fn byd_files(dir: &Path, out: &mut Vec<PathBuf>) {
     for path in entries {
         let name = path.file_name().unwrap().to_string_lossy().into_owned();
         if path.is_dir() {
-            if !name.starts_with('.') && name != "target" {
+            // The conformance suite is made of programs that are wrong on
+            // purpose, so none of them is meant to format.
+            let conformance = name == "conformance" && path.ends_with("tests/conformance");
+            if !name.starts_with('.') && name != "target" && !conformance {
                 byd_files(&path, out);
             }
         } else if path.extension().is_some_and(|e| e == "byd") {

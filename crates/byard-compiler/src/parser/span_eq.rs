@@ -172,6 +172,7 @@ impl SpanEq for RecordDecl {
     fn span_eq(&self, other: &Self) -> bool {
         let Self {
             name,
+            type_params,
             fields,
             private,
             context,
@@ -179,6 +180,7 @@ impl SpanEq for RecordDecl {
             span: _,
         } = self;
         *name == other.name
+            && *type_params == other.type_params
             && *private == other.private
             && *context == other.context
             && *store == other.store

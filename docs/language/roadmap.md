@@ -206,8 +206,9 @@ What stays open:
 *Done.* `function-with-a-block-body`, `function-named-arguments` and `generic-function` hold, and
 so do the twenty-two cases added with them. What stays open:
 
-- Type parameters on `type`, `type Box<T> = { value: T }`. A type the checker knows is a
-  name with no arguments, so a generic one needs the checker to carry them.
+- ~~Type parameters on `type`, `type Box<T> = { value: T }`.~~ Done after 1.0's plan: each
+  use, `Box<Int>`, is made a record type of its own by the resolver, so the checker and the
+  interpreter see ordinary records (eleven cases in `05_records.byd`).
 - Default values on a `fn`, `fn total(items: List<Item>, tax: Float = 0.0)`. The parameter
   is parsed and not used.
 - A function that reads a name it cannot reach is told twice, `UnknownName` and

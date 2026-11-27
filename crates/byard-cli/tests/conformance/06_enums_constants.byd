@@ -1,5 +1,7 @@
 // Enums, top-level constants, top-level functions, `private`.
 
+//# covers: enums, constants, declarations-outside-a-view
+
 //# case: enum-case-and-text
 //# text: medium true false
 enum Size { small, medium, large }

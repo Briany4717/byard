@@ -1,5 +1,7 @@
 // Lexical structure: comments, literals, strings and their escapes.
 
+//# covers: source-text, words, literals, text
+
 //# case: line-comment-is-ignored
 //# text: a
 View Main() {

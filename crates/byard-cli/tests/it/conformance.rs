@@ -103,6 +103,11 @@ fn cases_of(file: &str, text: &str) -> Result<Vec<Case>, String> {
             Some((key, value)) => (key.trim(), value.trim()),
             None => (directive, ""),
         };
+        // Which sections of the reference a file is the cases of: read by
+        // `every_section_of_the_reference_has_cases`, not by a case.
+        if key == "covers" && cases.is_empty() {
+            continue;
+        }
         if key == "case" {
             if value.is_empty() {
                 return Err(format!("{file}:{number}: a case needs a name"));
@@ -457,4 +462,106 @@ fn a_nul_character_is_an_error_and_not_a_panic() {
         ..Case::default()
     };
     assert_eq!(verdict(&case), None);
+}
+
+/// The anchor GitHub gives a heading: what the guide's own links use.
+fn anchor(heading: &str) -> String {
+    heading
+        .trim()
+        .chars()
+        .filter_map(|c| match c {
+            c if c.is_alphanumeric() => Some(c.to_ascii_lowercase()),
+            '-' | '_' => Some(c),
+            c if c.is_whitespace() => Some('-'),
+            _ => None,
+        })
+        .collect()
+}
+
+/// The sections of the language reference, `##` and `###`, by anchor.
+fn reference_sections() -> BTreeSet<String> {
+    let path =
+        Path::new(env!("CARGO_MANIFEST_DIR")).join("../../docs/guide/src/language-reference.md");
+    let text = std::fs::read_to_string(&path).expect("the language reference");
+    let mut in_code = false;
+    let mut out = BTreeSet::new();
+    for line in text.lines() {
+        if line.starts_with("```") {
+            in_code = !in_code;
+        }
+        if in_code {
+            continue;
+        }
+        if let Some(heading) = line
+            .strip_prefix("### ")
+            .or_else(|| line.strip_prefix("## "))
+        {
+            out.insert(anchor(heading));
+        }
+    }
+    out
+}
+
+/// What the reference promises is what the suite checks: the sections each file
+/// of cases says it covers (`//# covers: lists, maps-and-sets`) must all be
+/// sections, and a section no file covers must be in `uncovered.txt`, which can
+/// only get shorter. A section is the unit of a rule; it is covered when a file
+/// of cases is about it, and the cases in that file are what says it is so.
+#[test]
+fn every_section_of_the_reference_has_cases() {
+    let sections = reference_sections();
+    let mut covered: BTreeSet<String> = BTreeSet::new();
+    let mut problems = Vec::new();
+    for entry in std::fs::read_dir(cases_dir()).expect("conformance dir") {
+        let path = entry.expect("entry").path();
+        if path.extension().is_none_or(|e| e != "byd") {
+            continue;
+        }
+        let text = std::fs::read_to_string(&path).expect("read case file");
+        for line in text.lines() {
+            let Some(list) = line.strip_prefix("//# covers:") else {
+                continue;
+            };
+            for name in list.split(',').map(str::trim).filter(|n| !n.is_empty()) {
+                if sections.contains(name) {
+                    covered.insert(name.to_string());
+                } else {
+                    problems.push(format!(
+                        "{}: `covers: {name}` is not a section of the language reference",
+                        file_name(&path)
+                    ));
+                }
+            }
+        }
+    }
+    let listed: BTreeSet<String> = std::fs::read_to_string(cases_dir().join("uncovered.txt"))
+        .unwrap_or_default()
+        .lines()
+        .map(str::trim)
+        .filter(|l| !l.is_empty() && !l.starts_with('#'))
+        .map(str::to_string)
+        .collect();
+    for name in &listed {
+        if !sections.contains(name) {
+            problems.push(format!("uncovered.txt: `{name}` is not a section any more"));
+        } else if covered.contains(name) {
+            problems.push(format!(
+                "uncovered.txt: `{name}` has cases now: take it off the list"
+            ));
+        }
+    }
+    for name in sections.difference(&covered) {
+        if !listed.contains(name) {
+            problems.push(format!(
+                "the section `{name}` of the reference has no cases: write some and add \
+                 `//# covers: {name}` to their file, or list it in uncovered.txt"
+            ));
+        }
+    }
+    assert!(problems.is_empty(), "{}", problems.join("\n"));
+    println!(
+        "conformance: {} of {} sections of the reference have cases",
+        covered.len(),
+        sections.len()
+    );
 }

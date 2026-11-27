@@ -1,5 +1,7 @@
 // Int and Float arithmetic, conversion, comparison and their edges.
 
+//# covers: numbers, literals, editions
+
 //# case: int-arithmetic
 //# fragment
 //# text: 5 -1 6 0 2

@@ -1,5 +1,7 @@
 // `when`, `else when`, `for`, `key`, and the statements of an action.
 
+//# covers: when, match, for, actions, lifecycle-and-timers
+
 //# case: when-true-and-false
 //# fragment
 //# text: yes | end

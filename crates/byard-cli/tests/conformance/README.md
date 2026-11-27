@@ -25,6 +25,12 @@ order are in [`docs/language/roadmap.md`](../../../../docs/language/roadmap.md),
 the language is today is in the guide's
 [language reference](../../../../docs/guide/src/language-reference.md).
 
+A file says which sections of the language reference it is the cases of, under its leading
+comment (`//# covers: lists, maps-and-sets`, by the anchor of the heading). A section no file covers
+is in `uncovered.txt`, a list that can only get shorter: the test
+`every_section_of_the_reference_has_cases` fails when a section has no cases and is not on it,
+and when one on it has cases.
+
 These files are not programs to run: several declare `Main`, and many are wrong on
 purpose. `byard fmt` and `byard check` are not meant for them.
 
@@ -44,4 +50,4 @@ purpose. `byard fmt` and `byard check` are not meant for them.
 | `12_state` | `var`, `let`, inference, reactivity, lifecycle, timers |
 | `13_elements_styles` | Elements, attributes, events, styles, states, motion |
 | `14_syntax_and_recovery` | Malformed programs: one mistake, one error, never a panic |
-| `15_wanted_for_1_0` | Features that do not exist yet, written as they are proposed |
+| `15_wanted_for_1_0` | What 1.0 needed and the language lacked, each once a gap and now a case; a new gap goes in the file of its subject |

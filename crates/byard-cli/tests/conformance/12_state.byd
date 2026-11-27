@@ -1,5 +1,7 @@
 // `var`, `let`, inference, annotations, reactivity and scope.
 
+//# covers: var, let, what-a-view-holds, types, what-the-checker-checks, what-has-to-be-written-and-what-is-inferred, stores, how-the-screen-follows, lifecycle-and-timers
+
 //# case: var-infers-from-its-first-value
 //# fragment
 //# text: 1 4.5 hi true 2

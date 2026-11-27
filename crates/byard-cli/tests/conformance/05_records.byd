@@ -1,5 +1,7 @@
 // Records and record types: fields, spread, optional fields, equality.
 
+//# covers: records, record-types, tuples
+
 //# case: literal-and-field
 //# fragment
 //# text: Ada 3

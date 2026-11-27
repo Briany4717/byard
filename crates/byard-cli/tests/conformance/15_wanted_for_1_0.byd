@@ -1,6 +1,8 @@
-// What 1.0 needs and the language does not have yet. Every case here is a
-// gap: it is written the way docs/language/proposals.md proposes, and it
-// starts to pass the day the feature lands.
+// What 1.0 needed and the language did not have: each case was a gap, written
+// the way docs/language/proposals.md proposes, and holds now that the feature
+// landed. A new gap goes in the file of its subject, marked `//# gap:`.
+
+//# covers: maps-and-sets, stores, match, colours-durations-and-angles, shared-functions
 
 //# case: enum-with-data
 //# text: failed: offline

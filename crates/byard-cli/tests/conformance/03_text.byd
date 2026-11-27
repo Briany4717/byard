@@ -1,5 +1,7 @@
 // Str: length, slicing, methods, comparison and Unicode edges.
 
+//# covers: text, values-as-text
+
 //# case: len-counts-characters
 //# fragment
 //# text: 5 0 5

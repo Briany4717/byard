@@ -1,6 +1,8 @@
 // Malformed programs: each is one mistake and should be one error, and none
 // may panic the parser or the checker.
 
+//# covers: one-mistake-one-error, source-text
+
 //# case: view-without-a-body
 //# error: UnexpectedToken
 View Main()
@@ -160,8 +162,7 @@ var xs: List<Int = []
 Text("a")
 
 //# case: only-a-comment
-//# gap: a file with no view checks clean and draws nothing; it should say there is nothing to run
-//# error: NoType
+//# error: Project
 // nothing here
 
 //# case: only-whitespace-in-a-view

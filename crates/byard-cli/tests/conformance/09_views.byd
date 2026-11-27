@@ -1,5 +1,7 @@
 // Views: declaring, calling, parameters, defaults, slots, callbacks.
 
+//# covers: views, parameters, callbacks, slots, layout-on-a-call
+
 //# case: view-call-positional-and-named
 //# text: a 1 | b 2 | c 3
 View Card(label: Str, n: Int) { Text("{label} {n}") }

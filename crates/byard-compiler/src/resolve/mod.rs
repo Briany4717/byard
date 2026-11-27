@@ -553,6 +553,13 @@ fn resolve_root(
     // The type checks run over the merged, rebased views, so their spans are
     // already program-wide. Held back while the program has parse or resolve
     // errors: a broken tree would only add follow-on noise to the real one.
+    // A program, as against a package, with no `View` in it draws nothing.
+    if r.root_library.is_none() && views.is_empty() && r.errors.is_empty() {
+        r.errors.push(crate::diagnostics::CompileError::Project {
+            span: crate::diagnostics::Span::new(0, 0),
+            message: "the program declares no `View`".to_string(),
+        });
+    }
     // The checks read the edition off the views, as the interpreter will.
     for view in &mut views {
         view.edition = edition;

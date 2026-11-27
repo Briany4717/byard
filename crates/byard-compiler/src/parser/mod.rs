@@ -484,6 +484,20 @@ impl<'a> Parser<'a> {
                     record.private = private;
                     items.records.push(record);
                 }
+                // `store Name { field: Type = default }`: a context with one
+                // instance for the program, contextual as `context` is.
+                Some(Token::Ident(word))
+                    if word.as_str() == "store"
+                        && self.peek2().is_some_and(|t| {
+                            matches!(t, Token::Ident(_)) || is_name_keyword(&t)
+                        })
+                        && matches!(self.peek3(), Some(Token::LBrace | Token::Ident(_))) =>
+                {
+                    let mut record = self.parse_context_decl();
+                    record.private = private;
+                    record.store = true;
+                    items.records.push(record);
+                }
                 // `enum Name { a, b }`, contextual as `type` is.
                 Some(Token::Ident(word))
                     if word.as_str() == "enum"
@@ -623,6 +637,7 @@ impl<'a> Parser<'a> {
                 fields,
                 private: false,
                 context: false,
+                store: false,
                 span: self.span_from(start),
             };
         }
@@ -647,6 +662,7 @@ impl<'a> Parser<'a> {
             fields,
             private: false,
             context: false,
+            store: false,
             span: self.span_from(start),
         }
     }
@@ -656,10 +672,21 @@ impl<'a> Parser<'a> {
     /// one is the checker's to say (`ContextFieldNeedsDefault`).
     fn parse_context_decl(&mut self) -> RecordDecl {
         let start = self.cur_span();
-        self.advance(); // context
+        self.advance(); // context, or store
         let name = self
             .expect_decl_name("a context", "a context name")
             .unwrap_or_else(|| Symbol::intern(""));
+        // `store Name persist "key" { … }` is the day a store is kept between
+        // runs; until then it is said so, and not read as something else.
+        if matches!(self.cur(), Some(Token::Ident(w)) if w.as_str() == "persist") {
+            self.error(
+                "'{': a store lives as long as the program runs, `persist` is not available yet",
+            );
+            self.advance();
+            if matches!(self.cur(), Some(Token::StrLit)) {
+                self.advance();
+            }
+        }
         self.expect(&Token::LBrace, "'{'");
         let mut fields = Vec::new();
         while !matches!(self.cur(), Some(Token::RBrace) | None) {
@@ -688,6 +715,7 @@ impl<'a> Parser<'a> {
             fields,
             private: false,
             context: true,
+            store: false,
             span: self.span_from(start),
         }
     }

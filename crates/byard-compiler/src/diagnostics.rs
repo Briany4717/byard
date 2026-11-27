@@ -1590,6 +1590,13 @@ pub enum CompileError {
         /// The closest context the program declares, if any.
         hint: Option<String>,
     },
+    /// `provide` of a `store`, which has the one instance the program has.
+    StoreProvided {
+        /// Source range of the `provide`.
+        span: Span,
+        /// The store.
+        name: String,
+    },
     /// A type was written that is not built in and that nothing in the
     /// program declares: `Qux`, or `Map<Str, Int>`.
     UnknownType {
@@ -1790,6 +1797,7 @@ impl CompileError {
             | Self::NoneNotHandled { span, .. }
             | Self::DuplicateProvide { span, .. }
             | Self::UnknownContext { span, .. }
+            | Self::StoreProvided { span, .. }
             | Self::UnknownType { span, .. }
             | Self::ContextFieldNeedsDefault { span, .. }
             | Self::MisplacedProvide { span, .. }
@@ -1954,6 +1962,7 @@ impl CompileError {
             | Self::NoneNotHandled { span, .. }
             | Self::DuplicateProvide { span, .. }
             | Self::UnknownContext { span, .. }
+            | Self::StoreProvided { span, .. }
             | Self::UnknownType { span, .. }
             | Self::ContextFieldNeedsDefault { span, .. }
             | Self::MisplacedProvide { span, .. }
@@ -2120,6 +2129,7 @@ impl CompileError {
             Self::NoneNotHandled { .. } => "NoneNotHandled",
             Self::DuplicateProvide { .. } => "DuplicateProvide",
             Self::UnknownContext { .. } => "UnknownContext",
+            Self::StoreProvided { .. } => "StoreProvided",
             Self::DuplicateField { .. } => "DuplicateField",
             Self::UnknownType { .. } => "UnknownType",
             Self::ContextFieldNeedsDefault { .. } => "ContextFieldNeedsDefault",
@@ -2981,6 +2991,10 @@ impl CompileError {
             Self::DuplicateProvide { name, .. } => format!(
                 "this view already provides `{name}`: write one `provide {name}(…)` with every \
                  field you set"
+            ),
+            Self::StoreProvided { name, .. } => format!(
+                "`{name}` is a `store`: the program has one of it, which a view reads and writes \
+                 with `inject {name} as …`, so there is nothing to provide: delete the `provide`"
             ),
             Self::UnknownContext { name, hint, .. } => with_hint(
                 format!(

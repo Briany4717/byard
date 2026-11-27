@@ -693,6 +693,42 @@ context := "context" NAME "{" (NAME ":" type "?"? "=" expr ","?)* "}"
 A context is a set of values with defaults that a view gives to everything it draws. See
 [`provide` and `inject`](#provide-and-inject).
 
+### Stores
+
+```text
+store := "store" NAME "{" (NAME ":" type "?"? "=" expr ","?)* "}"
+```
+
+A `store` is state above the views: a context with **one instance for the whole program**,
+which any view reads and writes. It is read and written through the same `inject`, and a
+write is seen by every view that reads the field, field by field:
+
+```byld
+type User = { name: Str }
+store Session { user: User? = none }
+
+View Header() {
+    inject Session as session
+    Text(session.user?.name ?? "Guest")
+    Button("Sign out") => session.user = none
+}
+
+View Main() {
+    inject Session as session
+    on mount => { session.user = { name: "Ada" } }
+    Header()
+}
+```
+
+Each field has a type and a default, as a context's does (`ContextFieldNeedsDefault`), and a
+write is a value of that type (`TypeMismatch`) to a field the store has (`UnknownField`). `=`, `+=`,
+`-=`, `++` and `--` work on a field. A store is never provided: `provide` of one is
+`StoreProvided`. It starts again when the program does; keeping it between runs, `store Name
+persist "key" { … }`, is not available yet, and is a syntax error that says so. A program with no
+`store` is as it was.
+
+> **Not yet.** A store is not kept between runs. (`12_state.byd`)
+
 ### `use`
 
 ```text

@@ -130,7 +130,6 @@ View Pill(n: Int? = none) {
 View Main() { Pill(n: 3) }
 
 //# case: global-store
-//# gap: there is no state above the views
 //# text: 1
 store Session { count: Int = 0 }
 View Bump() {

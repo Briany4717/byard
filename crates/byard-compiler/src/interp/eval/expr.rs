@@ -955,6 +955,48 @@ impl Interpreter {
                 let s = format!(".{class}");
                 Box::new(move |_| Value::Str(s.clone()))
             }
+            // `s.count = 1`, `s.count += 1` and `s.count++` on a store write
+            // the signal of that field, which every view reading it follows.
+            Expr::Assign { target, .. } | Expr::Postfix { target, .. }
+                if self.written_store_field(target).is_some() =>
+            {
+                let Some(sig) = self.written_store_field(target) else {
+                    return Box::new(|_| Value::Unit);
+                };
+                let saturate = self.saturates();
+                match expr {
+                    Expr::Assign {
+                        op, value, span, ..
+                    } => {
+                        if let Some(noop) = self.refuse_write_here(target, *span) {
+                            return noop;
+                        }
+                        let op = *op;
+                        let mut rhs = self.lower_value(value, payload_name);
+                        Box::new(move |ctx| {
+                            let val = rhs(ctx);
+                            if RETURNING.with(std::cell::Cell::get) {
+                                return Value::Unit;
+                            }
+                            let new = assigned(op, &ctx.peek_signal(sig), val, saturate);
+                            ctx.write_signal(sig, new);
+                            Value::Unit
+                        })
+                    }
+                    Expr::Postfix { op, span, .. } => {
+                        if let Some(noop) = self.refuse_write_here(target, *span) {
+                            return noop;
+                        }
+                        let op = *op;
+                        Box::new(move |ctx| {
+                            let cur = ctx.peek_signal(sig).as_int().unwrap_or(0);
+                            ctx.write_signal(sig, Value::Int(stepped(op, cur, saturate)));
+                            Value::Unit
+                        })
+                    }
+                    _ => Box::new(|_| Value::Unit),
+                }
+            }
             // `u.score = 10` is `u = { ..u, score: 10 }`.
             Expr::Assign { target, .. } | Expr::Postfix { target, .. }
                 if matches!(**target, Expr::Member { .. } | Expr::Index { .. })
@@ -2693,6 +2735,27 @@ impl Interpreter {
     /// other than a `var`.
     pub fn eval_action(&mut self, expr: &Expr) -> Result<Value, CompileError> {
         if let Expr::Assign { target, .. } | Expr::Postfix { target, .. } = expr {
+            if let Some(sig) = self.written_store_field(target) {
+                let saturate = self.saturates();
+                match expr {
+                    Expr::Assign { op, value, .. } => {
+                        let rhs = if self.is_none_word(value) {
+                            Value::Unit
+                        } else {
+                            self.eval_pure(value)
+                        };
+                        let new = assigned(*op, &self.ctx.peek_signal(sig), rhs, saturate);
+                        self.ctx.write_signal(sig, new);
+                    }
+                    Expr::Postfix { op, .. } => {
+                        let cur = self.ctx.peek_signal(sig).as_int().unwrap_or(0);
+                        self.ctx
+                            .write_signal(sig, Value::Int(stepped(*op, cur, saturate)));
+                    }
+                    _ => {}
+                }
+                return Ok(Value::Unit);
+            }
             if matches!(**target, Expr::Member { .. } | Expr::Index { .. })
                 && self.resolve_theme_scheme_target(target).is_none()
             {
@@ -2845,6 +2908,15 @@ impl Interpreter {
             return Some(Box::new(|_| Value::Unit));
         }
         None
+    }
+
+    /// The signal a write to `target` is for, when `target` is the field of
+    /// the handle of a store.
+    fn written_store_field(&self, target: &Expr) -> Option<SignalId> {
+        let Expr::Member { base, field, .. } = target else {
+            return None;
+        };
+        self.store_signal(base, field)
     }
 
     fn resolve_var(&self, target: &Expr, span: Span) -> Result<SignalId, CompileError> {

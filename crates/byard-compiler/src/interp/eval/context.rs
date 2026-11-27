@@ -15,13 +15,17 @@
 use std::rc::Rc;
 
 use super::{CtxNode, Interpreter};
-use crate::interp::env::Value;
+use crate::interp::env::{SignalId, Value};
 use crate::parser::ast::{Expr, Member, RecordField, Type, ViewDecl};
 use crate::symbol::Symbol;
 
 /// The field a context handle starts with, which tells it from a record of
 /// data: no program can write the name.
 const HANDLE_MARK: &str = "$context";
+
+/// The second entry of the handle of a store: what tells a write to a field
+/// that it is the program's own state and not a provider's.
+const STORE_MARK: &str = "$store";
 
 /// Whether `expr` is the word `none`.
 fn is_none(expr: &Expr) -> bool {
@@ -122,6 +126,10 @@ impl Interpreter {
     /// `inject Name as handle` for a context: the nearest provider's fields,
     /// or the defaults.
     pub(super) fn inject_context(&mut self, context: &Symbol, handle: &Symbol) {
+        if self.store_names.contains(context) {
+            self.inject_store(context, handle);
+            return;
+        }
         let mut node = self.ctx_chain.as_ref();
         let found = loop {
             match node {
@@ -142,6 +150,56 @@ impl Interpreter {
         record.push((Symbol::intern(HANDLE_MARK), Value::Unit));
         record.extend(fields);
         self.env.push(handle.clone(), Value::Record(record));
+    }
+
+    /// `inject Name as handle` for a store: its one instance, whose every field
+    /// is a signal of its own, made the first time anything asks.
+    fn inject_store(&mut self, store: &Symbol, handle: &Symbol) {
+        if !self.stores.contains_key(store) {
+            let decl = self.contexts.get(store).cloned().unwrap_or_default();
+            let signals: Vec<(Symbol, SignalId)> = decl
+                .iter()
+                .map(|f| {
+                    let start = match &f.default {
+                        Some(d) if !is_none(d) => self.eval_pure(d),
+                        _ => Value::Unit,
+                    };
+                    (f.name.clone(), self.ctx.create_signal(start))
+                })
+                .collect();
+            self.stores.insert(store.clone(), signals);
+        }
+        let mut record = vec![
+            (Symbol::intern(HANDLE_MARK), Value::Unit),
+            (Symbol::intern(STORE_MARK), Value::Unit),
+        ];
+        record.extend(
+            self.stores[store]
+                .iter()
+                .map(|(name, sig)| (name.clone(), Value::Signal(*sig))),
+        );
+        self.env.push(handle.clone(), Value::Record(record));
+    }
+
+    /// The signal of `field` on `base` when `base` is the handle of a store:
+    /// what a write to it writes.
+    pub(super) fn store_signal(&self, base: &Expr, field: &Symbol) -> Option<SignalId> {
+        let Expr::Ident(name, _) = base else {
+            return None;
+        };
+        if self.lambda_params.contains(name) {
+            return None;
+        }
+        let Value::Record(fields) = self.env.lookup(name)? else {
+            return None;
+        };
+        if fields.get(1).map(|(k, _)| k.as_str()) != Some(STORE_MARK) {
+            return None;
+        }
+        fields.iter().find_map(|(k, v)| match v {
+            Value::Signal(sig) if k == field => Some(*sig),
+            _ => None,
+        })
     }
 
     /// The value of `field` on `base` when `base` is the handle of an injected

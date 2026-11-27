@@ -298,6 +298,28 @@ fn collect_member_symbols(doc: &Document, members: &[Member], out: &mut Vec<Docu
                     },
                 });
             }
+            Member::Match { arms, span, .. } => {
+                let range = doc.line_index.span_to_range(&doc.content, *span);
+                let mut children = Vec::new();
+                for arm in arms {
+                    collect_member_symbols(doc, &arm.body, &mut children);
+                }
+                #[allow(deprecated)]
+                out.push(DocumentSymbol {
+                    name: "match".to_string(),
+                    detail: Some("One arm of several".to_string()),
+                    kind: SymbolKind::BOOLEAN,
+                    tags: None,
+                    deprecated: None,
+                    range,
+                    selection_range: range,
+                    children: if children.is_empty() {
+                        None
+                    } else {
+                        Some(children)
+                    },
+                });
+            }
             Member::When {
                 then, els, span, ..
             } => {

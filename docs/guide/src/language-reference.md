@@ -4,6 +4,11 @@ The chapters before this one teach byld. This one states it: every form the lang
 what it means, and what happens at its edges. Read it when the guide leaves a question open,
 such as what `-7 % 3` is, or which of two operators binds tighter.
 
+This page is the specification of byld. Where it and the language disagree, one of them has
+a bug, and the conformance suite says which: a rule here is the rule, and a program that does
+otherwise is told in a case. A rule not written here is not a rule, and a case with nothing on
+this page to be the case of is to be given a rule or deleted.
+
 Three things keep this page true.
 
 - Every `byld` sample here is checked by `cargo test`, as every sample in the guide is.
@@ -30,9 +35,11 @@ var n = 1 let m = n + 2 Text("{m}")
 
 A comment starts at `//` and runs to the end of the line.
 
-> **Not yet.** There is no block comment `/* … */`, and `///` is an ordinary comment that no
-> tool reads. A file that starts with a byte order mark is refused. (`01_lexical.byd`,
-> `14_syntax_and_recovery.byd`)
+`/* … */` is a comment too, and nests, so a block of code can be commented out whatever
+comments it holds. One that is never closed is `UnterminatedComment`. A byte order mark at the
+start of a file is skipped.
+
+> **Not yet.** `///` is an ordinary comment that no tool reads.
 
 ## Words
 
@@ -63,12 +70,12 @@ Text("{on} {key} {type}")
 
 | Kind | Written | Value |
 |------|---------|-------|
-| Whole number | `42`, `007`, `0xFF`, `0xff` | An `Int`. Decimal or hexadecimal. |
-| Fraction | `0.5`, `12.25` | A `Float`. Digits on both sides of the point: `.5` and `5.` are errors. |
+| Whole number | `42`, `007`, `1_000`, `0xFF`, `0b101` | An `Int`. Decimal, hexadecimal or binary; `_` may separate digits. |
+| Fraction | `0.5`, `12.25`, `1e3`, `1.5e-3` | A `Float`. Digits on both sides of the point: `.5` and `5.` are errors. With an exponent it is a `Float` even when it is whole. |
 | Truth | `true`, `false` | A `Bool`. |
 | Text | `"hello"` | A `Str`. |
-| Angle | `90deg`, `1.5rad` | A `Float`, in radians. |
-| Duration | `200ms`, `1.4s`, `5min` | An `Int`, in milliseconds: `1.4s` is `1400`. |
+| Angle | `90deg`, `1.5rad` | A `Float`, in radians. From edition 2027 an `Angle`. |
+| Duration | `200ms`, `1.4s`, `5min` | An `Int`, in milliseconds: `1.4s` is `1400`. From edition 2027 a `Duration`. |
 | Percentage | `50%` | Only as a step of `anim.keyframes`. |
 | Nothing | `none` | Only for an optional parameter. See [optional values](#optional-values). |
 
@@ -84,8 +91,8 @@ Text("{0xFF} {1.4s} {5min} {180deg:.2}")
 
 That draws `255 1400 300000 3.14`.
 
-> **Not yet.** `1_000`, `1e3` and `0b101` are not literals. `1_000` is the number `1`
-> followed by the name `_000`, and inside a text `{1e3}` draws `1`. (`01_lexical.byd`)
+A number that runs into letters and makes no literal, `12abc` or `1_000x`, is one
+`UnexpectedChar`, and not a number and a name.
 
 ### Text
 
@@ -101,6 +108,21 @@ part of the text.
 | `\{`, `\}` | A brace |
 
 Any other character after a backslash is kept with its backslash: `"a\qb"` is `a\qb`.
+
+A text over lines is written between `"""` and `"""`. It drops the line break after the
+opening quotes and the one before the closing ones, and the indentation of the closing quotes
+from the front of every line, so it reads as it is laid out:
+
+```byld,fragment
+let notes = """
+    Run it with
+      byard dev
+    """
+Text(notes)
+```
+
+That text is `Run it with` and, on the next line, `  byard dev`. It escapes and interpolates as
+a text between single quotes does. One that never closes is `UnterminatedString`.
 
 An expression between braces is *interpolated*: it is evaluated and its text form takes its
 place. A text inside the braces is written with plain quotes, and may interpolate in turn.
@@ -121,21 +143,30 @@ A *format* after a `:` shapes a number:
 | `{x:.2}` | Exactly that many decimals, from 0 to 9 | `1234567.89` |
 | `{x:,}` | A comma between every three digits of the whole part | `1,234,567.891` |
 | `{x:,.2}` | Both | `1,234,567.89` |
+| `{x:12}` | At least that wide, with spaces on the left of a number and on the right of a text | `   1234567.891` |
+| `{x:<12}`, `{x:>12}`, `{x:^12}` | Padded on the right, on the left, or both | |
+| `{x:012}` | A number filled with zeros after its sign | `00001234567.891` |
+| `{x:.1%}` | The number times a hundred, and a `%` | `123456789.1%` |
 
-An `Int` takes a format too: `{7:.2}` is `7.00`. A format on something that is not a number
-is ignored. Rounding is of the number as it is stored, so `{0.125:.2}` is `0.12` and
+A format is `[<>^][0][width][,][.decimals][%]`, in that order. A width is up to 200, and a text
+already wider is not cut. A colon that belongs to a `? :` is not a format: `{on ? 1 : 2}` is `1`,
+and `{on ? 1 : 2:3}` is `1` padded to three. An `Int` takes a format too: `{7:.2}` is `7.00`.
+The decimals and the grouping are for a number and are ignored on anything else; a width and an
+alignment are for any text. Rounding is of the number as it is stored, so `{0.125:.2}` is `0.12` and
 `{2.675:.2}` is `2.67`. There is no locale: the separator is always `,` and the point
 always `.`.
 
-> **Not yet.** What follows the expression inside the braces is dropped without a word:
-> `"{1 2 3}"` draws `1`. More than nine decimals is accepted and not honoured. There is no
-> padding or width. (`01_lexical.byd`)
+What follows the expression inside the braces is `UnexpectedToken`: `"{1 2 3}"` is an error, a
+`{ }` holds one expression. So is more than nine decimals.
+
+> **Not yet.** A `///` comment is a comment: the language server does not show it on hover and
+> there is no `byard doc` that writes it into a page. (`14_syntax_and_recovery.byd`)
 
 ## Types
 
 | Type | Holds |
 |------|-------|
-| `Int` | A whole number. A colour is an `Int`, and `Color` is another name for it. |
+| `Int` | A whole number. A colour is an `Int`, and `Color` is another name for it. From edition 2027 `Color`, `Duration` and `Angle` are types of their own: see [colours, durations and angles](#colours-durations-and-angles). |
 | `Float` | A number with a fraction |
 | `Str` | Text |
 | `Bool` | `true` or `false` |
@@ -184,10 +215,15 @@ another, and the only thing that changes is which value a `var` holds.
   parameter and one given to `reduce` two, and what `filter` and `find` give back is a `Bool`
   (`PredicateNotBool`). The parameter of such a lambda is of the item's type when the list is
   of numbers, text or truth;
+- a record literal given where a declared record is wanted (a `var`'s first value or a later
+  one, an item of a list) writes only fields the record has (`UnknownField`), of the types it
+  has (`TypeMismatch`), and all the fields it needs, the ones not marked `?`;
+- `for` goes over a list, a set or a map;
 - every type written is one: built in (`Int`, `Float`, `Str`, `Bool`, `Color`, `List<T>`,
-  `Fn(…)`, `Slot`, and the `Screen` and `Window` the language provides) or declared by the
-  program as a `type`, an `enum` or a `context`, or another package's as `package.Name`. Any
-  other name, `Qux` or `Map<Str, Int>`, is `UnknownType` and suggests the nearest;
+  `Map<K, V>`, `Set<T>`, `Fn(…)`, `Slot`, and the `Screen` and `Window` the language provides)
+  or declared by the program as a `type`, an `enum` or a `context`, or another package's as
+  `package.Name`. Any other name, `Qux` or `Dict<Str, Int>`, is `UnknownType` and suggests the
+  nearest;
 - the first value of a `var` or `let` has the type written for it, each item of a list on its
   own (`var n: Int = "a"` and `var xs: List<Int> = [1, "a"]` are `TypeMismatch`);
 - what is written to a `var` is a value it can hold: `n = e` a value of its type, `n += e` and
@@ -205,9 +241,6 @@ else converts.
 > `07_operators.byd`). The types judged so far are the scalars and lists of them; a record,
 > an enum or an optional is let through until its own step:
 >
-> - a record literal against its declared type;
-> - the condition of `when`, `if` and `? :`, which should be a `Bool`;
-> - writing to a `let`, a parameter, a loop variable or a literal;
 > - two `var`s of one name in a view.
 >
 > Until they are, such a program runs, and what it draws is whatever the values happen to
@@ -224,12 +257,15 @@ What a value looks like in a text, `"{x}"`, and joined to one with `+`:
 | `Bool` | `true` or `false` |
 | `Str` | Itself |
 | An enum case | Its name: `medium` |
+| A list | From edition 2027, its items as written, `[1, 2, 3]`, a text in it bare: `[a, b]`. Before, nothing. |
+| A record | From edition 2027, its fields, `{ name: Ada, score: 3 }`. Before, nothing. |
 | Nothing | Nothing at all: an empty text |
 
-A list is shown with `join`. See [lists](#lists).
+A list is also shown with `join`. See [lists](#lists).
 
-> **Not yet.** A list written straight into a text draws nothing. A colour is shown as its
-> number. (`03_text.byd`, `15_wanted_for_1_0.byd`)
+From edition 2027 a `Color` is shown as `#RRGGBB` (`#RRGGBBAA` with an alpha), a `Duration`
+as its milliseconds, `200ms`, and an `Angle` in degrees, `90deg`. Before, each is the number it
+is.
 
 ## Expressions
 
@@ -242,7 +278,7 @@ except where noted.
 |-------|-----------|-------|
 | 1 | `=` `+=` `-=` | Assignment. Groups from the right. In an [action](#actions) only. |
 | 2 | `with` | Animation of an attribute's value |
-| 3 | `\|\|` | Or |
+| 3 | `\|\|` | Or. (In edition 2027 levels 3 and 4 swap: `? :` is looser than `\|\|`.) |
 | 4 | `? :` | Choice. Groups from the right. |
 | 5 | `&&` | And |
 | 6 | `==` `!=` `<` `<=` `>` `>=` | Comparison. Does not chain: `1 < 2 < 3` is an error. |
@@ -257,12 +293,11 @@ except where noted.
 So `1 + 2 * 3` is `7`, `-a * 3` is `(-a) * 3`, `!a && b` is `(!a) && b`, `a ?? 0 + 1` is
 `a ?? (0 + 1)`, and `a ?? 0 == 0` is `(a ?? 0) == 0`. Parentheses group as they do anywhere.
 
-`? :` binds tighter than `||`. `a || b ? x : y` is `a || (b ? x : y)`, which is not what C
-or JavaScript make of it, and the checker warns (`MixedTernaryPrecedence`). Write the
-parentheses.
-
-> **Not yet.** This precedence is a trap, and is to change so that `? :` is looser than
-> `||`. (`07_operators.byd`)
+In edition 2026 `? :` binds tighter than `||`: `a || b ? x : y` is `a || (b ? x : y)`, which
+is not what C or JavaScript make of it, and the checker warns (`MixedTernaryPrecedence`). In
+edition 2027 `? :` is looser than `||`, as it is there: `a || b ? x : y` is
+`(a || b) ? x : y`. `byard fix` writes the parentheses that keep an old program meaning what
+it meant.
 
 ### Numbers
 
@@ -274,12 +309,14 @@ parentheses.
 - **`%` is the remainder**, with the sign of the left side: `7 % 3` is `1`, `-7 % 3` is
   `-1`, `7 % -3` is `1`. On `Float`s too: `7.5 % 2` is `1.5`.
 - **Division and remainder by zero are `0`**, of an `Int` and of a `Float`, and the program
-  goes on.
-- **An `Int` that overflows wraps around**: one more than the largest `Int` is the
-  smallest. It never stops the program.
+  goes on. A zero written as the divisor, `n / 0`, is the warning `DivisionByZero`.
+- **An `Int` that overflows wraps around** in edition 2026: one more than the largest `Int`
+  is the smallest. In edition 2027 it **stops at the largest or the smallest** instead,
+  in `+`, `-`, `*`, `/`, `-x`, `abs()`, `+=`, `-=`, `++` and `--`. Neither stops the program.
 
 ```byld,fragment
-Text("{7 / 2} {-7 / 2} {7 / 2.0} {-7 % 3} {1 / 0}")
+let none = 0
+Text("{7 / 2} {-7 / 2} {7 / 2.0} {-7 % 3} {1 / none}")
 ```
 
 That draws `3 -3 3.5 -1 0`.
@@ -287,8 +324,8 @@ That draws `3 -3 3.5 -1 0`.
 `<`, `<=`, `>` and `>=` compare two numbers, an `Int` with a `Float` included: `1 == 1.0` is
 `true`.
 
-> **Not yet.** Dividing by zero and overflowing are silent. Both are to be reported while
-> developing. (`02_numbers.byd`)
+A zero divisor that is only known when the program runs, and an overflow, are not reported:
+only the written zero is. What the roadmap still has to do about them is under step 10.
 
 | Method | On | Result |
 |--------|----|--------|
@@ -309,7 +346,10 @@ a number does not have is `UnknownMethod`.
 operator takes a text and a number. `==` and `!=` compare two texts exactly, and `<` and its
 kin order them by character code, so `"B" < "a"` and `"10" < "9"` are `true`.
 
-`len` is a field: the number of characters. A character is a Unicode code point.
+`len` is a field: the number of characters. In edition 2026 a character is a Unicode code
+point; from edition 2027 it is what a reader sees as one (a grapheme cluster), so a family
+emoji has a `len` of 1, and `slice`, `indexOf` and `split("")` count and cut the same way.
+`s[i]` is the character at `i`, or nothing past the end.
 
 | Method | Result |
 |--------|--------|
@@ -331,17 +371,15 @@ Text("{"héllo".len} {"héllo".slice(1, 3)} {"12".toInt() ?? 0} {"x".toInt() ?? 
 
 That draws `5 él 12 0`.
 
-> **Not yet.** A character is a code point and not what a reader sees as one, so a family
-> emoji has a `len` of 5. `s[i]` on a text is nothing. (`03_text.byd`)
-
 ### Truth
 
 `&&`, `||` and `!` take `Bool`s. `&&` and `||` stop as soon as the answer is known, so the
 right side may depend on the left: `xs.len > 0 && xs[0] > 5`. `a ? b : c` evaluates `a`,
 then only the arm it picks.
 
-> **Not yet.** `1 && true` is accepted, though `!5` is an error. The condition of `? :` is
-> not checked to be a `Bool`, nor that its two arms are of one type. (`07_operators.byd`)
+A number, a text, a list or a record where a `Bool` goes (`1 && true`, `!5`) is `TypeMismatch`.
+So is the condition of `when`, `if` and `? :`, and so are the two arms of a `? :` of two types,
+though an `Int` beside a `Float` is a `Float`.
 
 ### Lists
 
@@ -373,17 +411,27 @@ Every method returns a new value and leaves the list as it was.
 | `map(f)` | `f(item)` for each |
 | `filter(f)` | The items for which `f(item)` is `true` |
 | `find(f)` | The first of those, or nothing |
+| `get(i)` | The item at `i`, or nothing past either end: a `T?` |
 | `sort()` | Smallest first, numbers or texts |
 | `sortBy(f)` | Ordered by `f(item)`, smallest first. Items that tie stay in the order they had. |
 | `reduce(start, f)` | `f(acc, item)` over each, from `start`. `start` for an empty list. |
 | `min()`, `max()` | The smallest or largest, or nothing |
+| `first()`, `last()` | The item at either end, or nothing: a `T?` |
+| `any(f)`, `all(f)` | Whether `f(item)` is `true` for some, or for every, item (`all` of none is `true`) |
+| `count(f)` | How many items `f(item)` is `true` for |
+| `sum()` | The items added up, `0` for none. A list of anything but numbers is `TypeMismatch`. |
+| `insertAt(i, x)` | With `x` put before the item at `i`; `i` may be the length, to put it last. Unchanged for a position the list does not have. |
+| `updateAt(i, x)` | With `x` in the place of the item at `i`. Unchanged when there is none. |
 
 A function given to one of these must be *pure*: it computes and returns, and assigns
 nothing (`EffectInPureLambda`).
 
-> **Not yet.** An index past the end is silent, and arithmetic on the nothing it gives joins
-> text. `for` over something that is not a list draws nothing and says nothing.
-> (`04_lists.byd`)
+An index written as a number that a list written beside it does not have, `xs[5]` where `xs`
+is a `let` of one item, reads as nothing and is the warning `IndexOutOfRange`; it is not told
+where something checks first (the right of `&&` and `??`, an arm of `? :`).
+
+An index that is only known to be past the end when the program runs is not reported, and
+arithmetic on the nothing it gives joins text.
 
 ### Records
 
@@ -398,18 +446,87 @@ Text("{u.score} {v.score} {v.name}")
 
 That draws `3 10 Ada`.
 
-A field a record does not have is nothing, and so is a field of nothing: `u.a.b.c` is
-nothing as soon as one step is missing. With a [declared type](#record-types), a field the
-type does not have is `UnknownField` instead.
+A record literal has the type its fields give it, and a field it does not have is
+`UnknownField`, with the nearest one: `u.nmae` on `{ name: "Ada" }`. So has a record with a
+[declared type](#record-types). A field read to the left of a `??` may be missing, which is
+what the default is for: `u.email ?? "none"` is `none`, and so is `u.a.b.c ?? "none"` as soon
+as one step is missing. Only a value that came from outside, such as a reply from a server,
+has fields the checker cannot know, and reading one is as free as it ever was.
 
-Two records are equal when they have the same fields, with equal values, in the same order.
+A field written twice in one literal is `DuplicateField`. The type of `{ ..u, k: v }` is that
+of `u` with `k` set, and a `var` that began as one record holds records with those fields.
+
+Two records are equal when they have the same fields, with equal values, whatever order the
+fields were written in: `{ a: 1, b: 2 } == { b: 2, a: 1 }`.
 
 `{}` alone is an empty action, not an empty record.
 
-> **Not yet.** `u.score = 10` is accepted and changes nothing; write
-> `u = { ..u, score: 10 }`. A field misspelt on a record with no declared type is nothing,
-> silently. The same field twice in a literal is accepted. Two records with the same fields
-> in another order are not equal. (`05_records.byd`)
+`u.score = 10` writes a field. It means `u = { ..u, score: 10 }`, and `u.a.b = 2` the same one
+level down, so the other fields are kept and `u` has to be a `var` (`NotAssignable` for a `let`
+or a loop variable). `+=`, `-=`, `++` and `--` work on a field too. A field the record does not
+have, or a value it cannot hold, is `TypeMismatch`.
+
+`xs[i] = v` writes an item, as `u.score = 10` writes a field: it means `xs = xs.updateAt(i,
+v)`, and `todos[i].done = true` means `todos = todos.updateAt(i, { ..todos[i], done: true })`.
+`xs` has to be a `var`, `v` a value the list holds, and a position the list does not have
+changes nothing. `+=`, `-=`, `++` and `--` work on an item too.
+
+### Maps and sets
+
+```byld,fragment
+var stock: Map<Str, Int> = ["A-100": 3, "B-200": 0]
+var tags: Set<Str> = Set(["new", "sale"])
+
+on mount => {
+    stock = stock.set("C-300", 12)
+    tags = tags.add("clearance")
+}
+Text("{stock["A-100"] ?? 0} {stock.len} {tags.contains("sale")}")
+for sku, qty in stock { Text("{sku}: {qty}") }
+```
+
+A `Map<K, V>` holds each key once with its value, written `["ada": 36, "bo": 1]`, and `[:]` for
+one with nothing in it, which needs its type written (`CannotInfer`). The keys are of one type
+and so are the values; a pair that does not fit the type written is `TypeMismatch`, at the
+pair. A key written twice keeps its place and the last value. `m[k]` is the value, or nothing
+when the key is not there: a `V?`, which `??` defaults. `m.len` is how many there are,
+`m.set(k, v)` is the map with `k` set (its place kept if it was there, last if not), and
+`m.remove(k)` is the map without it. A `Set<T>` is made by `Set(["a", "b"])`, with each item
+once (`Set()` has none), and has `s.len`, `s.add(x)`, `s.remove(x)` and `s.contains(x)`.
+
+Both keep the order things were added in, so `for sku, qty in stock { … }` and
+`for tag in tags { … }` are the same every time; with one name over a map, it is the value.
+Methods return a new value and leave the old one, as a list's do. Two maps are equal when they
+have the same keys with equal values, and two sets when they have the same items, in any order.
+To a controller a set is the list of its items and a map the list of its `{ key, value }`.
+
+> **Not yet.** A lookup in a map or a set is a search through what was added, not a hash, so
+> it is as slow as `find`. (`04_lists.byd`)
+
+### Colours, durations and angles
+
+From edition 2027 a colour, a length of time and an angle are not numbers. The literals read
+the same, `0xFF0000`, `200ms` and `90deg`, and a number written for a `Color` is a colour, but
+the arithmetic that never meant anything is an error (`TypeMismatch`):
+
+```byld,fragment,edition2027
+let brand: Color = 0x3B82F6
+let wait: Duration = 300ms
+let turn: Angle = 90deg
+Text("{brand} {brand.alpha(0.5)} {wait * 2} {wait + 1s} {turn * 2}")
+```
+
+That draws `#3B82F6 #3B82F680 600ms 1300ms 180deg`. A `Duration` adds to and subtracts from a
+`Duration` and is multiplied and divided by a number (`200ms * n`, `n * 200ms`, `200ms / 2`),
+and a `Duration` divided by a `Duration` is a `Float`; it compares with a `Duration`. An
+`Angle` does the same. A `Color` has no arithmetic and is compared with `==` and `!=`, to a
+`Color` or to its number. `300ms + 1` and `0xFF0000 + 200ms` are errors, and a `Duration`
+does not go where an `Int` is wanted (`ArgumentTypeMismatch`). A `Color` does go where an
+`Int` does, as a number written for one does. A duration still means milliseconds everywhere
+that reads one (`every 1s`, `after 300ms`, `anim.easeInOut(300ms)`).
+
+Before edition 2027, `Color` is another name for `Int` and `Duration` and `Angle` are not
+types (`UnknownType`).
 
 ### A value or a default: `??`
 
@@ -482,16 +599,45 @@ View Main() {
 ```
 
 ```text
-function := "fn" NAME "(" (NAME ":" type ("," NAME ":" type)*)? ")" "->" type "=>" expr
+function := "fn" NAME ("<" NAME ("," NAME)* ">")? "(" (NAME ":" type ("," NAME ":" type)*)? ")" "->" type "=>" body
+body     := expr | "{" ("let" NAME "=" expr)* expr "}"
 ```
 
-The body is one expression. A shared function is pure: it reads its parameters and
-constants and calls other shared functions (`ImpureFunction`). A function is written into
-each place that calls it, so it cannot call itself, directly or through another
-(`RecursiveFunction`).
+The body is one expression, or a block: some `let`s and then the expression that is the
+result. A `let` is the name of what the lines after it read. A shared function is pure: it
+reads its parameters, its own `let`s and constants and calls other shared functions
+(`ImpureFunction`). A function is written into each place that calls it, so it cannot call
+itself, directly or through another (`RecursiveFunction`).
 
-> **Not yet.** Arguments cannot be given by name, a function cannot have type parameters or
-> default values, and its body cannot be a block. (`08_functions.byd`)
+```byld
+fn area(w: Int, h: Int) -> Int => {
+    let a = w * h
+    a
+}
+
+fn sub(a: Int, b: Int) -> Int => a - b
+
+fn first<T>(xs: List<T>) -> T => xs[0]
+
+View Main() {
+    Text("{area(2, 3)} {sub(b: 1, a: 4)} {first(["a", "b"])}")
+}
+```
+
+A call may give arguments by name, as a view's call does: the positional ones come first and
+fill the first parameters, and a named one is the parameter of that name. A name the function
+does not have is `UnknownParam`, one given twice is `DuplicateParam`, and one left out is
+`MissingParam`.
+
+A function may have type parameters, `<T>`, which stand for whatever type the call passes: the
+first argument written for a `T` gives it its type, and any other argument for a `T` has to
+agree (`ArgumentTypeMismatch`). The result has that type. Inside the function a `T` can be
+stored, passed and compared with `==`, and that is all: `a + b` of two of them is
+`TypeMismatch`. There are no bounds. A `T` is a type only inside its own function
+(`UnknownType` anywhere else).
+
+> **Not yet.** A function cannot have default values, and a `type` cannot have type
+> parameters. (`08_functions.byd`)
 
 ### Record types
 
@@ -525,16 +671,46 @@ View Main() {
 ```
 
 ```text
-enum := "enum" NAME "{" (NAME ","?)* "}"
+enum  := "enum" NAME "{" case ","? (case ","?)* "}"
+case  := NAME ( "(" NAME ":" type ("," NAME ":" type)* ")" )?
 ```
+
+An enum has at least one case: `enum Size { }` is a syntax error.
 
 A case is written `Size.large`. Cases are compared with `==` and `!=` and are not ordered.
 A case is a different type from text and from the cases of another enum. In a text, to a
 controller and in JSON it is its name. Where a view's parameter is declared with the enum,
 a call may write the case alone, `.large`; anywhere else that is `EnumShorthand`.
 
-> **Not yet.** There is no `match`, a case cannot carry values, and nothing says when a
-> chain of `when`s forgets a case. (`11_control_flow.byd`, `15_wanted_for_1_0.byd`)
+`match` says what to do for each case (see [`match`](#match)).
+
+A case may carry values, each named and typed as a record's fields are:
+
+```byld
+enum Load { idle, loading, failed(message: Str), ready(count: Int) }
+
+View Main() {
+    var state = Load.failed(message: "offline")
+    Text(match state {
+        .idle => "idle"
+        .loading => "loading"
+        .failed(message) => "failed: {message}"
+        .ready(count) => "{count} items"
+    })
+}
+```
+
+It is built by writing its fields by name, `Load.failed(message: "offline")`: one of a
+different type is `TypeMismatch`, one left out is `TypeMismatch` that names it, one the case does
+not have is `UnknownField`, and writing `Load.failed` with none is `ArityMismatch`. A case with
+values is read **only through `match`**, which binds them in the order they were declared,
+`.failed(message) =>`; a pattern that binds a different number is `ArityMismatch`, and one that
+binds none matches the case and reads nothing. There is no `state.message`: that is
+`UnknownField`. A field cannot be called `case`.
+
+A case with values is a record at run time, `{ case: "failed", message: "offline" }`, which
+is what a controller and JSON see; a case with none stays its name. Two of them are equal when
+their case and their values are.
 
 ### Contexts
 
@@ -544,6 +720,42 @@ context := "context" NAME "{" (NAME ":" type "?"? "=" expr ","?)* "}"
 
 A context is a set of values with defaults that a view gives to everything it draws. See
 [`provide` and `inject`](#provide-and-inject).
+
+### Stores
+
+```text
+store := "store" NAME "{" (NAME ":" type "?"? "=" expr ","?)* "}"
+```
+
+A `store` is state above the views: a context with **one instance for the whole program**,
+which any view reads and writes. It is read and written through the same `inject`, and a
+write is seen by every view that reads the field, field by field:
+
+```byld
+type User = { name: Str }
+store Session { user: User? = none }
+
+View Header() {
+    inject Session as session
+    Text(session.user?.name ?? "Guest")
+    Button("Sign out") => session.user = none
+}
+
+View Main() {
+    inject Session as session
+    on mount => { session.user = { name: "Ada" } }
+    Header()
+}
+```
+
+Each field has a type and a default, as a context's does (`ContextFieldNeedsDefault`), and a
+write is a value of that type (`TypeMismatch`) to a field the store has (`UnknownField`). `=`, `+=`,
+`-=`, `++` and `--` work on a field. A store is never provided: `provide` of one is
+`StoreProvided`. It starts again when the program does; keeping it between runs, `store Name
+persist "key" { … }`, is not available yet, and is a syntax error that says so. A program with no
+`store` is as it was.
+
+> **Not yet.** A store is not kept between runs. (`12_state.byd`)
 
 ### `use`
 
@@ -563,7 +775,8 @@ params := param ("," param)*
 param  := "bind"? NAME (":" type "?"?)? ("=" expr)?
 ```
 
-The view named `Main` is the one a program runs.
+The view named `Main` is the one a program runs. A view's name starts with a capital letter,
+which is how `Card(…)` is told from a name in an expression; `View card()` is a syntax error.
 
 ### Parameters
 
@@ -581,9 +794,13 @@ View Main() {
 }
 ```
 
-A call gives arguments by position, by name, or positions first and then names. An unknown
-name is `UnknownParam`, too many arguments `ViewArityMismatch`, an argument given twice
-`DuplicateParam`, and one of the wrong type `ArgumentTypeMismatch`.
+A call gives arguments by position, by name, or positions first and then names: once an
+argument has a name the rest have to, and a bare value after a named one is a syntax error.
+An unknown name is `UnknownParam`, too many arguments `ViewArityMismatch`, an argument given
+twice `DuplicateParam`, and one of the wrong type `ArgumentTypeMismatch`. A view that declares
+a parameter twice, `View Card(a: Int, a: Int)`, is `DuplicateParam` too. An element of the
+engine takes no argument by name, `Text("a", size: 3)` is `UnknownParam` (an attribute goes in
+`#[ … ]`), except the one `NavStack(path: …)` and `NavHost(active: …)` name.
 
 A parameter is a copy of what the caller gave, and follows it: when the caller's value
 changes, so does everything in the view that read the parameter.
@@ -649,9 +866,8 @@ View Main() {
 A block given to a view with no slot is `UnexpectedChildren`; a value given to a slot is
 `SlotArgument`.
 
-> **Not yet.** A required `Slot` handed on to another view, `Inner(icon: icon)`, is reported
-> as missing; give it a default of `none`. Two parameters of one name are accepted in a
-> declaration. (`09_views.byd`)
+A slot can be handed on to another view by name, `Inner(icon: icon)`, and is required there as
+it is where it was declared: leaving it out of the first call is the one `MissingParam`.
 
 ### Optional values
 
@@ -660,8 +876,22 @@ and the true arm of `name != none ? a : b`. Any other read is `NoneNotHandled`. 
 of a `T?` is `none` and nothing else (`BadOptionalDefault`), and `none` compared with a
 value that cannot be nothing is `NoneNeedsOptional`.
 
-> **Not yet.** Only a parameter can be optional. A `var` cannot start as nothing.
-> (`10_bind_context_optional.byd`)
+Any value can be optional, not only a parameter (and a parameter's own `T?` is the same): `var picked: Int? = none`, a `let`, a record's
+field (`email: Str?`), a result. `none` is a value of every `T?` and of nothing else. It is
+written to a `var` as to any: `picked = none`, `picked = 3`, and writing is not reading, so
+`NoneNotHandled` is only for reads.
+
+Three forms make it pleasant:
+
+- `a?.b` is `b` of `a`, or nothing when `a` is, so `user.home?.city ?? "unknown"` follows a
+  chain that may stop anywhere. Where `a` is optional it is the safe way to read a field of it.
+- `if let v = a { … } else { … }` in an action runs the first block with `v` holding what `a`
+  holds when there is something, and the second when there is not. `v` is not there after the
+  block.
+- `xs.get(i)` is the item at `i` or nothing, a `T?`; `xs[i]` is a `T`.
+
+There is no `when let v = a { … }` in a view yet (write `when a != none { … }`), and a `fn`
+result and a lambda parameter cannot be written `T?`.
 
 ### Layout on a call
 
@@ -713,8 +943,25 @@ Text("{c}")
 
 That draws `22`.
 
-> **Not yet.** Two `let`s that read each other are accepted. Nothing warns about a name
-> that is never read, or one that hides another. (`12_state.byd`)
+Two declarations of one name in one body, or one over a parameter, are `NameCollision`: the
+second would hide the first. A body inside a `when`, a `for` or a `route` is a scope of its
+own, and may reuse a name of the view's. `let`s of a view that read each other in a circle are
+`ConstantCycle`, once one of them is read. A `var` or `let` that nothing in its view mentions is
+the warning `UnusedVariable`, a parameter its view never mentions `UnusedParam`, and a
+`private View` no view draws `UnusedView`, and a field read of what a controller replied, with
+nothing saying its shape, is `UntypedReply` (see [a reply with a type](data-and-io.md#a-reply-with-a-type)). A name that starts with `_` says it is meant to be
+unused, and `[lints]` in `byard.toml` switches a lint off, by its name:
+
+```text
+[lints]
+unused-variable  = "allow"
+unused-parameter = "allow"
+unused-view      = "allow"
+untyped-reply    = "allow"
+```
+
+> **Not yet.** A `var` that is only ever written, `n++` and nothing else, counts as used, and
+> so does a name another view of a package never reads. (`12_state.byd`)
 
 ### Functions in a view
 
@@ -743,6 +990,8 @@ An element is one of the engine's, a view of yours, or `package.View`. An unknow
 - Braces hold children, and the element's `on state { … }` blocks. An element that takes no
   children is `UnexpectedChildren`.
 - `=> action` after an element that has a press of its own, such as `Button`, is its `tap`.
+  After one that is only drawn (`Text`, `Image`, `VectorIcon`, `Spacer`, `Overlay`,
+  `NavStack`, `NavHost`) it is `ViewCallAction`: the action would never run.
 
 An event names what it is told with a word in parentheses, `input(text) => …`,
 `pointer_down(e) => …`. An event that tells nothing takes none (`EventHasNoValue`).
@@ -750,9 +999,10 @@ An event names what it is told with a word in parentheses, `input(text) => …`,
 [Layout](layout.md), [styling](styling.md), [controls](controls.md) and
 [events](events-and-actions.md) list the elements, their attributes and their events.
 
-> **Not yet.** An attribute written twice is accepted, and the last wins. A `var` in an
-> element's braces is accepted and then reads as its own name; declare state at the top of
-> the view. (`13_elements_styles.byd`, `12_state.byd`)
+An attribute written twice in one `#[ … ]` is `DuplicateAttribute`, and so is `translate.y`
+twice; `translate.x` and `translate.y` are two. A state block twice in one element, with the
+same states, is `DuplicateStateBlock`. A `var` or a `let` in an element's braces is
+`LetInElementBody`: declare state at the top of the view.
 
 ### `when`
 
@@ -764,6 +1014,44 @@ Shows its block while the condition holds, and the `else` block otherwise. Only 
 that holds exists: its instances are made when it starts to hold and gone when it stops.
 `byard check` checks every arm, shown or not.
 
+### `match`
+
+```text
+match := "match" expr "{" (pattern "=>" body ","?)+ "}"
+```
+
+One thing for each case of a value. As an expression its arms are values, as a view member
+they are members (one, or a `{ … }` of them) and only the arm that holds is drawn, and in an
+action they are actions:
+
+```byld
+enum Load { idle, loading, failed }
+
+View Main() {
+    var state = Load.loading
+    on mount => { state = Load.failed }
+    match state {
+        .idle    => Text("Nothing yet")
+        .loading => Text("Loading")
+        .failed  => Text("Could not load")
+    }
+    Text(match state { .idle => "i", .loading => "l", else => "x" })
+}
+```
+
+A pattern is `.case`, or `Enum.case`, a literal (`true`, `3`, `"a"`), or `else`. An arm is
+separated from the next by a comma or a line break. The arms of a value are of one type
+(`TypeMismatch`), and a case that is not the enum's is `UnknownEnumCase`.
+
+**Every case has to be covered**, or there is an `else =>`: a `match` that leaves one out is
+`NonExhaustive`, and names it. A `Bool` is covered by `true` and `false`; an `Int` or a `Text`
+needs an `else`. A `match` has at least one arm. The word is only `match` where a value follows
+it: `match(name)` is still the call that reads an anchor's width.
+
+A chain of `when`s over one enum, `when s == S.a { … } else when s == S.b { … }`, that ends
+with no `else { … }` and leaves a case out is the warning `NonExhaustive`: it draws nothing for
+that case, which is what `match` would have said.
+
 ### `for`
 
 ```text
@@ -772,6 +1060,11 @@ for := "for" (NAME ",")? NAME "in" expr ("key" expr)? "{" member* "}"
 
 One copy of the block for each item of a list. With two names, the first is the item's
 position. The names belong to the block.
+
+`a..b` is the list of whole numbers from `a` up to, not including, `b`, so `for i in 0..3`
+is `0`, `1`, `2`, and `0..0` and `3..1` are empty. Its ends are `Int`s (`TypeMismatch`), and
+it reads looser than `+` and `-`: `1..n + 1` is `1..(n + 1)`. A range of more than a million
+numbers is an empty list. It is a list wherever a list goes: `let r = 0..4`, `r.len`.
 
 Without `key`, the copies stay where they are in the list: a new first item is shown by
 what was the first copy, with that copy's state. With `key`, a copy belongs to its key and
@@ -802,7 +1095,8 @@ timer     := ("every" | "after") expr "=>" action
   `it.height`, `it.x` and `it.y`.
 - `after d` runs once, `d` milliseconds after the block it is in appears. `every d` runs
   each `d` milliseconds, first after one interval. Both stop when their block goes: a
-  timer inside a `when` lives while that `when` holds.
+  timer inside a `when` lives while that `when` holds. A duration written as `0ms` is
+  `InvalidAnimation`: it would never fire.
 
 ### `provide` and `inject`
 
@@ -847,7 +1141,9 @@ After a spread, an attribute written later wins. States are `hover`, `pressed`, 
 
 `value with curve` after an attribute's value animates each change of it:
 `opacity: on ? 1.0 : 0.4 with anim.spring()`. An attribute that cannot move is
-`LayoutPropNotAnimatable` or `NotAnimatable`, and an unknown curve `UnknownAnimation`. See
+`LayoutPropNotAnimatable` or `NotAnimatable`, and an unknown curve `UnknownAnimation`. A
+`with` anywhere but on an attribute's value, in a `var`, a `let` or a condition, is
+`NotAnimatable` too. See
 [motion](motion.md).
 
 ## Actions
@@ -891,9 +1187,30 @@ Button("Add") => add(1)
 Text(message)
 ```
 
-> **Not yet.** An action cannot loop and cannot stop early. `if` takes any value as its
-> condition. Writing to a `let`, a parameter, a loop variable or a literal is accepted, and
-> so is an assignment inside a text. (`11_control_flow.byd`, `07_operators.byd`)
+What an assignment writes is a `var`, a `bind` parameter, or a field or an item of one. A
+`let`, a parameter, a loop variable, a lambda's parameter or a literal is `NotAssignable`. An
+assignment, `++` or `--` anywhere but an action, such as inside a text or a `let`, is
+`EffectInPureContext`.
+
+An action can loop over a list, and can stop early:
+
+```byld,fragment
+var total = 0
+on mount => {
+    for i, price in [10, 20, 30] {
+        if price > 25 { return }
+        total += i * price
+    }
+}
+Text("{total}")
+```
+
+`for item in items { … }` runs its block once for each item, in order; with two names the
+first is the item's position, as in a view. A value that is not a list is `TypeMismatch`. The
+names belong to the block. `return` ends the action where it is written, in whatever loop or
+`if` it is, and what follows it does not run. There is no `while`: a list has an end, so an
+action always does. `return` is a statement by itself, at the end of a block or of a line; a
+name that is `return` is still a name elsewhere.
 
 ## How the screen follows
 
@@ -903,9 +1220,8 @@ and only those, are evaluated again; what they changed is laid out and drawn. No
 evaluated because of a write that changed nothing. A program with nothing in flight
 evaluates nothing and draws nothing.
 
-`untrack(expr)` is meant to read without recording.
-
-> **Not yet.** `untrack(expr)` does not parse. (`08_functions.byd`)
+`untrack(expr)` reads without recording: a `let` that reads `untrack(a)` does not change when
+`a` does.
 
 ## Built-in names
 
@@ -940,9 +1256,25 @@ error that lists the ones it does. A library package names its edition under `[p
 sources so they mean what they meant, through the formatter, and then writes the new edition
 into the manifest.
 
-Today there are two editions and they differ by nothing: `2027` is the one the changes marked
-*(edition)* in [the roadmap](https://github.com/Briany4717/byard/blob/main/docs/language/roadmap.md)
-will land in.
+Today `2027` differs from `2026` in five things: `? :` is looser than `||`, an `Int` that
+overflows stops at the largest or the smallest instead of wrapping, a character of a text is a
+grapheme cluster and not a code point, a list or a record in a text shows its contents
+instead of nothing, and `Color`, `Duration` and `Angle` are types of their own. `byard fix`
+writes the parentheses that keep the first one's meaning. For the other four no rewrite can tell
+which programs relied on the old behaviour, so it changes no source. Every change the
+[roadmap](https://github.com/Briany4717/byard/blob/main/docs/language/roadmap.md) marked
+*(edition)* is in `2027`.
+
+**The promise.** A program that checks under an edition keeps its meaning for as long as that edition exists:
+what it drew, it draws; what it refused, it refuses; no release changes it. Anything that would
+is a new edition, which a project moves to when it chooses, with `byard fix`.
+
+The conformance suite is the test of that promise, and what it can test is a suite that does not
+change. Once an edition is named stable, the cases written in it are *locked*
+(`crates/byard-cli/tests/conformance/frozen/<edition>.lock`, one fingerprint for each case), and
+`a_frozen_edition_keeps_its_cases` fails for a locked case that was edited or removed. New cases may
+join an edition: they are the language being found to do what it always did. No edition is locked
+yet.
 
 ## One mistake, one error
 

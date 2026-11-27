@@ -25,6 +25,26 @@ order are in [`docs/language/roadmap.md`](../../../../docs/language/roadmap.md),
 the language is today is in the guide's
 [language reference](../../../../docs/guide/src/language-reference.md).
 
+A file says which sections of the language reference it is the cases of, under its leading
+comment (`//# covers: lists, maps-and-sets`, by the anchor of the heading). A section no file covers
+is in `uncovered.txt`, a list that can only get shorter: the test
+`every_section_of_the_reference_has_cases` fails when a section has no cases and is not on it,
+and when one on it has cases.
+
+Past the parser: the same test file formats every program of the suite to a fixed point
+(`fmt(fmt(x)) == fmt(x)`, and `byard fmt` already refuses a result whose tree differs), damages each
+a few ways (a line gone, two swapped, a token put where it does not go, the end cut off) and runs the
+result through `byard check` and a frame, and writes a few thousand programs from the grammar in both
+editions: none may panic. The generator writes an expression for the type that is wanted, so most of
+what it makes checks, and now and then one of any shape, so the refusals are reached too. Its seeds are
+fixed, so a failure is the same failure next time and prints the program.
+
+Freezing an edition: `BYARD_FREEZE=2026 cargo test -p byard-cli --test it write_the_lock -- --ignored`
+writes `frozen/2026.lock`, a fingerprint for each case written in that edition (a case with no
+`edition:` header is in the baseline). From then on `a_frozen_edition_keeps_its_cases` fails for a
+case of it that was edited or removed, and says to put the change in a new edition. Nothing is locked
+until the lock is committed; that is the decision to name an edition stable.
+
 These files are not programs to run: several declare `Main`, and many are wrong on
 purpose. `byard fmt` and `byard check` are not meant for them.
 
@@ -44,4 +64,4 @@ purpose. `byard fmt` and `byard check` are not meant for them.
 | `12_state` | `var`, `let`, inference, reactivity, lifecycle, timers |
 | `13_elements_styles` | Elements, attributes, events, styles, states, motion |
 | `14_syntax_and_recovery` | Malformed programs: one mistake, one error, never a panic |
-| `15_wanted_for_1_0` | Features that do not exist yet, written as they are proposed |
+| `15_wanted_for_1_0` | What 1.0 needed and the language lacked, each once a gap and now a case; a new gap goes in the file of its subject |

@@ -1,5 +1,7 @@
 // List<T>: literals, indexing, every method, and empty and out-of-range edges.
 
+//# covers: lists, maps-and-sets
+
 //# case: literal-and-len
 //# fragment
 //# text: 3 0
@@ -14,16 +16,42 @@ Text("{xs[0]} {xs[xs.len - 1]}")
 
 //# case: index-out-of-range-is-nothing-today
 //# fragment
+//# warning: IndexOutOfRange
 //# text: [] [] 9
 let xs = [1]
 Text("[{xs[5]}] [{xs[-1]}] {xs[5] ?? 9}")
 
 //# case: index-out-of-range-is-reported
-//# gap: an index past the end reads as nothing, silently, and arithmetic on it joins text
 //# fragment
 //# warning: IndexOutOfRange
 let xs = [1]
 Text("{xs[5] + 1}")
+
+//# case: index-past-a-list-written-in-place
+//# fragment
+//# warning: IndexOutOfRange
+//# diagnostics: 1
+Text("{[1, 2][2]}")
+
+//# case: index-inside-the-list-is-not-warned
+//# fragment
+//# text: 2 1
+let xs = [1, 2]
+Text("{xs[1]} {xs[0]}")
+
+//# case: index-past-a-var-is-not-warned-because-it-can-grow
+//# fragment
+//# text: ok | 2
+var xs = [1]
+on mount => { xs = xs.push(2) }
+Text("ok")
+Text("{xs[1] ?? 0}")
+
+//# case: index-past-in-a-branch-that-checks-is-not-warned
+//# fragment
+//# text: none
+let xs = [1]
+Text(xs.len > 3 ? "{xs[5]}" : "none")
 
 //# case: index-with-float-is-an-error
 //# fragment
@@ -207,7 +235,6 @@ for s in xs { Text(s) }
 Text("end")
 
 //# case: for-over-a-non-list
-//# gap: `for` over a number draws nothing and says nothing
 //# fragment
 //# error: TypeMismatch
 for s in 5 { Text("{s}") }
@@ -250,3 +277,269 @@ Text("{xs[1] / 2}")
 var xs = [1, 2]
 on mount => { xs = xs.push(3) }
 Text("{xs.len}")
+
+//# case: list-first-and-last-of-an-empty-list-are-nothing
+//# fragment
+//# text: 9 9
+let xs: List<Int> = []
+Text("{xs.first() ?? 9} {xs.last() ?? 9}")
+
+//# case: list-any-all-and-count-of-an-empty-list
+//# fragment
+//# text: false true 0 0
+let xs: List<Int> = []
+Text("{xs.any(x => x > 0)} {xs.all(x => x > 0)} {xs.count(x => x > 0)} {xs.sum()}")
+
+//# case: list-count-needs-a-condition
+//# fragment
+//# error: PredicateNotBool
+//# diagnostics: 1
+let xs = [1, 2]
+Text("{xs.count(x => x + 1)}")
+
+//# case: list-sum-of-decimals
+//# fragment
+//# text: 4
+let xs = [1.5, 2.5]
+Text("{xs.sum()}")
+
+//# case: list-sum-of-text-is-an-error
+//# fragment
+//# error: TypeMismatch
+//# diagnostics: 1
+let xs = ["a", "b"]
+Text("{xs.sum()}")
+
+//# case: list-insert-at-the-end-and-past-it
+//# fragment
+//# text: 1,2,3 1,2
+let xs = [1, 2]
+Text("{xs.insertAt(2, 3).join(",")} {xs.insertAt(5, 3).join(",")}")
+
+//# case: list-update-past-the-end-is-unchanged
+//# fragment
+//# text: 1,2 1,2
+let xs = [1, 2]
+Text("{xs.updateAt(2, 9).join(",")} {xs.updateAt(-1, 9).join(",")}")
+
+//# case: list-insert-of-the-wrong-type
+//# fragment
+//# error: TypeMismatch
+//# diagnostics: 1
+let xs = [1, 2]
+Text("{xs.insertAt(0, "a").join(",")}")
+
+//# case: list-update-at-a-text-position
+//# fragment
+//# error: TypeMismatch
+//# diagnostics: 1
+let xs = [1, 2]
+Text("{xs.updateAt("a", 1).join(",")}")
+
+//# case: list-methods-do-not-change-the-list
+//# fragment
+//# text: 1,2 1,2,3 1,9
+let xs = [1, 2]
+Text("{xs.join(",")} {xs.insertAt(2, 3).join(",")} {xs.updateAt(1, 9).join(",")}")
+
+//# case: index-assignment-adds-to-an-item
+//# fragment
+//# text: 1,7
+var xs = [1, 2]
+on mount => { xs[1] += 5 }
+Text("{xs.join(",")}")
+
+//# case: index-assignment-counts-an-item
+//# fragment
+//# text: 2,2
+var xs = [1, 2]
+on mount => { xs[0]++ }
+Text("{xs.join(",")}")
+
+//# case: index-assignment-of-a-field-of-an-item
+//# text: false | true
+type Todo = { name: Str, done: Bool }
+View Main() {
+    var todos: List<Todo> = [{ name: "a", done: false }, { name: "b", done: false }]
+    on mount => { todos[1].done = true }
+    for t in todos { Text("{t.done}") }
+}
+
+//# case: index-assignment-of-the-wrong-type
+//# fragment
+//# error: TypeMismatch
+//# diagnostics: 1
+var xs = [1, 2]
+on mount => { xs[0] = "a" }
+Text("{xs[0]}")
+
+//# case: index-assignment-past-the-end-changes-nothing
+//# fragment
+//# text: 1,2
+var xs = [1, 2]
+on mount => { xs[5] = 9 }
+Text("{xs.join(",")}")
+
+//# case: index-assignment-to-a-let
+//# fragment
+//# error: NotAssignable
+//# diagnostics: 1
+let xs = [1, 2]
+on mount => { xs[0] = 9 }
+Text("{xs[0]}")
+
+//# case: map-lookup-is-nothing-when-the-key-is-not-there
+//# fragment
+//# text: 36 | none
+let ages: Map<Str, Str> = ["ada": "36"]
+Text("{ages["ada"] ?? "none"}")
+Text("{ages["zed"] ?? "none"}")
+
+//# case: map-key-of-the-wrong-type
+//# fragment
+//# error: TypeMismatch
+//# diagnostics: 1
+let ages: Map<Str, Int> = ["ada": 36]
+Text("{ages[1] ?? 0}")
+
+//# case: map-literal-of-mixed-values-needs-a-type
+//# fragment
+//# error: CannotInfer
+//# diagnostics: 1
+let m = ["a": 1, "b": "x"]
+Text("x")
+
+//# case: empty-map-needs-a-type
+//# fragment
+//# error: CannotInfer
+//# diagnostics: 1
+let m = [:]
+Text("x")
+
+//# case: empty-map-with-a-type
+//# fragment
+//# text: 0
+let m: Map<Str, Int> = [:]
+Text("{m.len}")
+
+//# case: map-value-of-the-wrong-type-is-told-at-the-value
+//# fragment
+//# error: TypeMismatch
+//# diagnostics: 1
+let m: Map<Str, Int> = ["a": 1, "b": "x"]
+Text("{m.len}")
+
+//# case: map-set-adds-and-replaces-and-remove-takes-out
+//# fragment
+//# text: 3 7 | 2 1
+var m: Map<Str, Int> = ["a": 1, "b": 2]
+on mount => { m = m.set("c", 3) m = m.set("a", 7) }
+Text("{m.len} {m["a"] ?? 0}")
+Text("{m.remove("a").len} {m.remove("a").remove("b").len}")
+
+//# case: map-keeps-the-order-things-were-added-in
+//# fragment
+//# text: b=1 | a=9 | c=3
+var m: Map<Str, Int> = ["b": 1, "a": 2]
+on mount => { m = m.set("a", 9) m = m.set("c", 3) }
+for k, v in m { Text("{k}={v}") }
+
+//# case: map-set-of-the-wrong-types
+//# fragment
+//# error: TypeMismatch
+//# diagnostics: 2
+let m: Map<Str, Int> = ["a": 1]
+Text("{m.set(1, "x").len}")
+
+//# case: map-for-loop-in-an-action
+//# fragment
+//# text: 7
+let m: Map<Str, Int> = ["a": 3, "b": 4]
+var total = 0
+on mount => { for k, v in m { total += v } }
+Text("{total}")
+
+//# case: map-for-loop-with-one-name-reads-the-values
+//# fragment
+//# text: 3 | 4
+let m: Map<Str, Int> = ["a": 3, "b": 4]
+for v in m { Text("{v}") }
+
+//# case: map-with-whole-number-keys
+//# fragment
+//# text: one 2
+let m: Map<Int, Str> = [1: "one", 2: "two"]
+Text("{m[1] ?? "?"} {m.len}")
+
+//# case: map-literal-with-a-key-twice-keeps-the-last
+//# fragment
+//# text: 1 2
+let m = ["a": 1, "a": 2]
+Text("{m.len} {m["a"] ?? 0}")
+
+//# case: maps-are-equal-in-any-order
+//# fragment
+//# text: true | false
+let a: Map<Str, Int> = ["x": 1, "y": 2]
+let b: Map<Str, Int> = ["y": 2, "x": 1]
+let c: Map<Str, Int> = ["y": 2, "x": 3]
+Text("{a == b}")
+Text("{a == c}")
+
+//# case: map-has-no-method-it-was-not-given
+//# fragment
+//# error: UnknownMethod
+//# diagnostics: 1
+let m: Map<Str, Int> = ["a": 1]
+Text("{m.nope().len}")
+
+//# case: set-holds-each-item-once
+//# fragment
+//# text: 2 true false
+let s = Set([1, 1, 2])
+Text("{s.len} {s.contains(2)} {s.contains(3)}")
+
+//# case: set-add-and-remove-make-a-new-set
+//# fragment
+//# text: 3 2 2
+let s = Set([1, 2])
+Text("{s.add(3).len} {s.add(2).len} {s.remove(1).add(5).len}")
+
+//# case: set-for-loop-follows-the-order-added
+//# fragment
+//# text: 3 | 1 | 2
+var s = Set([3, 1])
+on mount => { s = s.add(2) s = s.add(3) }
+for x in s { Text("{x}") }
+
+//# case: set-of-a-type-and-empty
+//# fragment
+//# text: 0 1
+let tags: Set<Str> = Set()
+Text("{tags.len} {tags.add("new").len}")
+
+//# case: set-add-of-the-wrong-type
+//# fragment
+//# error: TypeMismatch
+//# diagnostics: 1
+let s = Set([1, 2])
+Text("{s.add("a").len}")
+
+//# case: set-of-what-is-not-a-list
+//# fragment
+//# error: TypeMismatch
+//# diagnostics: 1
+let s = Set(3)
+Text("x")
+
+//# case: sets-are-equal-in-any-order
+//# fragment
+//# text: true | false
+Text("{Set([1, 2]) == Set([2, 1])}")
+Text("{Set([1, 2]) == Set([2, 3])}")
+
+//# case: set-is-still-a-name
+//# fragment
+//# text: 3
+let Set = 3
+Text("{Set}")

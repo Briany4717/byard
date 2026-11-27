@@ -18,6 +18,7 @@ use super::ast::{
     RecordDecl, RecordField, ResultArm, StateBlock, StrPart, StyleRule, Type, UseDecl, ViewDecl,
     ViewportCond,
 };
+use super::ast::{Arm, Pattern};
 use crate::symbol::Symbol;
 
 /// Equality that skips every [`Span`](crate::Span): two trees are `span_eq` when they have
@@ -98,6 +99,9 @@ impl SpanEq for Type {
                     span: _,
                 },
             ) => params.span_eq(p2) && ret.span_eq(r2),
+            (Self::Optional { inner, span: _ }, Self::Optional { inner: i2, span: _ }) => {
+                inner.span_eq(i2)
+            }
             _ => false,
         }
     }
@@ -155,6 +159,7 @@ impl SpanEq for ViewDecl {
             consts: _,
             enums: _,
             private,
+            edition: _,
         } = self;
         *name == other.name
             && *private == other.private
@@ -170,11 +175,13 @@ impl SpanEq for RecordDecl {
             fields,
             private,
             context,
+            store,
             span: _,
         } = self;
         *name == other.name
             && *private == other.private
             && *context == other.context
+            && *store == other.store
             && fields.span_eq(&other.fields)
     }
 }
@@ -200,11 +207,20 @@ impl SpanEq for EnumDecl {
         let Self {
             name,
             cases,
+            fields,
             private,
             span: _,
         } = self;
         *name == other.name
             && *private == other.private
+            && fields.len() == other.fields.len()
+            && fields.iter().zip(&other.fields).all(|((a, x), (b, y))| {
+                a == b
+                    && x.len() == y.len()
+                    && x.iter()
+                        .zip(y)
+                        .all(|((n, t), (m, u))| n == m && t.span_eq(u))
+            })
             && cases.len() == other.cases.len()
             && cases
                 .iter()
@@ -232,6 +248,7 @@ impl SpanEq for FnDecl {
     fn span_eq(&self, other: &Self) -> bool {
         let Self {
             name,
+            type_params,
             params,
             ret,
             body,
@@ -239,6 +256,7 @@ impl SpanEq for FnDecl {
             span: _,
         } = self;
         *name == other.name
+            && *type_params == other.type_params
             && *private == other.private
             && params.span_eq(&other.params)
             && ret.span_eq(&other.ret)
@@ -281,6 +299,7 @@ impl SpanEq for Member {
             (
                 Self::Fn {
                     name,
+                    type_params,
                     params,
                     ret,
                     body,
@@ -288,12 +307,19 @@ impl SpanEq for Member {
                 },
                 Self::Fn {
                     name: n2,
+                    type_params: tp2,
                     params: p2,
                     ret: r2,
                     body: b2,
                     span: _,
                 },
-            ) => name == n2 && params.span_eq(p2) && ret.span_eq(r2) && body.span_eq(b2),
+            ) => {
+                name == n2
+                    && type_params == tp2
+                    && params.span_eq(p2)
+                    && ret.span_eq(r2)
+                    && body.span_eq(b2)
+            }
             (
                 Self::Inject { ty, name, span: _ },
                 Self::Inject {
@@ -417,8 +443,50 @@ impl SpanEq for Member {
                 rules.span_eq(r2)
             }
             (Self::Expr(a), Self::Expr(b)) => a.span_eq(b),
+            (
+                Self::Match {
+                    scrutinee,
+                    arms,
+                    span: _,
+                },
+                Self::Match {
+                    scrutinee: s2,
+                    arms: a2,
+                    span: _,
+                },
+            ) => scrutinee.span_eq(s2) && arms.span_eq(a2),
             _ => false,
         }
+    }
+}
+
+impl SpanEq for Pattern {
+    fn span_eq(&self, other: &Self) -> bool {
+        match (self, other) {
+            (
+                Self::Case {
+                    enum_name,
+                    name,
+                    binds,
+                    span: _,
+                },
+                Self::Case {
+                    enum_name: e2,
+                    name: n2,
+                    binds: b2,
+                    span: _,
+                },
+            ) => enum_name == e2 && name == n2 && binds == b2,
+            (Self::Literal(a), Self::Literal(b)) => a.span_eq(b),
+            (Self::Else(_), Self::Else(_)) => true,
+            _ => false,
+        }
+    }
+}
+
+impl<B: SpanEq> SpanEq for Arm<B> {
+    fn span_eq(&self, other: &Self) -> bool {
+        self.pattern.span_eq(&other.pattern) && self.body.span_eq(&other.body)
     }
 }
 
@@ -562,7 +630,8 @@ impl SpanEq for Expr {
     #[allow(clippy::too_many_lines)]
     fn span_eq(&self, other: &Self) -> bool {
         match (self, other) {
-            (Self::IntLit(a, _), Self::IntLit(b, _)) => a == b,
+            (Self::IntLit(a, _), Self::IntLit(b, _))
+            | (Self::DurationLit(a, _), Self::DurationLit(b, _)) => a == b,
             (Self::FloatLit(a, _), Self::FloatLit(b, _))
             | (Self::AngleLit(a, _), Self::AngleLit(b, _)) => a == b,
             (Self::StrLit(a, _), Self::StrLit(b, _)) => a.span_eq(b),
@@ -582,6 +651,18 @@ impl SpanEq for Expr {
                     span: _,
                 },
                 Self::Member {
+                    base: b2,
+                    field: f2,
+                    span: _,
+                },
+            )
+            | (
+                Self::OptionalMember {
+                    base,
+                    field,
+                    span: _,
+                },
+                Self::OptionalMember {
                     base: b2,
                     field: f2,
                     span: _,
@@ -810,7 +891,49 @@ impl SpanEq for Expr {
                     span: _,
                 },
             ) => left.span_eq(l2) && right.span_eq(r2),
-            (Self::Error(_), Self::Error(_)) => true,
+            (
+                Self::Match {
+                    scrutinee,
+                    arms,
+                    span: _,
+                },
+                Self::Match {
+                    scrutinee: s2,
+                    arms: a2,
+                    span: _,
+                },
+            ) => scrutinee.span_eq(s2) && arms.span_eq(a2),
+            (Self::MapLit(a, _), Self::MapLit(b, _)) => {
+                a.len() == b.len()
+                    && a.iter()
+                        .zip(b)
+                        .all(|((k, v), (k2, v2))| k.span_eq(k2) && v.span_eq(v2))
+            }
+            (
+                Self::Cast { value, ty, span: _ },
+                Self::Cast {
+                    value: v2,
+                    ty: t2,
+                    span: _,
+                },
+            ) => value.span_eq(v2) && ty.span_eq(t2),
+            (
+                Self::ForEach {
+                    var,
+                    index,
+                    iter,
+                    body,
+                    span: _,
+                },
+                Self::ForEach {
+                    var: v2,
+                    index: x2,
+                    iter: i2,
+                    body: b2,
+                    span: _,
+                },
+            ) => var == v2 && index == x2 && iter.span_eq(i2) && body.span_eq(b2),
+            (Self::Return(_), Self::Return(_)) | (Self::Error(_), Self::Error(_)) => true,
             _ => false,
         }
     }

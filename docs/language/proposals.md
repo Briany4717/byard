@@ -5,8 +5,11 @@ needs, and what people would simply like. A third says what to leave out.
 
 [The reference](../guide/src/language-reference.md) is what the language is today.
 [The roadmap](roadmap.md) is the order to build this in, with the fixes that come first.
-Nothing here is implemented; a sample is a proposal, and the ones marked *(case)* are
-already in `crates/byard-cli/tests/conformance/15_wanted_for_1_0.byd`, waiting to pass.
+Everything under "Needed for 1.0" is implemented now, in the order of the roadmap, and each
+sample marked *(case)* is a conformance case that holds (many in
+`crates/byard-cli/tests/conformance/15_wanted_for_1_0.byd`); where the language does it
+differently from the sample, the reference is what it does, and the roadmap lists what each step
+left out. What is under "Wanted" and "Left out" is still a proposal.
 
 Every proposal is held to four tests, and one that fails any of them is in the last
 section:

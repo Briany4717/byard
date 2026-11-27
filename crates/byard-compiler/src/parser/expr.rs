@@ -59,7 +59,11 @@ impl Parser<'_> {
             // (RFC-0010), only read inside an `anim.*` curve call, as ms.
             Some(Token::DurationLit(ms)) => {
                 self.advance();
-                Expr::IntLit(i64::from(ms), span)
+                if self.typed_units {
+                    Expr::DurationLit(i64::from(ms), span)
+                } else {
+                    Expr::IntLit(i64::from(ms), span)
+                }
             }
             Some(Token::StrLit) => {
                 self.advance();
@@ -67,6 +71,7 @@ impl Parser<'_> {
                 Expr::StrLit(parts, span)
             }
             Some(Token::Ident(_)) if self.at_if_statement() => self.parse_if(),
+            Some(Token::Ident(_)) if self.at_match() => self.parse_match_expr(),
             Some(Token::Ident(sym)) => {
                 self.advance();
                 // A bare single-parameter lambda `x => body` (RFC-0027 §5, used
@@ -84,6 +89,12 @@ impl Parser<'_> {
                 } else {
                     Expr::Ident(sym, span)
                 }
+            }
+            // `untrack(expr)`: reads without recording. Reserved, and called like
+            // a name, so it is the name of the call.
+            Some(Token::Untrack) if matches!(self.peek2(), Some(Token::LParen)) => {
+                self.advance();
+                Expr::Ident(Symbol::intern("untrack"), span)
             }
             Some(Token::Minus) => self.parse_negative(),
             Some(Token::Bang) => self.parse_not(),
@@ -160,6 +171,9 @@ impl Parser<'_> {
     fn parse_if(&mut self) -> Expr {
         let start = self.cur_span();
         self.advance(); // if
+        if matches!(self.cur(), Some(Token::Let)) {
+            return self.parse_if_let(start);
+        }
         let cond = Box::new(self.parse_expr(0));
         let then = Box::new(self.parse_stmt_block("'{' to open the `if` body"));
         let els = if self.eat(&Token::Else) {
@@ -179,8 +193,207 @@ impl Parser<'_> {
         }
     }
 
+    /// Whether the cursor is on the word `match` that begins a `match`: a value
+    /// follows it. (`match(name)` is the call that reads an anchor's width.)
+    pub(super) fn at_match(&self) -> bool {
+        matches!(self.cur(), Some(Token::Ident(s)) if s.as_str() == "match")
+            && matches!(
+                self.peek2(),
+                Some(
+                    Token::Ident(_)
+                        | Token::IntLit(_)
+                        | Token::FloatLit(_)
+                        | Token::StrLit
+                        | Token::Minus
+                        | Token::Bang
+                )
+            )
+    }
+
+    /// `match scrutinee { pattern => expr, … }` as an expression.
+    fn parse_match_expr(&mut self) -> Expr {
+        let start = self.cur_span();
+        self.advance(); // match
+        let scrutinee = Box::new(self.parse_expr(0));
+        self.expect(&Token::LBrace, "'{' to open the arms of the `match`");
+        let mut arms = Vec::new();
+        while !matches!(self.cur(), Some(Token::RBrace) | None) {
+            let before = self.pos;
+            let arm_start = self.cur_span();
+            if let Some(pattern) = self.parse_pattern() {
+                self.expect(&Token::Arrow, "'=>' after the pattern");
+                let body = self.parse_expr(0);
+                arms.push(super::ast::Arm {
+                    pattern,
+                    body,
+                    span: self.span_from(arm_start),
+                });
+            }
+            self.eat(&Token::Comma);
+            if self.pos == before {
+                self.advance();
+            }
+        }
+        if arms.is_empty() && matches!(self.cur(), Some(Token::RBrace)) {
+            self.error("an arm: a `match` has at least one, as in `.a => …`");
+        }
+        self.expect(&Token::RBrace, "'}' to close the `match`");
+        Expr::Match {
+            scrutinee,
+            arms,
+            span: self.span_from(start),
+        }
+    }
+
+    /// What an arm is for: `.case`, `Enum.case`, a literal, or `else`.
+    pub(super) fn parse_pattern(&mut self) -> Option<super::ast::Pattern> {
+        use super::ast::Pattern;
+        let start = self.cur_span();
+        match self.cur().cloned() {
+            Some(Token::Else) => {
+                self.advance();
+                Some(Pattern::Else(self.span_from(start)))
+            }
+            Some(Token::Dot) => {
+                self.advance();
+                let name = self.expect_ident("a case name after `.`")?;
+                let binds = self.parse_pattern_binds();
+                Some(Pattern::Case {
+                    enum_name: None,
+                    name,
+                    binds,
+                    span: self.span_from(start),
+                })
+            }
+            Some(Token::Ident(first))
+                if !matches!(first.as_str(), "true" | "false")
+                    && matches!(self.peek2(), Some(Token::Dot)) =>
+            {
+                self.advance();
+                self.advance(); // .
+                let name = self.expect_ident("a case name after `.`")?;
+                let binds = self.parse_pattern_binds();
+                Some(Pattern::Case {
+                    enum_name: Some(first),
+                    name,
+                    binds,
+                    span: self.span_from(start),
+                })
+            }
+            // `true` and `false`: taken as they are, since a word before `=>`
+            // would read as a lambda's parameter.
+            Some(Token::Ident(word)) if matches!(word.as_str(), "true" | "false") => {
+                self.advance();
+                Some(Pattern::Literal(Expr::Ident(word, start)))
+            }
+            Some(
+                Token::Ident(_)
+                | Token::IntLit(_)
+                | Token::FloatLit(_)
+                | Token::StrLit
+                | Token::Minus,
+            ) => Some(Pattern::Literal(self.parse_expr(30))),
+            _ => {
+                self.error("a case (`.name`), a literal or `else`");
+                None
+            }
+        }
+    }
+
+    /// Whether the `.` here begins the next arm of a `match`: `.case =>`, or
+    /// `.case(a, b) =>` for a case that carries values.
+    fn at_case_arm(&self) -> bool {
+        let at = |n: usize| self.tokens.get(self.pos + n).map(|(t, _)| t);
+        if !matches!(at(1), Some(Token::Ident(_))) {
+            return false;
+        }
+        if matches!(at(2), Some(Token::Arrow)) {
+            return true;
+        }
+        if !matches!(at(2), Some(Token::LParen)) {
+            return false;
+        }
+        let mut n = 3;
+        while matches!(at(n), Some(Token::Ident(_))) {
+            n += 1;
+            if matches!(at(n), Some(Token::Comma)) {
+                n += 1;
+            }
+        }
+        matches!(at(n), Some(Token::RParen)) && matches!(at(n + 1), Some(Token::Arrow))
+    }
+
+    /// The names after a case in a pattern, `(message, code)`, when it has
+    /// them: what a case that carries values binds.
+    fn parse_pattern_binds(&mut self) -> Vec<Symbol> {
+        let mut binds = Vec::new();
+        if !self.eat(&Token::LParen) {
+            return binds;
+        }
+        while !matches!(self.cur(), Some(Token::RParen) | None) {
+            let Some(name) = self.expect_ident("a name for the value") else {
+                break;
+            };
+            binds.push(name);
+            if !self.eat(&Token::Comma) {
+                break;
+            }
+        }
+        self.expect(&Token::RParen, "')'");
+        binds
+    }
+
+    /// `if let name = expr { … } else { … }`, after the `if`: it is a block that
+    /// holds the value in `name` and runs the first branch when there is one,
+    /// the second when there is not, so nothing else has to know a new form
+    /// exists. `name` is the value's own type, safe to read in the first branch.
+    fn parse_if_let(&mut self, start: Span) -> Expr {
+        self.advance(); // let
+        let name = self
+            .expect_ident("a name for the value")
+            .unwrap_or_else(|| Symbol::intern(""));
+        let name_span = self.span_from(start);
+        self.expect(&Token::Eq, "'='");
+        let value = self.parse_expr(0);
+        let then = Box::new(self.parse_stmt_block("'{' to open the `if let` body"));
+        let els = if self.eat(&Token::Else) {
+            if self.at_if_statement() {
+                Some(Box::new(self.parse_if()))
+            } else {
+                Some(Box::new(self.parse_stmt_block("'{' after `else`")))
+            }
+        } else {
+            None
+        };
+        let span = self.span_from(start);
+        let held = Expr::Let {
+            name: name.clone(),
+            ty: None,
+            value: Box::new(value),
+            span: name_span,
+        };
+        let is_there = Expr::Binary {
+            op: BinOp::Ne,
+            lhs: Box::new(Expr::Ident(name, name_span)),
+            rhs: Box::new(Expr::Ident(Symbol::intern("none"), name_span)),
+            span: name_span,
+        };
+        Expr::Block(
+            vec![
+                held,
+                Expr::If {
+                    cond: Box::new(is_there),
+                    then,
+                    els,
+                    span,
+                },
+            ],
+            span,
+        )
+    }
+
     /// `"{" stmt* "}"` as an [`Expr::Block`].
-    fn parse_stmt_block(&mut self, what: &str) -> Expr {
+    pub(super) fn parse_stmt_block(&mut self, what: &str) -> Expr {
         let start = self.cur_span();
         self.expect(&Token::LBrace, what);
         let stmts = self.parse_block_stmts();
@@ -197,6 +410,16 @@ impl Parser<'_> {
                 stmts.push(self.parse_let_stmt());
                 continue;
             }
+            if matches!(self.cur(), Some(Token::For)) {
+                stmts.push(self.parse_for_stmt());
+                continue;
+            }
+            if self.at_return_statement() {
+                let span = self.cur_span();
+                self.advance();
+                stmts.push(Expr::Return(span));
+                continue;
+            }
             stmts.push(self.parse_expr(0));
             // Guard against a non-advancing parse (a stray token that is neither
             // a statement start nor `}`) so recovery never spins.
@@ -207,6 +430,56 @@ impl Parser<'_> {
         stmts
     }
 
+    /// `for item in items { stmt* }` (or `for i, item in items`), a statement
+    /// of an action block: the statements run once for each item.
+    fn parse_for_stmt(&mut self) -> Expr {
+        let start = self.cur_span();
+        self.advance(); // for
+        let first = self
+            .expect_ident("a loop variable")
+            .unwrap_or_else(|| Symbol::intern(""));
+        let (index, var) = if self.eat(&Token::Comma) {
+            let item = self
+                .expect_ident("a loop variable")
+                .unwrap_or_else(|| Symbol::intern(""));
+            (Some(first), item)
+        } else {
+            (None, first)
+        };
+        self.expect(&Token::In, "'in'");
+        let iter = Box::new(self.parse_expr(0));
+        let body = Box::new(self.parse_stmt_block("'{' to open the `for` body"));
+        Expr::ForEach {
+            var,
+            index,
+            iter,
+            body,
+            span: self.span_from(start),
+        }
+    }
+
+    /// True when the cursor is on a `return` that is a statement by itself:
+    /// the word, then the end of the block or a line break. `return` is
+    /// contextual, like `if`: a name that happens to be `return` is still one.
+    fn at_return_statement(&self) -> bool {
+        if !matches!(self.cur(), Some(Token::Ident(s)) if s.as_str() == "return") {
+            return false;
+        }
+        let Some(next) = self.tokens.get(self.pos + 1) else {
+            return true;
+        };
+        if matches!(next.0, Token::RBrace) {
+            return true;
+        }
+        let here = self.cur_span();
+        let after = next.1;
+        // A line break between the word and what follows it.
+        let (a, b) = (self.local_offset(here.end), self.local_offset(after.start));
+        self.source
+            .get(a..b)
+            .is_some_and(|between| between.contains('\n'))
+    }
+
     /// `let IDENT (":" type)? "=" expr`, a statement of an action block.
     fn parse_let_stmt(&mut self) -> Expr {
         let start = self.cur_span();
@@ -215,7 +488,7 @@ impl Parser<'_> {
             .expect_ident("a binding name")
             .unwrap_or_else(|| Symbol::intern(""));
         let ty = if self.eat(&Token::Colon) {
-            Some(self.parse_type())
+            Some(self.parse_type_maybe_none())
         } else {
             None
         };
@@ -594,7 +867,7 @@ impl Parser<'_> {
     /// True when the cursor sits on a `{` opening a record literal (as opposed
     /// to a callback block): the token after `{` is `..` (spread), or an
     /// identifier immediately followed by `:`.
-    fn at_record_literal(&self) -> bool {
+    pub(super) fn at_record_literal(&self) -> bool {
         if !matches!(self.cur(), Some(Token::LBrace)) {
             return false;
         }
@@ -665,7 +938,10 @@ impl Parser<'_> {
     fn peek_led(&self) -> Option<Bp> {
         match self.cur()? {
             // Member access, indexing, and calls bind tightest.
-            Token::Dot | Token::LBrack => Some(Bp {
+            // `.case =>` begins the next arm of a `match`; it is not a field read
+            // of the arm before it.
+            Token::Dot if self.at_case_arm() => None,
+            Token::Dot | Token::QuestionDot | Token::LBrack => Some(Bp {
                 left: 22,
                 right: 23,
             }),
@@ -695,7 +971,12 @@ impl Parser<'_> {
             // `count ?? 0 + 1` reads as `count ?? (0 + 1)`, and tighter than
             // comparison, so `user.age ?? 0 == 0` compares the defaulted
             // value. It and `merge` never meet.
-            Token::Merge | Token::QuestionQuestion => Some(Bp {
+            //
+            // `a..b` is there too: `0..n + 1` is `0..(n + 1)`, and `0..n == xs`
+            // compares the list.
+            // `value as Type` is there too, as loose as a range:
+            // `res.json as Forecast` and `(v as Reply).field`.
+            Token::Merge | Token::QuestionQuestion | Token::DotDot | Token::As => Some(Bp {
                 left: 11,
                 right: 12,
             }),
@@ -709,8 +990,13 @@ impl Parser<'_> {
             // Ternary (right-assoc): tighter than `||` (RFC-0027 §1 note), looser
             // than comparison. `right: 6` keeps the else-branch one power above
             // `with` (L3) so `a ? b : c with k` groups as `(a ? b : c) with k`.
+            //
+            // From edition 2027 it is looser than `||` too, as in the languages
+            // people come from: `a || b ? x : y` is `(a || b) ? x : y`.
+            Token::Question if self.loose_ternary => Some(Bp { left: 4, right: 4 }),
             Token::Question => Some(Bp { left: 6, right: 6 }),
             // `||` (RFC-0027 §2): short-circuit, lowest of the logic band.
+            Token::PipePipe if self.loose_ternary => Some(Bp { left: 5, right: 6 }),
             Token::PipePipe => Some(Bp { left: 4, right: 5 }),
             // `with` animation operator (RFC-0010): below the ternary, above
             // assignment, so `(cond ? a : b) with anim.spring()` is the value.
@@ -726,6 +1012,17 @@ impl Parser<'_> {
     fn parse_led(&mut self, lhs: Expr, right_bp: u8) -> Expr {
         let start = lhs.span();
         match self.cur().cloned() {
+            Some(Token::QuestionDot) => {
+                self.advance();
+                let field = self
+                    .expect_ident("a field name")
+                    .unwrap_or_else(|| Symbol::intern(""));
+                Expr::OptionalMember {
+                    base: Box::new(lhs),
+                    field,
+                    span: self.span_from(start),
+                }
+            }
             Some(Token::Dot) => {
                 self.advance();
                 let field = self
@@ -804,6 +1101,7 @@ impl Parser<'_> {
                 | Token::GtEq
                 | Token::AmpAmp
                 | Token::PipePipe
+                | Token::DotDot
                 | Token::QuestionQuestion),
             ) => {
                 let op = match tok {
@@ -820,6 +1118,7 @@ impl Parser<'_> {
                     Token::GtEq => BinOp::Ge,
                     Token::AmpAmp => BinOp::And,
                     Token::QuestionQuestion => BinOp::Otherwise,
+                    Token::DotDot => BinOp::Range,
                     _ => BinOp::Or,
                 };
                 self.advance();
@@ -828,6 +1127,15 @@ impl Parser<'_> {
                     op,
                     lhs: Box::new(lhs),
                     rhs,
+                    span: self.span_from(start),
+                }
+            }
+            Some(Token::As) => {
+                self.advance();
+                let ty = self.parse_type();
+                Expr::Cast {
+                    value: Box::new(lhs),
+                    ty,
                     span: self.span_from(start),
                 }
             }
@@ -888,14 +1196,35 @@ impl Parser<'_> {
     fn parse_array(&mut self) -> Expr {
         let start = self.cur_span();
         self.advance(); // [
+        // `[:]`, a map with nothing in it.
+        if matches!(self.cur(), Some(Token::Colon)) && matches!(self.peek2(), Some(Token::RBracket))
+        {
+            self.advance();
+            self.advance();
+            return Expr::MapLit(Vec::new(), self.span_from(start));
+        }
         let mut items = Vec::new();
+        let mut pairs: Vec<(Expr, Expr)> = Vec::new();
         while !matches!(self.cur(), Some(Token::RBracket) | None) {
-            items.push(self.parse_expr(0));
+            let item = self.parse_expr(0);
+            // A `:` after the first item makes this a map: `key: value, …`.
+            if (items.is_empty() || !pairs.is_empty()) && self.eat(&Token::Colon) {
+                let value = self.parse_expr(0);
+                pairs.push((item, value));
+            } else {
+                items.push(item);
+            }
             if !self.eat(&Token::Comma) {
                 break;
             }
         }
         self.expect(&Token::RBracket, "']'");
+        if !pairs.is_empty() {
+            if !items.is_empty() {
+                self.error("a `key: value` for each item of a map");
+            }
+            return Expr::MapLit(pairs, self.span_from(start));
+        }
         Expr::Array(items, self.span_from(start))
     }
 
@@ -1042,6 +1371,7 @@ impl Parser<'_> {
     /// trailing comma is allowed.
     pub(super) fn parse_arg_list(&mut self, close: &Token) -> Vec<Arg> {
         let mut args = Vec::new();
+        let mut named_before = false;
         while self.cur().is_some() && self.cur() != Some(close) {
             // A keyframe step `50%: value easeOut` (RFC-0025 §4). Any call may
             // *carry* one; only `anim.keyframes(…)` gives it meaning (D6).
@@ -1065,6 +1395,7 @@ impl Parser<'_> {
                     self.advance(); // bind
                     self.advance(); // name
                     self.advance(); // :
+                    named_before = true;
                     let value = self.parse_expr(0);
                     args.push(Arg {
                         name: Some(sym),
@@ -1087,6 +1418,14 @@ impl Parser<'_> {
             } else {
                 None
             };
+            // Once an argument has a name, the rest have to: which parameter a
+            // bare value is for is no longer what its position says.
+            if name.is_none() && named_before {
+                self.error(
+                    "a name for this argument, as in `name: value`, since one before it has one",
+                );
+            }
+            named_before |= name.is_some();
             let value = self.parse_arg_value();
             args.push(Arg {
                 name,
@@ -1138,19 +1477,30 @@ impl Parser<'_> {
     /// and interpolation parts, recursively parsing each `{ expr }` (PEP 701).
     pub(super) fn parse_string_literal(&mut self, span: Span) -> Vec<StrPart> {
         let raw = self.text(span);
+        // A string over lines, `"""` to `"""`: it drops the indentation of its
+        // closing quotes, and the line break after the opening ones and the one
+        // before the closing ones.
+        let triple = raw.len() >= 6 && raw.starts_with("\"\"\"") && raw.ends_with("\"\"\"");
+        let quotes = if triple { 3 } else { 1 };
         // Strip the surrounding quotes; a malformed (unclosed) literal is
         // already reported by the lexer, so guard the slice defensively.
-        let Some(inner) = raw.strip_prefix('"').and_then(|s| s.strip_suffix('"')) else {
+        let Some(inner) = raw
+            .get(quotes..raw.len().saturating_sub(quotes))
+            .filter(|_| raw.len() >= 2 * quotes)
+        else {
             return vec![StrPart::Text(String::new())];
         };
         // Each character of the inner text, paired with its file offset, so an
         // interpolation's spans can be placed where it is written.
-        let base = self.local_offset(span.start) + 1;
-        let cs: Vec<(char, u32)> = inner
+        let base = self.local_offset(span.start) + quotes;
+        let mut cs: Vec<(char, u32)> = inner
             .char_indices()
             .map(|(i, c)| (c, self.file_offset(base + i)))
             .collect();
         let end = self.file_offset(base + inner.len());
+        if triple {
+            cs = dedent(cs);
+        }
         self.split_interpolations(&cs, end)
     }
 
@@ -1178,6 +1528,21 @@ impl Parser<'_> {
                 // expression: the expression ends at the colon, and its end
                 // offset is the colon's.
                 let (len, spec) = split_spec(&frag);
+                if spec
+                    .as_ref()
+                    .and_then(|s| s.decimals)
+                    .is_some_and(|d| d > 9)
+                {
+                    let at = cs[i].1;
+                    self.error_at(
+                        Span::new(at, cs.get(next).map_or(end, |c| c.1)),
+                        "at most nine decimals, as in `{x:.2}`",
+                    );
+                }
+                let spec = spec.map(|mut s| {
+                    s.decimals = s.decimals.map(|d| d.min(MAX_DECIMALS));
+                    s
+                });
                 offsets.truncate(len + 1);
                 let expr = self.parse_fragment_expr(&frag[..len], offsets);
                 parts.push(StrPart::Interp(Box::new(expr), spec));
@@ -1199,10 +1564,62 @@ impl Parser<'_> {
     /// written, not at the file's start.
     fn parse_fragment_expr(&mut self, frag: &str, offsets: Vec<u32>) -> Expr {
         let mut sub = Parser::new_fragment(frag, offsets);
+        sub.loose_ternary = self.loose_ternary;
+        sub.typed_units = self.typed_units;
         let expr = sub.parse_expr(0);
+        // `{ }` holds one expression; what follows it would be dropped.
+        if sub.cur().is_some() && sub.errors.is_empty() {
+            sub.error("`}` after the expression: `{ }` holds one expression");
+        }
         self.errors.append(&mut sub.errors);
         expr
     }
+}
+
+/// The text of a string written over lines: without the line break after the
+/// opening quotes, without the last line break and the indentation before the
+/// closing quotes, and with that indentation taken off the front of every
+/// line.
+fn dedent(cs: Vec<(char, u32)>) -> Vec<(char, u32)> {
+    let mut cs = cs;
+    if cs.first().is_some_and(|(c, _)| *c == '\r') && cs.get(1).is_some_and(|(c, _)| *c == '\n') {
+        cs.drain(..2);
+    } else if cs.first().is_some_and(|(c, _)| *c == '\n') {
+        cs.remove(0);
+    }
+    // What is after the last line break, when it is only white space, is the
+    // indentation of the closing quotes.
+    let mut indent = 0usize;
+    if let Some(last) = cs.iter().rposition(|(c, _)| *c == '\n') {
+        if cs[last + 1..].iter().all(|(c, _)| *c == ' ' || *c == '\t') {
+            indent = cs.len() - last - 1;
+            let cut = if last > 0 && cs[last - 1].0 == '\r' {
+                last - 1
+            } else {
+                last
+            };
+            cs.truncate(cut);
+        }
+    }
+    if indent == 0 {
+        return cs;
+    }
+    let mut out = Vec::with_capacity(cs.len());
+    let mut at_start = true;
+    let mut taken = 0usize;
+    for (c, offset) in cs {
+        if at_start && taken < indent && (c == ' ' || c == '\t') {
+            taken += 1;
+            continue;
+        }
+        at_start = false;
+        if c == '\n' {
+            at_start = true;
+            taken = 0;
+        }
+        out.push((c, offset));
+    }
+    out
 }
 
 /// Finds a trailing format spec (`:.N`, `:,` or `:,.N`) in an interpolation
@@ -1217,49 +1634,88 @@ impl Parser<'_> {
 fn split_spec(frag: &str) -> (usize, Option<NumFormat>) {
     let mut depth = 0i32;
     let mut in_str = false;
+    // The `?` of a ternary still waiting for its `:`.
+    let mut ternary = 0u32;
     let mut colon = None;
-    for (i, c) in frag.char_indices() {
+    let chars: Vec<(usize, char)> = frag.char_indices().collect();
+    for (at, &(i, c)) in chars.iter().enumerate() {
         match c {
             '"' => in_str = !in_str,
             '(' | '[' | '{' if !in_str => depth += 1,
             ')' | ']' | '}' if !in_str => depth -= 1,
-            ':' if !in_str && depth == 0 => colon = Some(i),
+            '?' if !in_str && depth == 0 => {
+                // `??` and `?.` are not a ternary's.
+                let next = chars.get(at + 1).map(|(_, n)| *n);
+                let prev = at
+                    .checked_sub(1)
+                    .and_then(|p| chars.get(p))
+                    .map(|(_, p)| *p);
+                if next != Some('?') && next != Some('.') && prev != Some('?') {
+                    ternary += 1;
+                }
+            }
+            ':' if !in_str && depth == 0 => {
+                if ternary > 0 {
+                    ternary -= 1;
+                } else {
+                    colon = Some(i);
+                }
+            }
             _ => {}
         }
     }
     let Some(i) = colon else {
         return (frag.len(), None);
     };
-    let spec = frag[i + 1..].trim();
-    let (group, rest) = match spec.strip_prefix(',') {
-        Some(rest) => (true, rest),
-        None => (false, spec),
-    };
-    if rest.is_empty() {
-        return if group {
-            (
-                i,
-                Some(NumFormat {
-                    group,
-                    decimals: None,
-                }),
-            )
-        } else {
-            (frag.len(), None)
-        };
-    }
-    let digits = rest.strip_prefix('.').unwrap_or("");
-    match digits.parse::<u8>() {
-        Ok(n) if !digits.is_empty() && digits.bytes().all(|b| b.is_ascii_digit()) => (
-            i,
-            Some(NumFormat {
-                group,
-                decimals: Some(n.min(MAX_DECIMALS)),
-            }),
-        ),
-        _ => (frag.len(), None),
+    match parse_spec(frag[i + 1..].trim()) {
+        Some(spec) => (i, Some(spec)),
+        None => (frag.len(), None),
     }
 }
+
+/// What follows the colon of an interpolation, `[<>^][0][width][,][.N][%]`, or
+/// `None` when it is not one (so the colon was part of the expression).
+fn parse_spec(spec: &str) -> Option<NumFormat> {
+    if spec.is_empty() {
+        return None;
+    }
+    let mut rest = spec;
+    let mut out = NumFormat::default();
+    if let Some(a) = rest.chars().next().filter(|c| matches!(c, '<' | '>' | '^')) {
+        out.align = Some(a);
+        rest = &rest[1..];
+    }
+    // A leading zero with more digits after it fills with zeros.
+    if rest.starts_with('0') && rest[1..].starts_with(|c: char| c.is_ascii_digit()) {
+        out.zero = true;
+        rest = &rest[1..];
+    }
+    let digits = rest.bytes().take_while(u8::is_ascii_digit).count();
+    if digits > 0 {
+        out.width = Some(rest[..digits].parse::<u16>().ok()?.min(MAX_WIDTH));
+        rest = &rest[digits..];
+    }
+    if let Some(r) = rest.strip_prefix(',') {
+        out.group = true;
+        rest = r;
+    }
+    if let Some(r) = rest.strip_prefix('.') {
+        let d = r.bytes().take_while(u8::is_ascii_digit).count();
+        if d == 0 {
+            return None;
+        }
+        out.decimals = Some(r[..d].parse::<u8>().ok()?);
+        rest = &r[d..];
+    }
+    if let Some(r) = rest.strip_prefix('%') {
+        out.percent = true;
+        rest = r;
+    }
+    (rest.is_empty() && out != NumFormat::default()).then_some(out)
+}
+
+/// The widest a `{x:N}` spec makes a text; more is a mistake, not layout.
+const MAX_WIDTH: u16 = 200;
 
 /// The most decimals a `{x:.N}` spec shows; more is noise, not precision.
 const MAX_DECIMALS: u8 = 9;

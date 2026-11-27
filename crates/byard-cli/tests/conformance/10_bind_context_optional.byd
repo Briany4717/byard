@@ -1,5 +1,7 @@
 // Bindings, contexts and optional values.
 
+//# covers: bindings, contexts, optional-values, provide-and-inject
+
 //# case: bind-writes-the-callers-var
 //# text: true
 View Switch(bind on: Bool) {
@@ -257,8 +259,78 @@ View Pill(n: Int? = 3) { Text("{n ?? 7}") }
 View Main() { Pill() }
 
 //# case: optional-var
-//# gap: `none` is only for parameters; a `var` cannot start with nothing
 //# fragment
-//# text: none
+//# text: 0
 var picked: Int? = none
-Text("{picked ?? "none"}")
+Text("{picked ?? 0}")
+
+//# case: optional-var-takes-a-value
+//# fragment
+//# text: 5
+var picked: Int? = none
+on mount => { picked = 5 }
+Text("{picked ?? 0}")
+
+//# case: optional-var-goes-back-to-nothing
+//# fragment
+//# text: 0
+var picked: Int? = 7
+on mount => { picked = none }
+Text("{picked ?? 0}")
+
+//# case: optional-var-read-without-a-guard-is-one-error
+//# fragment
+//# error: NoneNotHandled
+//# diagnostics: 1
+var picked: Int? = none
+Text("{picked}")
+
+//# case: optional-var-is-safe-where-it-is-known
+//# fragment
+//# text: 3
+var picked: Int? = none
+on mount => { picked = 3 }
+when picked != none { Text("{picked}") } else { Text("nothing") }
+
+//# case: optional-var-compared-with-none
+//# fragment
+//# text: true | false
+var a: Int? = none
+var b: Int? = 1
+Text("{a == none}")
+Text("{b == none}")
+
+//# case: optional-let-from-a-method-is-nothing-past-the-end
+//# fragment
+//# text: 1 | 9
+let xs = [1]
+let first: Int? = xs.get(0)
+let second: Int? = xs.get(3)
+Text("{first ?? 9}")
+Text("{second ?? 9}")
+
+//# case: if-let-runs-the-first-branch-only-when-there-is-a-value
+//# text: 3 | none
+View Pill(n: Int? = none) {
+    var shown = "none"
+    on mount => { if let v = n { shown = "{v}" } else { shown = "none" } }
+    Text("{shown}")
+}
+View Main() { Column { Pill(n: 3) Pill() } }
+
+//# case: if-let-on-a-var
+//# fragment
+//# text: 4
+var picked: Int? = none
+var out = 0
+on mount => { picked = 2 if let v = picked { out = v * 2 } }
+Text("{out}")
+
+//# case: if-let-name-is-not-there-after-the-block
+//# fragment
+//# error: UnknownName
+//# diagnostics: 1
+var picked: Int? = 1
+var out = 0
+on mount => { if let v = picked { out = v } out = v }
+Text("{out}")

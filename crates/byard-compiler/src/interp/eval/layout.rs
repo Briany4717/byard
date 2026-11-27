@@ -903,10 +903,10 @@ impl Interpreter {
                     }
                 }
                 RenderNode::For { pool, list } => {
-                    let items = match self.binding_value(*list) {
-                        Some(Value::List(items)) => items,
-                        _ => Vec::new(),
-                    };
+                    let items = self
+                        .binding_value(*list)
+                        .and_then(super::expr::rows_of)
+                        .unwrap_or_default();
                     if self.for_pools[*pool].keyed.is_some() {
                         dirtied |= self.reconcile_keyed_for(*pool, &items);
                         let live = self.for_pools[*pool].len;

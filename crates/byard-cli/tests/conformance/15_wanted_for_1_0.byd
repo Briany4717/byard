@@ -1,9 +1,10 @@
-// What 1.0 needs and the language does not have yet. Every case here is a
-// gap: it is written the way docs/language/proposals.md proposes, and it
-// starts to pass the day the feature lands.
+// What 1.0 needed and the language did not have: each case was a gap, written
+// the way docs/language/proposals.md proposes, and holds now that the feature
+// landed. A new gap goes in the file of its subject, marked `//# gap:`.
+
+//# covers: maps-and-sets, stores, match, colours-durations-and-angles, shared-functions
 
 //# case: enum-with-data
-//# gap: an enum case cannot carry values
 //# text: failed: offline
 enum Load { idle, loading, failed(message: Str), ready(count: Int) }
 View Main() {
@@ -17,7 +18,6 @@ View Main() {
 }
 
 //# case: match-as-a-view-member
-//# gap: there is no `match`
 //# text: b
 enum S { a, b }
 View Main() {
@@ -29,7 +29,6 @@ View Main() {
 }
 
 //# case: match-must-cover-every-case
-//# gap: there is no `match`
 //# error: NonExhaustive
 enum S { a, b }
 View Main() {
@@ -38,62 +37,70 @@ View Main() {
 }
 
 //# case: map-type
-//# gap: there is no `Map`
 //# fragment
 //# text: 2 1 0
 var ages: Map<Str, Int> = ["ada": 36, "bo": 1]
 Text("{ages.len} {ages["bo"] ?? 0} {ages["zed"] ?? 0}")
 
 //# case: list-get-is-optional
-//# gap: no `get`; an index that may be missing has no checked form
 //# fragment
 //# text: 1 9
 let xs = [1]
 Text("{xs.get(0) ?? 9} {xs.get(5) ?? 9}")
 
+//# case: list-get-with-a-negative-index-or-on-an-empty-list
+//# fragment
+//# text: 9 | 9
+let none: List<Int> = []
+let xs = [1]
+Text("{xs.get(-1) ?? 9}")
+Text("{none.get(0) ?? 9}")
+
+//# case: list-get-with-a-text-index-is-an-error
+//# fragment
+//# error: TypeMismatch
+let xs = [1]
+Text("{xs.get("a") ?? 9}")
+
 //# case: list-helpers
-//# gap: no `first`, `last`, `any`, `all`, `count`, `sum`
 //# fragment
 //# text: 1 3 true false 2 6
 let xs = [1, 2, 3]
 Text("{xs.first() ?? 0} {xs.last() ?? 0} {xs.any(x => x > 2)} {xs.all(x => x > 2)} {xs.count(x => x > 1)} {xs.sum()}")
 
 //# case: list-insert-and-update
-//# gap: no `insertAt`, `updateAt`
 //# fragment
 //# text: 0,1,2 1,9
 Text("{[1, 2].insertAt(0, 0).join(",")} {[1, 2].updateAt(1, 9).join(",")}")
 
 //# case: typed-json
-//# gap: a reply has no checked type until it is written to a typed `let`
 //# error: UnknownField
 type Reply = { results: List<Str> }
 View Main() {
     inject Json as json
     var n = 0
     on mount => {
-        json.parse("{}")
+        json.parse("\{\}")
             ok v => { n = (v as Reply).resluts.len }
     }
     Text("{n}")
 }
 
 //# case: colour-type-shows-as-a-colour
-//# gap: a colour is an `Int` and shows as one
+//# edition: 2027
 //# fragment
 //# text: #FF0000
 let c: Color = 0xFF0000
 Text("{c}")
 
 //# case: duration-type-keeps-its-unit
-//# gap: a duration is a count of milliseconds with no type
+//# edition: 2027
 //# fragment
 //# error: TypeMismatch
 let d = 200ms
 Text("{d + 0xFF0000}")
 
 //# case: multi-line-string
-//# gap: no multi-line string that drops its indentation
 //# fragment
 //# text: 3
 let s = """
@@ -109,13 +116,11 @@ View Card() { Text("a") }
 View Main() { Card() }
 
 //# case: string-format-width
-//# gap: no padding in an interpolation
 //# fragment
 //# text: [  7] [007]
 Text("[{7:3}] [{7:03}]")
 
 //# case: if-let-on-an-optional
-//# gap: an optional is unwrapped only by `??`, or by `when x != none` on a parameter
 //# text: 3
 View Pill(n: Int? = none) {
     var shown = 0
@@ -125,7 +130,6 @@ View Pill(n: Int? = none) {
 View Main() { Pill(n: 3) }
 
 //# case: global-store
-//# gap: there is no state above the views
 //# text: 1
 store Session { count: Int = 0 }
 View Bump() {
@@ -137,4 +141,93 @@ View Main() {
     inject Session as s
     Bump()
     Text("{s.count}")
+}
+
+//# case: cast-gives-the-value-the-type-it-was-cast-to
+//# error: UnknownField
+//# diagnostics: 1
+type Place = { name: Str, latitude: Float }
+type Reply = { results: List<Place> }
+View Main() {
+    inject Json as json
+    var n = ""
+    on mount => {
+        json.parse("\{\}")
+            ok v => { n = (v as Reply).results[0].lat }
+    }
+    Text("{n}")
+}
+
+//# case: cast-to-a-type-that-is-not-one
+//# error: UnknownType
+//# diagnostics: 1
+View Main() {
+    inject Json as json
+    var n = 0
+    on mount => {
+        json.parse("\{\}")
+            ok v => { n = (v as Nope).count }
+    }
+    Text("{n}")
+}
+
+//# case: cast-of-a-value-that-fits
+//# text: 3
+type Point = { x: Int, y: Int }
+View Main() {
+    let p = { x: 1, y: 2 } as Point
+    Text("{p.x + p.y}")
+}
+
+//# case: cast-of-a-value-that-does-not-fit-is-told-where
+//# error: ShapeMismatch
+//# diagnostics: 1
+type Point = { x: Int, y: Int }
+View Main() {
+    let p = { x: 1, y: "two" } as Point
+    Text("{p.x}")
+}
+
+//# case: cast-to-a-scalar
+//# text: 5
+View Main() {
+    let n = 5 as Int
+    Text("{n}")
+}
+
+//# case: reading-a-field-of-a-reply-nothing-checks-is-a-warning
+//# warning: UntypedReply
+//# diagnostics: 1
+View Main() {
+    inject Json as json
+    var n = 0
+    on mount => {
+        json.parse("\{\}")
+            ok v => { n = v.count }
+    }
+    Text("{n}")
+}
+
+//# case: reading-a-field-of-a-reply-that-was-cast-is-not
+type Reply = { count: Int }
+View Main() {
+    inject Json as json
+    var n = 0
+    on mount => {
+        json.parse("\{\}")
+            ok v => { n = (v as Reply).count }
+    }
+    Text("{n}")
+}
+
+//# case: a-reply-passed-on-whole-is-not-a-read
+View Main() {
+    inject Json as json
+    var n = 0
+    fn size(x: Int) -> Int => x
+    on mount => {
+        json.parse("\{\}")
+            ok v => { n = size(v) }
+    }
+    Text("{n}")
 }

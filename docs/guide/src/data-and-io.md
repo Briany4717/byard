@@ -1,6 +1,9 @@
 # Data and I/O
 
 ```byld
+type Now = { temperature_2m: Float }
+type Forecast = { current: Now }
+
 View Main() {
     inject Http as http
 
@@ -12,7 +15,8 @@ View Main() {
         state = "loading"
         http.get("https://api.open-meteo.com/v1/forecast?latitude=35.68&longitude=139.69&current=temperature_2m")
             ok res => {
-                temp = res.json.current.temperature_2m
+                let forecast = res.json as Forecast
+                temp = forecast.current.temperature_2m
                 state = "ok"
             }
             err e => {
@@ -79,6 +83,31 @@ adds `status` and `body` when there was an answer. Turn the wi-fi off and press 
 button, and the `err` arm runs: the failure has a name, and the screen is not left
 with a spinner that never stops.
 
+### A reply with a type
+
+What a server sends is only what it sent. `reply as Type` compares it with a `type` where it
+arrives, and from there it is a value of that type:
+
+```text
+type Now = { temperature_2m: Float }
+type Forecast = { current: Now, daily: List<Day> }
+
+http.get(url)
+    ok res => {
+        let forecast = res.json as Forecast
+        temp = forecast.current.temperature_2m
+    }
+    err e => { message = "{e.kind}: {e.message}" }     // kind: "shape", path: "daily[3].max"
+```
+
+A reply of another shape stops the `ok` arm where the `as` is, and goes to the call's `err`
+arm as an error of kind `shape`, with the `path` of the first field that does not fit
+(`daily[3].max`) and a `message` that says what is wrong with it. A call with no `err` arm
+reports it instead, since nothing else would. After the `as`, `forecast.curent` is a check
+error. Reading a field of a reply that was not given a type, `res.json.current.temperature_2m`,
+is the warning `untyped-reply`, which says to write the type; `[lints]` in `byard.toml`
+switches it off.
+
 ### Late answers
 
 Answers can arrive in any order. If a view asks for each keystroke of a search, a slow
@@ -103,7 +132,7 @@ View Main() {
             http.get("https://geocoding-api.open-meteo.com/v1/search?name={asked.urlEncoded()}&count=5")
                 ok res => {
                     if asked == query {
-                        let reply: GeoReply = res.json
+                        let reply = res.json as GeoReply
                         found = reply.results ?? []
                     }
                 }
@@ -129,7 +158,7 @@ View Main() {
 
 Three things here are worth copying. `on change(query)` asks again whenever the field
 changes. `"{asked.urlEncoded()}"` keeps a `&` or `#` typed into the field from cutting
-the request short. And `let reply: GeoReply = res.json` gives the reply a type, so
+the request short. And `res.json as GeoReply` gives the reply a type, so
 `reply.resluts` is a check error and not an empty list, and what the server sent is
 compared with `GeoReply` when it arrives.
 
@@ -158,8 +187,8 @@ let go = () => {
   `timeout_ms`.
 
 An answer is a record: `status`, `ok`, `body` (the text) and `json`. `json` is the body
-parsed, a record or list, so `res.json.current.temperature_2m` reads into the reply the
-way it reads into a record you wrote. If the server says the body is JSON and it is not,
+parsed, a record or list, and `res.json as Forecast` is how a program reads into it as it
+reads into a record it wrote. If the server says the body is JSON and it is not,
 `json` is empty and `body` is intact. Answers with a status outside 200 to 299 go to
 `err`, with `status` and `body` still on it, so `e.status` is there if you want to
 branch on a 404.
@@ -196,7 +225,7 @@ inject Json as json
 var parsed = 0
 var text = ""
 let go = () => {
-    json.parse("{\"a\": 1}")
+    json.parse("\{\"a\": 1\}")
         ok v => { parsed = v.a }
         err e => { text = e.message }
     json.stringify({ a: 1 })

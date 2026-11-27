@@ -9,20 +9,21 @@
 //! lowering of an action: a mutation, a bare expression, or a callback body.
 
 use super::animation::mix_hex_oklab;
-use super::{CURRENT_PAYLOAD, Interpreter, LAMBDA_ARGS, Lowered};
+use super::{CURRENT_PAYLOAD, IN_ARM, Interpreter, LAMBDA_ARGS, Lowered, RETURNING, SHAPE_FAILURE};
 use crate::diagnostics::{CompileError, Span};
 use crate::interp::env::{Env, SignalId, Value};
 use crate::interp::events::Action;
 use crate::interp::reactive::untrack;
 use crate::parser::ast::{AssignOp, BinOp, Expr, NumFormat, PostfixOp, StrPart, UnOp};
 use crate::symbol::Symbol;
+use unicode_segmentation::UnicodeSegmentation;
 
 /// The value of a numeric literal, exactly as [`Interpreter::lower_expr`]
 /// would compute it, or `None` for any other expression. Literals need no
 /// context, so [`Interpreter::eval_pure`] answers them without lowering.
 const fn numeric_literal(expr: &Expr) -> Option<Value> {
     match expr {
-        Expr::IntLit(n, _) => Some(Value::Int(*n)),
+        Expr::IntLit(n, _) | Expr::DurationLit(n, _) => Some(Value::Int(*n)),
         // An angle is already in radians (RFC-0011 T1), a plain `Float`.
         Expr::FloatLit(f, _) | Expr::AngleLit(f, _) => Some(Value::Float(*f)),
         _ => None,
@@ -40,12 +41,87 @@ enum NoneTest<'e> {
     Read(&'e Expr),
 }
 
+/// A colour as a text writes it: `#RRGGBB`, and `#RRGGBBAA` when it has an
+/// alpha.
+fn shown_color(color: i64) -> String {
+    let rgb = color & 0x00FF_FFFF;
+    if color & crate::lexer::COLOR_HAS_ALPHA_TAG != 0 {
+        format!("#{rgb:06X}{:02X}", (color >> 24) & 0xFF)
+    } else {
+        format!("#{rgb:06X}")
+    }
+}
+
+/// An angle, which is held in radians, as a text writes it: in degrees, to
+/// two places and no more than it needs.
+fn shown_angle(radians: f64) -> String {
+    let degrees = (radians.to_degrees() * 100.0).round() / 100.0;
+    format!("{degrees}deg")
+}
+
+/// The rows a `for` runs over: a list's items, a set's items, or a map's
+/// entries, each a `{ key, value }`. `None` for anything else.
+pub(super) fn rows_of(value: Value) -> Option<Vec<Value>> {
+    match value {
+        Value::List(items) | Value::Set(items) => Some(items),
+        Value::Map(pairs) => Some(
+            pairs
+                .into_iter()
+                .map(|(key, value)| {
+                    Value::Record(vec![
+                        (Symbol::intern("key"), key),
+                        (Symbol::intern("value"), value),
+                    ])
+                })
+                .collect(),
+        ),
+        _ => None,
+    }
+}
+
+/// The arguments of a call in the order of the parameters of what it calls:
+/// the positional ones first, and each one written by name in the place of the
+/// parameter it names. A parameter no argument is for is `None`.
+fn in_parameter_order<'a>(
+    params: &[Symbol],
+    args: &'a [crate::parser::ast::Arg],
+) -> Vec<Option<&'a crate::parser::ast::Arg>> {
+    let mut ordered = vec![None; params.len()];
+    let mut next = 0;
+    for arg in args {
+        match &arg.name {
+            None => {
+                if let Some(slot) = ordered.get_mut(next) {
+                    *slot = Some(arg);
+                }
+                next += 1;
+            }
+            Some(written) => {
+                if let Some(at) = params.iter().position(|p| p == written) {
+                    ordered[at] = Some(arg);
+                }
+            }
+        }
+    }
+    ordered
+}
+
+/// The most whole numbers `a..b` holds. A longer one is an empty list.
+const MAX_RANGE: i128 = 1_000_000;
+
 /// Evaluates one binary arithmetic operation (`+ - * /`, RFC-0020 enabler)
 /// with numeric promotion: Int∘Int → Int (division truncates), any Float
 /// operand → Float. Division by zero yields the zero of the promoted type and
 /// a non-numeric operand yields [`Value::Unit`], the logic thread never
 /// panics on user expressions. Pure and unit-testable.
 pub(super) fn eval_binary(op: BinOp, lhs: Value, rhs: Value) -> Value {
+    eval_binary_in(op, lhs, rhs, false)
+}
+
+/// [`eval_binary`], with the overflow of an `Int` either wrapping (the
+/// baseline edition) or stopping at the largest and smallest (`saturate`, from
+/// edition 2027).
+pub(super) fn eval_binary_in(op: BinOp, lhs: Value, rhs: Value, saturate: bool) -> Value {
     match op {
         // Comparison (RFC-0027 §1) → Bool.
         BinOp::Eq | BinOp::Ne | BinOp::Lt | BinOp::Le | BinOp::Gt | BinOp::Ge => {
@@ -59,15 +135,31 @@ pub(super) fn eval_binary(op: BinOp, lhs: Value, rhs: Value) -> Value {
             Value::Unit => rhs,
             value => value,
         },
+        BinOp::Range => match (lhs, rhs) {
+            (Value::Int(a), Value::Int(b)) => {
+                // A list this long is not one anybody meant to make.
+                if i128::from(b) - i128::from(a) > MAX_RANGE {
+                    Value::List(Vec::new())
+                } else {
+                    Value::List((a..b).map(Value::Int).collect())
+                }
+            }
+            _ => Value::Unit,
+        },
         BinOp::Add | BinOp::Sub | BinOp::Mul | BinOp::Div | BinOp::Rem | BinOp::And | BinOp::Or => {
             match (lhs, rhs) {
                 (Value::Int(a), Value::Int(b)) => Value::Int(match op {
+                    BinOp::Add if saturate => a.saturating_add(b),
+                    BinOp::Sub if saturate => a.saturating_sub(b),
+                    BinOp::Mul if saturate => a.saturating_mul(b),
                     BinOp::Add => a.wrapping_add(b),
                     BinOp::Sub => a.wrapping_sub(b),
                     BinOp::Mul => a.wrapping_mul(b),
                     BinOp::Div => {
                         if b == 0 {
                             0
+                        } else if saturate {
+                            a.saturating_div(b)
                         } else {
                             a.wrapping_div(b)
                         }
@@ -185,15 +277,29 @@ pub(super) fn structural_eq(a: &Value, b: &Value) -> bool {
         (Value::Bool(x), Value::Bool(y)) => x == y,
         (Value::Str(x), Value::Str(y)) => x == y,
         (Value::Unit, Value::Unit) => true,
+        // A set is the same set in any order, and a map the same map.
+        (Value::Set(xs), Value::Set(ys)) => {
+            xs.len() == ys.len() && xs.iter().all(|x| ys.iter().any(|y| structural_eq(x, y)))
+        }
+        (Value::Map(xs), Value::Map(ys)) => {
+            xs.len() == ys.len()
+                && xs.iter().all(|(kx, vx)| {
+                    ys.iter()
+                        .find(|(ky, _)| structural_eq(kx, ky))
+                        .is_some_and(|(_, vy)| structural_eq(vx, vy))
+                })
+        }
         (Value::List(xs), Value::List(ys)) => {
             xs.len() == ys.len() && xs.iter().zip(ys).all(|(x, y)| structural_eq(x, y))
         }
+        // Fields are compared by name, in whatever order they were written.
         (Value::Record(xs), Value::Record(ys)) => {
             xs.len() == ys.len()
-                && xs
-                    .iter()
-                    .zip(ys)
-                    .all(|((kx, vx), (ky, vy))| kx == ky && structural_eq(vx, vy))
+                && xs.iter().all(|(kx, vx)| {
+                    ys.iter()
+                        .find(|(ky, _)| ky == kx)
+                        .is_some_and(|(_, vy)| structural_eq(vx, vy))
+                })
         }
         _ => false,
     }
@@ -235,12 +341,17 @@ fn target_name(target: &Expr) -> String {
 /// Resolves a data member access (RFC-0027 §4/§6): `xs.len` (list/string
 /// length → `Int`) or `r.field` (record field → its value). Anything else
 /// degrades to `Unit` (the checker reports it; no panic).
-fn data_member(base: &Value, field: &Symbol) -> Value {
+fn data_member(base: &Value, field: &Symbol, graphemes: bool) -> Value {
     let f = field.as_str();
     match base {
-        Value::List(xs) if f == "len" => Value::Int(i64::try_from(xs.len()).unwrap_or(i64::MAX)),
+        Value::List(xs) | Value::Set(xs) if f == "len" => {
+            Value::Int(i64::try_from(xs.len()).unwrap_or(i64::MAX))
+        }
+        Value::Map(pairs) if f == "len" => {
+            Value::Int(i64::try_from(pairs.len()).unwrap_or(i64::MAX))
+        }
         Value::Str(s) if f == "len" => {
-            Value::Int(i64::try_from(s.chars().count()).unwrap_or(i64::MAX))
+            Value::Int(i64::try_from(text_len(s, graphemes)).unwrap_or(i64::MAX))
         }
         Value::Record(fields) => fields
             .iter()
@@ -307,13 +418,28 @@ fn with_item<F: FnOnce() -> Value>(named: Option<&Symbol>, elem: Value, f: F) ->
 /// Indexes `base[index]` (RFC-0027 §4): a `List` at an in-range integer index
 /// yields the element; out-of-range or non-list/non-int degrades to `Unit`
 /// (never a panic). Negative indices are out of range.
-pub(super) fn index_value(base: &Value, index: &Value) -> Value {
+/// [`index_value`], where a text is indexed by character: the one at `i`, or
+/// nothing past the end.
+pub(super) fn index_value(base: &Value, index: &Value, graphemes: bool) -> Value {
     match (base, index) {
+        (Value::Str(s), Value::Int(i)) => usize::try_from(*i)
+            .ok()
+            .and_then(|i| {
+                text_units(s, graphemes)
+                    .get(i)
+                    .map(|c| Value::Str((*c).to_string()))
+            })
+            .unwrap_or(Value::Unit),
         (Value::List(xs), Value::Int(i)) => usize::try_from(*i)
             .ok()
             .and_then(|i| xs.get(i))
             .cloned()
             .unwrap_or(Value::Unit),
+        // The value of a key, or nothing.
+        (Value::Map(pairs), key) => pairs
+            .iter()
+            .find(|(k, _)| structural_eq(k, key))
+            .map_or(Value::Unit, |(_, v)| v.clone()),
         _ => Value::Unit,
     }
 }
@@ -351,9 +477,12 @@ fn format_scalar(v: &Value) -> String {
 /// `text.split(sep)` (RFC-0047 §2): every piece between occurrences of `sep`,
 /// empty ones kept. An empty `sep` splits into characters (Unicode scalar
 /// values, the unit `len` and `slice` count in), and an empty text into none.
-fn split_text(text: &str, sep: &str) -> Vec<Value> {
+fn split_text(text: &str, sep: &str, graphemes: bool) -> Vec<Value> {
     if sep.is_empty() {
-        return text.chars().map(|c| Value::Str(c.to_string())).collect();
+        return text_units(text, graphemes)
+            .into_iter()
+            .map(|c| Value::Str(c.to_string()))
+            .collect();
     }
     text.split(sep).map(|p| Value::Str(p.to_string())).collect()
 }
@@ -370,10 +499,32 @@ fn replace_text(text: &str, from: &str, to: &str) -> String {
 
 /// `text.indexOf(needle)` (RFC-0047 §2): the index in characters of the first
 /// occurrence, or `-1`.
-fn index_of_text(text: &str, needle: &str) -> i64 {
+fn index_of_text(text: &str, needle: &str, graphemes: bool) -> i64 {
     text.find(needle).map_or(-1, |at| {
-        i64::try_from(text[..at].chars().count()).unwrap_or(-1)
+        i64::try_from(text_len(&text[..at], graphemes)).unwrap_or(-1)
     })
+}
+
+/// What a text is made of, one piece for each thing `len`, `slice`, `indexOf`
+/// and `s[i]` count: a Unicode scalar value (edition 2026) or a grapheme
+/// cluster, what a reader sees as one character (edition 2027).
+fn text_units(text: &str, graphemes: bool) -> Vec<&str> {
+    if graphemes {
+        text.graphemes(true).collect()
+    } else {
+        text.char_indices()
+            .map(|(i, c)| &text[i..i + c.len_utf8()])
+            .collect()
+    }
+}
+
+/// How many [`text_units`] a text has.
+fn text_len(text: &str, graphemes: bool) -> usize {
+    if graphemes {
+        text.graphemes(true).count()
+    } else {
+        text.chars().count()
+    }
 }
 
 /// A number with exactly `decimals` decimals, for `{x:.N}` (RFC-0027).
@@ -401,15 +552,57 @@ fn format_fixed(v: &Value, decimals: u8) -> String {
 /// the decimals produced, so the two cannot disagree about rounding. Only a
 /// number is grouped; anything else is written as `{x}` would write it.
 fn format_spec(v: &Value, spec: NumFormat) -> String {
-    let text = match spec.decimals {
+    let number = matches!(v, Value::Int(_) | Value::Float(_));
+    // A percentage is the number times a hundred.
+    let scaled;
+    let v = if spec.percent && number {
+        scaled = match v {
+            Value::Int(n) => Value::Float(*n as f64 * 100.0),
+            Value::Float(f) => Value::Float(f * 100.0),
+            other => other.clone(),
+        };
+        &scaled
+    } else {
+        v
+    };
+    let mut text = match spec.decimals {
         Some(n) => format_fixed(v, n),
         None => format_scalar(v),
     };
-    if spec.group && matches!(v, Value::Int(_) | Value::Float(_)) {
-        group_thousands(&text)
-    } else {
-        text
+    if spec.group && number {
+        text = group_thousands(&text);
     }
+    if spec.percent && number {
+        text.push('%');
+    }
+    pad_to_width(text, spec, number)
+}
+
+/// `text` made as wide as the spec says, with spaces or, for a number written
+/// `0N`, zeros after its sign. Text already that wide is left as it is.
+fn pad_to_width(text: String, spec: NumFormat, number: bool) -> String {
+    let Some(width) = spec.width.map(usize::from) else {
+        return text;
+    };
+    let len = text.chars().count();
+    if len >= width {
+        return text;
+    }
+    let gap = width - len;
+    if spec.zero && number && spec.align.is_none() {
+        let (sign, digits) = match text.strip_prefix('-') {
+            Some(rest) => ("-", rest),
+            None => ("", text.as_str()),
+        };
+        return format!("{sign}{}{digits}", "0".repeat(gap));
+    }
+    let align = spec.align.unwrap_or(if number { '>' } else { '<' });
+    let (left, right) = match align {
+        '<' => (0, gap),
+        '^' => (gap / 2, gap - gap / 2),
+        _ => (gap, 0),
+    };
+    format!("{}{text}{}", " ".repeat(left), " ".repeat(right))
 }
 
 /// `text` (a number as `{x}` writes it) with a `,` between every three digits
@@ -509,6 +702,44 @@ impl Interpreter {
             }
             // Already canonicalized to radians by the lexer (RFC-0011 T1),
             // from here on an angle is just a plain `Float`.
+            // `value as Type`: the value, when it has the shape; when it has
+            // not, the `ok` arm it is in stops and the call's `err` arm is run
+            // with the path of the first field that does not fit. Outside an
+            // arm there is none to run, and the difference is reported.
+            Expr::Cast { value, ty, span } => {
+                let mut compute = self.lower_expr(value, payload_name);
+                let records = std::rc::Rc::clone(&self.records);
+                let diagnostics = std::rc::Rc::clone(&self.bridge.diagnostics);
+                let (ty, span) = (ty.clone(), *span);
+                Box::new(move |ctx| {
+                    let found = compute(ctx);
+                    let Some((path, why)) =
+                        super::super::shape::difference_at(&found, &ty, &records)
+                    else {
+                        return found;
+                    };
+                    if IN_ARM.with(std::cell::Cell::get) > 0 {
+                        SHAPE_FAILURE.with(|f| *f.borrow_mut() = Some((path, why)));
+                        RETURNING.with(|r| r.set(true));
+                    } else {
+                        diagnostics.borrow_mut().push(CompileError::ShapeMismatch {
+                            span,
+                            var: "this value".to_string(),
+                            expected: super::super::shape::written(&ty),
+                            problem: if path.is_empty() {
+                                why
+                            } else {
+                                format!("at `{path}` {why}")
+                            },
+                        });
+                    }
+                    Value::Unit
+                })
+            }
+            Expr::DurationLit(ms, _) => {
+                let ms = *ms;
+                Box::new(move |_| Value::Int(ms))
+            }
             Expr::AngleLit(rad, _) => {
                 let rad = *rad;
                 Box::new(move |_| Value::Float(rad))
@@ -614,8 +845,24 @@ impl Interpreter {
                         None => {}
                     }
                 }
+                // What is compared with the word `none` is asked whether it is
+                // nothing, a name a lambda or an `if let` holds included.
+                if matches!(op, BinOp::Eq | BinOp::Ne)
+                    && self.is_none_word(lhs) != self.is_none_word(rhs)
+                {
+                    let other = if self.is_none_word(lhs) { rhs } else { lhs };
+                    let mut read = self.lower_expr(other, payload_name);
+                    let want_present = op == BinOp::Ne;
+                    return Box::new(move |ctx| {
+                        Value::Bool(!matches!(read(ctx), Value::Unit) == want_present)
+                    });
+                }
                 let mut lc = self.lower_expr(lhs, payload_name);
-                let mut rc = self.lower_expr(rhs, payload_name);
+                let mut rc = if op == BinOp::Otherwise {
+                    self.lower_value(rhs, payload_name)
+                } else {
+                    self.lower_expr(rhs, payload_name)
+                };
                 match op {
                     BinOp::And => Box::new(move |ctx| {
                         // Evaluate, and thereby read-track, the RHS only when
@@ -638,7 +885,10 @@ impl Interpreter {
                         Value::Unit => rc(ctx),
                         value => value,
                     }),
-                    _ => Box::new(move |ctx| eval_binary(op, lc(ctx), rc(ctx))),
+                    _ => {
+                        let saturate = self.saturates();
+                        Box::new(move |ctx| eval_binary_in(op, lc(ctx), rc(ctx), saturate))
+                    }
                 }
             }
             // Prefix unary (`!b`, `-x`), RFC-0027 §2. `!` negates a `Bool`;
@@ -647,8 +897,10 @@ impl Interpreter {
             Expr::Unary { op, rhs, .. } => {
                 let op = *op;
                 let mut rc = self.lower_expr(rhs, payload_name);
+                let saturate = self.saturates();
                 Box::new(move |ctx| match (op, rc(ctx)) {
                     (UnOp::Not, Value::Bool(b)) => Value::Bool(!b),
+                    (UnOp::Neg, Value::Int(n)) if saturate => Value::Int(n.saturating_neg()),
                     (UnOp::Neg, Value::Int(n)) => Value::Int(n.wrapping_neg()),
                     (UnOp::Neg, Value::Float(f)) => Value::Float(-f),
                     _ => Value::Unit,
@@ -659,7 +911,8 @@ impl Interpreter {
             Expr::Index { base, index, .. } => {
                 let mut bc = self.lower_expr(base, payload_name);
                 let mut ic = self.lower_expr(index, payload_name);
-                Box::new(move |ctx| index_value(&bc(ctx), &ic(ctx)))
+                let graphemes = self.counts_graphemes();
+                Box::new(move |ctx| index_value(&bc(ctx), &ic(ctx), graphemes))
             }
             // A record literal `{ ..spread, k: v }` (RFC-0027 §6): the spread's
             // fields seed the record, then written fields append/override, all
@@ -668,7 +921,7 @@ impl Interpreter {
                 let mut spread_c = spread.as_ref().map(|s| self.lower_expr(s, payload_name));
                 let mut field_cs: Vec<(Symbol, Lowered)> = fields
                     .iter()
-                    .map(|(k, v)| (k.clone(), self.lower_expr(v, payload_name)))
+                    .map(|(k, v)| (k.clone(), self.lower_value(v, payload_name)))
                     .collect();
                 Box::new(move |ctx| {
                     let mut out: Vec<(Symbol, Value)> = match spread_c.as_mut().map(|c| c(ctx)) {
@@ -684,6 +937,19 @@ impl Interpreter {
                         }
                     }
                     Value::Record(out)
+                })
+            }
+            // A `match` was rewritten as the chain it means when the program was
+            // resolved; one that reaches here was built without resolving.
+            Expr::Match { .. } => Box::new(|_| Value::Unit),
+            // `a?.b`: nothing when `a` is, the field otherwise.
+            Expr::OptionalMember { base, field, .. } => {
+                let mut base_c = self.lower_expr(base, payload_name);
+                let field = field.clone();
+                let graphemes = self.counts_graphemes();
+                Box::new(move |ctx| match base_c(ctx) {
+                    Value::Unit => Value::Unit,
+                    value => data_member(&value, &field, graphemes),
                 })
             }
             Expr::Call { callee, args, .. } => self.lower_call(callee, args, payload_name),
@@ -731,15 +997,69 @@ impl Interpreter {
                 let s = format!(".{class}");
                 Box::new(move |_| Value::Str(s.clone()))
             }
+            // `s.count = 1`, `s.count += 1` and `s.count++` on a store write
+            // the signal of that field, which every view reading it follows.
+            Expr::Assign { target, .. } | Expr::Postfix { target, .. }
+                if self.written_store_field(target).is_some() =>
+            {
+                let Some(sig) = self.written_store_field(target) else {
+                    return Box::new(|_| Value::Unit);
+                };
+                let saturate = self.saturates();
+                match expr {
+                    Expr::Assign {
+                        op, value, span, ..
+                    } => {
+                        if let Some(noop) = self.refuse_write_here(target, *span) {
+                            return noop;
+                        }
+                        let op = *op;
+                        let mut rhs = self.lower_value(value, payload_name);
+                        Box::new(move |ctx| {
+                            let val = rhs(ctx);
+                            if RETURNING.with(std::cell::Cell::get) {
+                                return Value::Unit;
+                            }
+                            let new = assigned(op, &ctx.peek_signal(sig), val, saturate);
+                            ctx.write_signal(sig, new);
+                            Value::Unit
+                        })
+                    }
+                    Expr::Postfix { op, span, .. } => {
+                        if let Some(noop) = self.refuse_write_here(target, *span) {
+                            return noop;
+                        }
+                        let op = *op;
+                        Box::new(move |ctx| {
+                            let cur = ctx.peek_signal(sig).as_int().unwrap_or(0);
+                            ctx.write_signal(sig, Value::Int(stepped(op, cur, saturate)));
+                            Value::Unit
+                        })
+                    }
+                    _ => Box::new(|_| Value::Unit),
+                }
+            }
+            // `u.score = 10` is `u = { ..u, score: 10 }`.
+            Expr::Assign { target, .. } | Expr::Postfix { target, .. }
+                if matches!(**target, Expr::Member { .. } | Expr::Index { .. })
+                    && self.resolve_theme_scheme_target(target).is_none()
+                    && expr.field_write().is_some() =>
+            {
+                match expr.field_write() {
+                    Some(whole) => self.lower_expr(&whole, payload_name),
+                    None => Box::new(|_| Value::Unit),
+                }
+            }
             Expr::Postfix { target, op, span } => {
+                if let Some(noop) = self.refuse_write_here(target, *span) {
+                    return noop;
+                }
                 if let Ok(sig) = self.resolve_var(target, *span) {
                     let op = *op;
+                    let saturate = self.saturates();
                     Box::new(move |ctx| {
                         let cur = ctx.peek_signal(sig).as_int().unwrap_or(0);
-                        let new = match op {
-                            PostfixOp::Inc => cur + 1,
-                            PostfixOp::Dec => cur - 1,
-                        };
+                        let new = stepped(op, cur, saturate);
                         ctx.write_signal(sig, Value::Int(new));
                         Value::Unit
                     })
@@ -753,9 +1073,13 @@ impl Interpreter {
                 value,
                 span,
             } => {
+                if let Some(noop) = self.refuse_write_here(target, *span) {
+                    return noop;
+                }
                 if let Ok(sig) = self.resolve_var(target, *span) {
                     let op = *op;
-                    let mut rhs = self.lower_expr(value, payload_name);
+                    let mut rhs = self.lower_value(value, payload_name);
+                    let saturate = self.saturates();
                     // A `var` of a record type: what arrives is compared with
                     // the type, and the first difference is reported, once
                     // for this assignment.
@@ -771,7 +1095,12 @@ impl Interpreter {
                     });
                     Box::new(move |ctx| {
                         let val = rhs(ctx);
-                        let new = assigned(op, &ctx.peek_signal(sig), val);
+                        // What was being written stopped the action (a
+                        // `value as Type` that did not fit): nothing is.
+                        if RETURNING.with(std::cell::Cell::get) {
+                            return Value::Unit;
+                        }
+                        let new = assigned(op, &ctx.peek_signal(sig), val, saturate);
                         if let Some((ty, records, diagnostics, told, var, span)) = &shape {
                             let at = (span.start, span.end);
                             if !told.borrow().contains(&at) {
@@ -822,6 +1151,87 @@ impl Interpreter {
             // A `let` holds its value for the statements after it: its name is
             // read through the same stack a lambda's parameters are, pushed
             // when the statement runs and popped when the block ends.
+            // `["ada": 36]`: each key with its value; a key written twice keeps
+            // the place of the first and the value of the last.
+            Expr::MapLit(pairs, _) => {
+                let mut lowered: Vec<(Lowered, Lowered)> = pairs
+                    .iter()
+                    .map(|(k, v)| {
+                        (
+                            self.lower_expr(k, payload_name),
+                            self.lower_expr(v, payload_name),
+                        )
+                    })
+                    .collect();
+                Box::new(move |ctx| {
+                    let mut out: Vec<(Value, Value)> = Vec::with_capacity(lowered.len());
+                    for (k, v) in &mut lowered {
+                        let (k, v) = (k(ctx), v(ctx));
+                        match out.iter_mut().find(|(have, _)| structural_eq(have, &k)) {
+                            Some(pair) => pair.1 = v,
+                            None => out.push((k, v)),
+                        }
+                    }
+                    Value::Map(out)
+                })
+            }
+            Expr::ForEach {
+                var,
+                index,
+                iter,
+                body,
+                ..
+            } => {
+                let mut items = self.lower_expr(iter, payload_name);
+                let shadowed = self.lambda_params.len();
+                self.lambda_params.push(var.clone());
+                if let Some(index) = index {
+                    self.lambda_params.push(index.clone());
+                }
+                let mut run = self.lower_expr(body, payload_name);
+                self.lambda_params.truncate(shadowed);
+                let (var, index) = (var.clone(), index.clone());
+                Box::new(move |ctx| {
+                    let Some(items) = rows_of(items(ctx)) else {
+                        return Value::Unit;
+                    };
+                    let base = LAMBDA_ARGS.with(|args| args.borrow().len());
+                    for (at, item) in items.into_iter().enumerate() {
+                        LAMBDA_ARGS.with(|args| {
+                            let mut args = args.borrow_mut();
+                            args.truncate(base);
+                            args.push((var.clone(), item));
+                            if let Some(index) = &index {
+                                args.push((
+                                    index.clone(),
+                                    Value::Int(i64::try_from(at).unwrap_or(i64::MAX)),
+                                ));
+                            }
+                        });
+                        run(ctx);
+                        if RETURNING.with(std::cell::Cell::get) {
+                            break;
+                        }
+                    }
+                    LAMBDA_ARGS.with(|args| args.borrow_mut().truncate(base));
+                    Value::Unit
+                })
+            }
+            // `return`: the action stops where it is written, which only an
+            // action has. Anywhere else it would have nothing to stop.
+            Expr::Return(span) => {
+                if self.bridge.action_depth == 0 {
+                    self.errors.push(CompileError::EffectInPureContext {
+                        span: *span,
+                        context: "a value position".to_string(),
+                    });
+                    return Box::new(|_| Value::Unit);
+                }
+                Box::new(|_| {
+                    RETURNING.with(|r| r.set(true));
+                    Value::Unit
+                })
+            }
             Expr::Block(stmts, _) => {
                 let shadowed = self.lambda_params.len();
                 let mut cs: Vec<(Option<Symbol>, Lowered)> = Vec::with_capacity(stmts.len());
@@ -846,6 +1256,9 @@ impl Interpreter {
                         } else {
                             last = value;
                         }
+                        if RETURNING.with(std::cell::Cell::get) {
+                            break;
+                        }
                     }
                     LAMBDA_ARGS.with(|args| args.borrow_mut().truncate(base));
                     last
@@ -860,7 +1273,7 @@ impl Interpreter {
                 value,
                 span,
             } => {
-                let mut compute = self.lower_expr(value, payload_name);
+                let mut compute = self.lower_value(value, payload_name);
                 let Some(ty) = ty
                     .clone()
                     .filter(|t| super::shape::names_a_record(t, &self.records))
@@ -934,7 +1347,8 @@ impl Interpreter {
                 // the checker reports genuinely unknown ones.
                 let field = field.clone();
                 let mut base_c = self.lower_expr(base, payload_name);
-                Box::new(move |ctx| data_member(&base_c(ctx), &field))
+                let graphemes = self.counts_graphemes();
+                Box::new(move |ctx| data_member(&base_c(ctx), &field, graphemes))
             }
             Expr::Lambda { .. } | Expr::Error(_) => Box::new(|_| Value::Unit),
         }
@@ -1259,14 +1673,27 @@ impl Interpreter {
     /// One arm of a `?:`: the word `none` is nothing when the view binds no
     /// name `none` of its own, anything else lowers as an expression.
     fn lower_ternary_arm(&mut self, arm: &Expr, payload_name: Option<&Symbol>) -> Lowered {
-        if matches!(arm, Expr::Ident(n, _) if n.as_str() == "none")
+        self.lower_value(arm, payload_name)
+    }
+
+    /// Whether `expr` is the word `none` and nothing of the program's own is
+    /// called that: then it is nothing, not the text "none" it reads as in an
+    /// attribute.
+    pub(super) fn is_none_word(&self, expr: &Expr) -> bool {
+        matches!(expr, Expr::Ident(n, _) if n.as_str() == "none")
             && self.env.lookup(&Symbol::intern("none")).is_none()
             && !self.lambda_params.contains(&Symbol::intern("none"))
             && !self.consts.contains_key(&Symbol::intern("none"))
-        {
+    }
+
+    /// [`Self::lower_expr`] for a value that may be nothing: where a `var`, a
+    /// `let`, an arm, a field or what is written to one is the word `none`, it
+    /// is nothing.
+    pub(super) fn lower_value(&mut self, expr: &Expr, payload_name: Option<&Symbol>) -> Lowered {
+        if self.is_none_word(expr) {
             return Box::new(|_| Value::Unit);
         }
-        self.lower_expr(arm, payload_name)
+        self.lower_expr(expr, payload_name)
     }
 
     fn lower_ident(&self, name: &Symbol, payload_name: Option<&Symbol>) -> Lowered {
@@ -1329,6 +1756,7 @@ impl Interpreter {
             Text(String),
             Interp(Lowered, Option<NumFormat>),
         }
+        let shows_collections = self.counts_graphemes();
         let mut lowered: Vec<Part> = parts
             .iter()
             .map(|p| match p {
@@ -1341,7 +1769,14 @@ impl Interpreter {
             for part in &mut lowered {
                 match part {
                     Part::Text(t) => s.push_str(t),
-                    Part::Interp(c, None) => s.push_str(&format_scalar(&c(ctx))),
+                    Part::Interp(c, None) => {
+                        let value = c(ctx);
+                        if shows_collections {
+                            s.push_str(&value.shown());
+                        } else {
+                            s.push_str(&format_scalar(&value));
+                        }
+                    }
                     Part::Interp(c, Some(spec)) => s.push_str(&format_spec(&c(ctx), *spec)),
                 }
             }
@@ -1355,6 +1790,49 @@ impl Interpreter {
         args: &[crate::parser::ast::Arg],
         payload_name: Option<&Symbol>,
     ) -> Lowered {
+        // What a text shows of a `Color`, a `Duration` or an `Angle`, written
+        // in by the pass after the checks.
+        if let Expr::Ident(name, _) = callee {
+            if matches!(name.as_str(), "__color" | "__duration" | "__angle") {
+                let Some(first) = args.first() else {
+                    return Box::new(|_| Value::Unit);
+                };
+                let mut value = self.lower_expr(&first.value, payload_name);
+                let which = name.clone();
+                return Box::new(move |ctx| {
+                    Value::Str(match (which.as_str(), value(ctx)) {
+                        ("__color", Value::Int(n)) => shown_color(n),
+                        ("__duration", Value::Int(ms)) => format!("{ms}ms"),
+                        ("__angle", Value::Float(rad)) => shown_angle(rad),
+                        (_, other) => other.to_text(),
+                    })
+                });
+            }
+        }
+        // `Set([1, 2])`: the items of a list, each once; `Set()` has none.
+        if let Expr::Ident(name, _) = callee {
+            if name.as_str() == "Set"
+                && self.env.lookup(name).is_none()
+                && !self.lambda_params.contains(name)
+            {
+                let mut list = args
+                    .first()
+                    .map(|a| self.lower_expr(&a.value, payload_name));
+                return Box::new(move |ctx| {
+                    let items = match list.as_mut().map(|l| l(ctx)) {
+                        Some(Value::List(xs)) => xs,
+                        _ => Vec::new(),
+                    };
+                    let mut out: Vec<Value> = Vec::with_capacity(items.len());
+                    for item in items {
+                        if !out.iter().any(|x| structural_eq(x, &item)) {
+                            out.push(item);
+                        }
+                    }
+                    Value::Set(out)
+                });
+            }
+        }
         // RFC-0026 `navigate`/`back`/`replace`. Contextual: the names are only
         // special when their first argument really is a navigation container's
         // `var`, so nothing stops an app binding them for its own purposes.
@@ -1472,7 +1950,12 @@ impl Interpreter {
                 });
             }
             let mut arg_cs: Vec<(Symbol, Lowered)> = Vec::with_capacity(params.len());
-            for (i, (param, arg)) in params.iter().zip(args.iter()).enumerate() {
+            // The arguments in the order of the parameters: the positional
+            // ones first, and each one written by name in the place of the
+            // parameter it names.
+            let ordered = in_parameter_order(&params, args);
+            for (i, (param, arg)) in params.iter().zip(ordered).enumerate() {
+                let Some(arg) = arg else { continue };
                 let lowered = self.lower_expr(&arg.value, payload_name);
                 let lowered = super::coerced_arg(self.fn_types.get(&id.0), i, lowered);
                 arg_cs.push((param.clone(), lowered));
@@ -1652,6 +2135,14 @@ impl Interpreter {
             });
             return Box::new(|_| Value::Unit);
         }
+        // The arguments in the order of the parameters, whatever order they
+        // were written in; one a parameter did not get was refused by the
+        // checker.
+        let Some(args): Option<Vec<&crate::parser::ast::Arg>> =
+            in_parameter_order(&params, args).into_iter().collect()
+        else {
+            return Box::new(|_| Value::Unit);
+        };
         if !params.is_empty() && self.per_call(payload_name) {
             // Called inside a lambda or an event handler: the arguments depend
             // on the item, so they are evaluated at each call, not memoised.
@@ -1706,6 +2197,13 @@ impl Interpreter {
         args: &[crate::parser::ast::Arg],
         payload_name: Option<&Symbol>,
     ) -> Option<Lowered> {
+        // `store.set(k, v)` on an injected controller is its call, not a
+        // collection's: a controller has methods of its own.
+        if matches!(base, Expr::Ident(n, _)
+            if matches!(self.env.lookup(n), Some(Value::Controller(_))))
+        {
+            return None;
+        }
         let mut base_c = self.lower_expr(base, payload_name);
         match name.as_str() {
             "push" => {
@@ -1753,6 +2251,7 @@ impl Interpreter {
                 // clamp: user data never panics.
                 let mut start = self.lower_expr(&args.first()?.value, payload_name);
                 let mut end = args.get(1).map(|a| self.lower_expr(&a.value, payload_name));
+                let graphemes = self.counts_graphemes();
                 Some(Box::new(move |ctx| {
                     let from = start(ctx).as_int();
                     let to = end.as_mut().map(|e| e(ctx).as_int());
@@ -1769,8 +2268,9 @@ impl Interpreter {
                     match base_c(ctx) {
                         Value::List(xs) => Value::List(xs[range(xs.len())].to_vec()),
                         Value::Str(s) => {
-                            let r = range(s.chars().count());
-                            Value::Str(s.chars().skip(r.start).take(r.len()).collect())
+                            let units = text_units(&s, graphemes);
+                            let r = range(units.len());
+                            Value::Str(units[r].concat())
                         }
                         other => other,
                     }
@@ -1856,11 +2356,14 @@ impl Interpreter {
                 }))
             }
             "split" => {
+                let graphemes = self.counts_graphemes();
                 let mut sep = self.lower_expr(&args.first()?.value, payload_name);
                 Some(Box::new(move |ctx| {
                     let sep = sep(ctx);
                     match (base_c(ctx), sep) {
-                        (Value::Str(s), Value::Str(sep)) => Value::List(split_text(&s, &sep)),
+                        (Value::Str(s), Value::Str(sep)) => {
+                            Value::List(split_text(&s, &sep, graphemes))
+                        }
                         _ => Value::List(Vec::new()),
                     }
                 }))
@@ -1893,7 +2396,7 @@ impl Interpreter {
                 Some(Box::new(move |ctx| {
                     let needle = arg(ctx);
                     match base_c(ctx) {
-                        Value::List(xs) => {
+                        Value::List(xs) | Value::Set(xs) => {
                             Value::Bool(xs.iter().any(|x| structural_eq(x, &needle)))
                         }
                         Value::Str(s) => match needle {
@@ -1968,11 +2471,15 @@ impl Interpreter {
                     }
                 }))
             }
-            "abs" => Some(Box::new(move |ctx| match base_c(ctx) {
-                Value::Int(n) => Value::Int(n.wrapping_abs()),
-                Value::Float(f) => Value::Float(f.abs()),
-                _ => Value::Unit,
-            })),
+            "abs" => {
+                let saturate = self.saturates();
+                Some(Box::new(move |ctx| match base_c(ctx) {
+                    Value::Int(n) if saturate => Value::Int(n.saturating_abs()),
+                    Value::Int(n) => Value::Int(n.wrapping_abs()),
+                    Value::Float(f) => Value::Float(f.abs()),
+                    _ => Value::Unit,
+                }))
+            }
             // `a.min(b)` on two numbers; `xs.min()` on a list.
             "min" | "max" if !args.is_empty() => {
                 let is_max = name.as_str() == "max";
@@ -1996,18 +2503,167 @@ impl Interpreter {
                     _ => Value::Unit,
                 }))
             }
+            // `m.set(k, v)` and `m.remove(k)` on a map, `s.add(x)` and
+            // `s.remove(x)` on a set: a new one. A key set again keeps its
+            // place; one that is not there is left as it was.
+            "set" => {
+                let mut key = self.lower_expr(&args.first()?.value, payload_name);
+                let mut value = self.lower_expr(&args.get(1)?.value, payload_name);
+                Some(Box::new(move |ctx| {
+                    let (key, value) = (key(ctx), value(ctx));
+                    match base_c(ctx) {
+                        Value::Map(mut pairs) => {
+                            match pairs.iter_mut().find(|(k, _)| structural_eq(k, &key)) {
+                                Some(pair) => pair.1 = value,
+                                None => pairs.push((key, value)),
+                            }
+                            Value::Map(pairs)
+                        }
+                        other => other,
+                    }
+                }))
+            }
+            "remove" => {
+                let mut item = self.lower_expr(&args.first()?.value, payload_name);
+                Some(Box::new(move |ctx| {
+                    let item = item(ctx);
+                    match base_c(ctx) {
+                        Value::Map(mut pairs) => {
+                            pairs.retain(|(k, _)| !structural_eq(k, &item));
+                            Value::Map(pairs)
+                        }
+                        Value::Set(mut xs) => {
+                            xs.retain(|x| !structural_eq(x, &item));
+                            Value::Set(xs)
+                        }
+                        other => other,
+                    }
+                }))
+            }
+            "add" => {
+                let mut item = self.lower_expr(&args.first()?.value, payload_name);
+                Some(Box::new(move |ctx| {
+                    let item = item(ctx);
+                    match base_c(ctx) {
+                        Value::Set(mut xs) => {
+                            if !xs.iter().any(|x| structural_eq(x, &item)) {
+                                xs.push(item);
+                            }
+                            Value::Set(xs)
+                        }
+                        other => other,
+                    }
+                }))
+            }
+            // `xs.first()` and `xs.last()`: the item at either end, or nothing.
+            "first" | "last" => {
+                let last = name.as_str() == "last";
+                Some(Box::new(move |ctx| match base_c(ctx) {
+                    Value::List(xs) if !xs.is_empty() => {
+                        let at = if last { xs.len() - 1 } else { 0 };
+                        xs[at].clone()
+                    }
+                    _ => Value::Unit,
+                }))
+            }
+            // `xs.sum()`: the items added up; nothing to add is `0`.
+            "sum" if args.is_empty() => {
+                let saturate = self.saturates();
+                Some(Box::new(move |ctx| match base_c(ctx) {
+                    Value::List(xs) => xs.into_iter().fold(Value::Int(0), |acc, x| {
+                        eval_binary_in(BinOp::Add, acc, x, saturate)
+                    }),
+                    _ => Value::Int(0),
+                }))
+            }
+            // `xs.insertAt(i, x)` and `xs.updateAt(i, x)`: a new list with `x`
+            // put before the item at `i` (`i` may be the length, to put it
+            // last), or in its place. A position the list does not have leaves
+            // it as it was.
+            "insertAt" | "updateAt" => {
+                let insert = name.as_str() == "insertAt";
+                let mut at = self.lower_expr(&args.first()?.value, payload_name);
+                let mut item = self.lower_expr(&args.get(1)?.value, payload_name);
+                Some(Box::new(move |ctx| {
+                    let at = at(ctx).as_int().and_then(|i| usize::try_from(i).ok());
+                    let item = item(ctx);
+                    match base_c(ctx) {
+                        Value::List(mut xs) => {
+                            // An `Int` put in a list of `Float`s is one.
+                            let item = match item {
+                                #[allow(clippy::cast_precision_loss)]
+                                Value::Int(i)
+                                    if xs.iter().any(|x| matches!(x, Value::Float(_))) =>
+                                {
+                                    Value::Float(i as f64)
+                                }
+                                item => item,
+                            };
+                            match at {
+                                Some(i) if insert && i <= xs.len() => xs.insert(i, item),
+                                Some(i) if !insert && i < xs.len() => xs[i] = item,
+                                _ => {}
+                            }
+                            Value::List(xs)
+                        }
+                        other => other,
+                    }
+                }))
+            }
+            // `xs.get(i)`: the item at `i`, or nothing.
+            "get" => {
+                let mut at = self.lower_expr(&args.first()?.value, payload_name);
+                Some(Box::new(move |ctx| {
+                    let at = at(ctx);
+                    index_value(&base_c(ctx), &at, false)
+                }))
+            }
             "indexOf" => {
+                let graphemes = self.counts_graphemes();
                 let mut arg = self.lower_expr(&args.first()?.value, payload_name);
                 Some(Box::new(move |ctx| {
                     let needle = arg(ctx);
                     let found = match (base_c(ctx), &needle) {
                         (Value::List(xs), _) => xs.iter().position(|x| structural_eq(x, &needle)),
                         (Value::Str(s), Value::Str(part)) => {
-                            return Value::Int(index_of_text(&s, part));
+                            return Value::Int(index_of_text(&s, part, graphemes));
                         }
                         _ => None,
                     };
                     Value::Int(found.and_then(|i| i64::try_from(i).ok()).unwrap_or(-1))
+                }))
+            }
+            // `xs.any(f)`, `xs.all(f)` and `xs.count(f)`: whether some, whether
+            // every, or how many of the items `f` holds for.
+            "any" | "all" | "count" => {
+                let (param, body) = match &args.first()?.value {
+                    Expr::Lambda { params, body, .. } => (params.first().cloned(), body.clone()),
+                    _ => return None,
+                };
+                let (mut body_c, named) = self.lower_item_body(param, &body, payload_name);
+                let which = name.clone();
+                Some(Box::new(move |ctx| {
+                    let items = match base_c(ctx) {
+                        Value::List(xs) => xs,
+                        _ => Vec::new(),
+                    };
+                    let mut held = 0_i64;
+                    let mut all = true;
+                    for x in &items {
+                        if with_item(named.as_ref(), x.clone(), || body_c(ctx))
+                            .as_bool()
+                            .unwrap_or(false)
+                        {
+                            held += 1;
+                        } else {
+                            all = false;
+                        }
+                    }
+                    match which.as_str() {
+                        "any" => Value::Bool(held > 0),
+                        "all" => Value::Bool(all),
+                        _ => Value::Int(held),
+                    }
                 }))
             }
             "sortBy" | "find" => {
@@ -2120,14 +2776,41 @@ impl Interpreter {
     /// Returns [`CompileError::NotAssignable`] if a mutation targets something
     /// other than a `var`.
     pub fn eval_action(&mut self, expr: &Expr) -> Result<Value, CompileError> {
+        if let Expr::Assign { target, .. } | Expr::Postfix { target, .. } = expr {
+            if let Some(sig) = self.written_store_field(target) {
+                let saturate = self.saturates();
+                match expr {
+                    Expr::Assign { op, value, .. } => {
+                        let rhs = if self.is_none_word(value) {
+                            Value::Unit
+                        } else {
+                            self.eval_pure(value)
+                        };
+                        let new = assigned(*op, &self.ctx.peek_signal(sig), rhs, saturate);
+                        self.ctx.write_signal(sig, new);
+                    }
+                    Expr::Postfix { op, .. } => {
+                        let cur = self.ctx.peek_signal(sig).as_int().unwrap_or(0);
+                        self.ctx
+                            .write_signal(sig, Value::Int(stepped(*op, cur, saturate)));
+                    }
+                    _ => {}
+                }
+                return Ok(Value::Unit);
+            }
+            if matches!(**target, Expr::Member { .. } | Expr::Index { .. })
+                && self.resolve_theme_scheme_target(target).is_none()
+            {
+                if let Some(whole) = expr.field_write() {
+                    return self.eval_action(&whole);
+                }
+            }
+        }
         match expr {
             Expr::Postfix { target, op, span } => {
                 let sig = self.resolve_var(target, *span)?;
                 let cur = self.ctx.peek_signal(sig).as_int().unwrap_or(0);
-                let new = match op {
-                    PostfixOp::Inc => cur + 1,
-                    PostfixOp::Dec => cur - 1,
-                };
+                let new = stepped(*op, cur, self.saturates());
                 self.ctx.write_signal(sig, Value::Int(new));
                 Ok(Value::Unit)
             }
@@ -2138,8 +2821,12 @@ impl Interpreter {
                 span,
             } => {
                 let sig = self.resolve_var(target, *span)?;
-                let rhs = self.eval_pure(value);
-                let new = assigned(*op, &self.ctx.peek_signal(sig), rhs);
+                let rhs = if self.is_none_word(value) {
+                    Value::Unit
+                } else {
+                    self.eval_pure(value)
+                };
+                let new = assigned(*op, &self.ctx.peek_signal(sig), rhs, self.saturates());
                 self.ctx.write_signal(sig, new);
                 Ok(Value::Unit)
             }
@@ -2153,6 +2840,9 @@ impl Interpreter {
                 let mut last = Value::Unit;
                 for stmt in stmts {
                     last = self.eval_action(stmt)?;
+                    if RETURNING.with(std::cell::Cell::get) {
+                        break;
+                    }
                 }
                 Ok(last)
             }
@@ -2233,6 +2923,44 @@ impl Interpreter {
         }
     }
 
+    /// A write (`=`, `+=`, `-=`, `++`, `--`) where it cannot be made: outside
+    /// an action it is [`CompileError::EffectInPureContext`], and to something
+    /// that is no `var` or binding (a `let`, a parameter, a loop variable, a
+    /// literal) it is [`CompileError::NotAssignable`]. Either way it is told
+    /// once, here, and what it would have done is nothing. `None` when the
+    /// write is fine. A field or an item as the target is step 9's.
+    fn refuse_write_here(&mut self, target: &Expr, span: Span) -> Option<Lowered> {
+        if self.bridge.action_depth == 0 {
+            // Lowered all the same, so what is wrong inside it is told too.
+            self.errors.push(CompileError::EffectInPureContext {
+                span,
+                context: "a value position".to_string(),
+            });
+            return None;
+        }
+        if matches!(target, Expr::Member { .. } | Expr::Index { .. }) {
+            return None;
+        }
+        // A name nothing binds is the checker's `UnknownName`, not this.
+        if matches!(target, Expr::Ident(name, _) if self.env.lookup(name).is_none()) {
+            return None;
+        }
+        if let Err(error) = self.resolve_var(target, span) {
+            self.errors.push(error);
+            return Some(Box::new(|_| Value::Unit));
+        }
+        None
+    }
+
+    /// The signal a write to `target` is for, when `target` is the field of
+    /// the handle of a store.
+    fn written_store_field(&self, target: &Expr) -> Option<SignalId> {
+        let Expr::Member { base, field, .. } = target else {
+            return None;
+        };
+        self.store_signal(base, field)
+    }
+
     fn resolve_var(&self, target: &Expr, span: Span) -> Result<SignalId, CompileError> {
         if let Expr::Ident(name, _) = target {
             if let Some(Value::Signal(sig)) = self.env.lookup(name) {
@@ -2271,7 +2999,9 @@ impl Interpreter {
             CURRENT_PAYLOAD.with(|cell| {
                 *cell.borrow_mut() = payload.cloned();
             });
+            RETURNING.with(|r| r.set(false));
             let _ = compute(ctx);
+            RETURNING.with(|r| r.set(false));
             CURRENT_PAYLOAD.with(|cell| {
                 *cell.borrow_mut() = None;
             });
@@ -2297,7 +3027,18 @@ fn clock_calls(expr: &Expr, params: &[Symbol], out: &mut Vec<(Span, String)>) {
 /// What a `var` holding `cur` holds after `var op= value`. A `Float` keeps
 /// being one: an `Int` written to it is converted, and `+=` and `-=` add as
 /// `Float`s when either side is.
-fn assigned(op: AssignOp, cur: &Value, value: Value) -> Value {
+/// `n++` and `n--`: one more or one less, wrapping or stopping at the end of
+/// the range, as `+` does.
+fn stepped(op: PostfixOp, cur: i64, saturate: bool) -> i64 {
+    match (op, saturate) {
+        (PostfixOp::Inc, true) => cur.saturating_add(1),
+        (PostfixOp::Inc, false) => cur.wrapping_add(1),
+        (PostfixOp::Dec, true) => cur.saturating_sub(1),
+        (PostfixOp::Dec, false) => cur.wrapping_sub(1),
+    }
+}
+
+fn assigned(op: AssignOp, cur: &Value, value: Value, saturate: bool) -> Value {
     #[allow(clippy::cast_precision_loss)]
     let float = |v: &Value| match v {
         Value::Float(f) => Some(*f),
@@ -2318,10 +3059,11 @@ fn assigned(op: AssignOp, cur: &Value, value: Value) -> Value {
                 );
             }
             let (cur, value) = (cur.as_int().unwrap_or(0), value.as_int().unwrap_or(0));
-            Value::Int(if op == AssignOp::Add {
-                cur + value
-            } else {
-                cur - value
+            Value::Int(match (op == AssignOp::Add, saturate) {
+                (true, true) => cur.saturating_add(value),
+                (true, false) => cur.wrapping_add(value),
+                (false, true) => cur.saturating_sub(value),
+                (false, false) => cur.wrapping_sub(value),
             })
         }
     }

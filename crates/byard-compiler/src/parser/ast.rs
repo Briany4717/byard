@@ -24,6 +24,14 @@ pub enum Type {
         /// Source span.
         span: Span,
     },
+    /// `T?`, a value that may be nothing: a `var`, a `let`, a result written
+    /// with it. (A parameter's `T?` is its own flag, [`Param::optional`].)
+    Optional {
+        /// The type of the value when there is one.
+        inner: Box<Type>,
+        /// Source span.
+        span: Span,
+    },
     /// A function type `Fn(P0, P1, ...) -> R` (RFC-0003 E2). `ret` is `None`
     /// for a callback with no declared return.
     Function {
@@ -41,9 +49,54 @@ impl Type {
     #[must_use]
     pub fn span(&self) -> Span {
         match self {
-            Self::Named { span, .. } | Self::Function { span, .. } => *span,
+            Self::Named { span, .. }
+            | Self::Function { span, .. }
+            | Self::Optional { span, .. } => *span,
         }
     }
+}
+
+/// What an arm of a `match` is for (RFC: `match`).
+#[derive(Clone, Debug, PartialEq)]
+pub enum Pattern {
+    /// `.case`, or `Enum.case`: one case of an enum.
+    Case {
+        /// The enum when written (`Load.idle`), `None` for the short `.idle`.
+        enum_name: Option<Symbol>,
+        /// The case.
+        name: Symbol,
+        /// The names a case that carries values binds, in the order of its
+        /// fields: `.failed(message)`.
+        binds: Vec<Symbol>,
+        /// Source span.
+        span: Span,
+    },
+    /// A literal (`true`, `3`, `"a"`) a `Bool`, an `Int` or a `Str` is compared with.
+    Literal(Expr),
+    /// `else`, every case the arms above do not name.
+    Else(Span),
+}
+
+impl Pattern {
+    /// The source span of this pattern.
+    #[must_use]
+    pub fn span(&self) -> Span {
+        match self {
+            Self::Case { span, .. } | Self::Else(span) => *span,
+            Self::Literal(e) => e.span(),
+        }
+    }
+}
+
+/// One arm of a `match`: `pattern => body`.
+#[derive(Clone, Debug, PartialEq)]
+pub struct Arm<B> {
+    /// What the arm is for.
+    pub pattern: Pattern,
+    /// What it is: a value for `match` as an expression, members for a view member.
+    pub body: B,
+    /// Source span.
+    pub span: Span,
 }
 
 /// A `View`/`fn` parameter (`param := IDENT (":" type)?`). The annotation is
@@ -141,6 +194,10 @@ pub struct ViewDecl {
     /// Written `private View …`: a consumer of the package cannot name it
     /// (RFC-0055). Accepted, and without effect, in an app.
     pub private: bool,
+    /// The edition the program is written in, stamped on every view when the
+    /// project is resolved (`ResolvedProgram::with_edition`), so whatever loads
+    /// the views loads the edition with them. A lone file is the baseline.
+    pub edition: crate::edition::Edition,
 }
 
 /// A record type declared at file level: `type Place = { name: Str,
@@ -157,6 +214,9 @@ pub struct RecordDecl {
     /// Declared `context Name { … }` rather than `type` (RFC-0065): the fields
     /// carry defaults, and a view `provide`s and `inject`s it.
     pub context: bool,
+    /// Declared `store Name { … }` (a context with one instance for the whole
+    /// program, which any view reads and writes): `context` is set as well.
+    pub store: bool,
     /// Source span.
     pub span: Span,
 }
@@ -188,6 +248,9 @@ pub struct EnumDecl {
     pub name: Symbol,
     /// The cases, in the order written, each with its span.
     pub cases: Vec<(Symbol, Span)>,
+    /// The cases that carry values (`failed(message: Str)`), each with its
+    /// fields in the order written. A case not named here is its name alone.
+    pub fields: Vec<(Symbol, Vec<(Symbol, Type)>)>,
     /// Written `private enum …`.
     pub private: bool,
     /// Source span.
@@ -217,6 +280,9 @@ pub struct FnDecl {
     /// The name; a package's functions are canonical (`brand.helper`) once
     /// resolved.
     pub name: Symbol,
+    /// The type parameters, `T` in `fn first<T>(…)`: names a call gives a
+    /// type to, by the arguments it passes.
+    pub type_params: Vec<Symbol>,
     /// Declared parameters.
     pub params: Vec<Param>,
     /// Declared return type, if written.
@@ -259,6 +325,8 @@ pub enum Member {
     Fn {
         /// Function name.
         name: Symbol,
+        /// The type parameters, `T` in `fn first<T>(…)`.
+        type_params: Vec<Symbol>,
         /// Parameters.
         params: Vec<Param>,
         /// Declared return type, if written.
@@ -289,6 +357,16 @@ pub enum Member {
     },
     /// An intrinsic or user-`View` element.
     Element(ElementNode),
+    /// `match scrutinee { .case => members … }`, one arm's members drawn: the
+    /// view-member form of [`Expr::Match`].
+    Match {
+        /// The value matched.
+        scrutinee: Expr,
+        /// The arms, in written order.
+        arms: Vec<Arm<Vec<Member>>>,
+        /// Source span.
+        span: Span,
+    },
     /// `for item in iter { ... }`, structural reactivity.
     For {
         /// Loop variable.
@@ -872,6 +950,9 @@ pub enum BinOp {
     /// `??`: the left value, or the right one when the left is nothing (a
     /// missing JSON field, an empty `find`). Short-circuit.
     Otherwise,
+    /// `a..b`: the whole numbers from `a` up to, not including, `b`, as a
+    /// list. Nothing when `b` is not above `a`.
+    Range,
 }
 
 /// Prefix unary operators (RFC-0027 §2): boolean `!` and numeric negation `-`.
@@ -916,12 +997,21 @@ pub enum StrPart {
 }
 
 /// The spec after the colon of an interpolation: `:.2`, `:,` or `:,.2`.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct NumFormat {
     /// A comma between every three digits of the integer part (`,`).
     pub group: bool,
     /// A fixed number of decimals (`.N`), or the number as `{x}` writes it.
     pub decimals: Option<u8>,
+    /// The least width the text takes (`N`): it is padded to it.
+    pub width: Option<u16>,
+    /// A number padded with zeros after its sign and not with spaces (`0N`).
+    pub zero: bool,
+    /// Where the text sits in its width: `<` left, `>` right, `^` centred.
+    /// Numbers are right and everything else left, when none is written.
+    pub align: Option<char>,
+    /// The number times a hundred, and a `%` after it (`%`).
+    pub percent: bool,
 }
 
 /// An expression. Every variant carries its own [`Span`].
@@ -951,6 +1041,26 @@ pub enum Expr {
     /// Member access `base.field`.
     Member {
         /// The receiver expression.
+        base: Box<Expr>,
+        /// The field name.
+        field: Symbol,
+        /// Source span.
+        span: Span,
+    },
+    /// `match scrutinee { .case => value, … }`: the value of the arm for the
+    /// case `scrutinee` is. An expression, and an action statement when its arms
+    /// are actions.
+    Match {
+        /// The value matched.
+        scrutinee: Box<Expr>,
+        /// The arms, in written order.
+        arms: Vec<Arm<Expr>>,
+        /// Source span.
+        span: Span,
+    },
+    /// `a?.b`: the field `b` of `a`, or nothing when `a` is nothing.
+    OptionalMember {
+        /// The receiver, which may be nothing.
         base: Box<Expr>,
         /// The field name.
         field: Symbol,
@@ -1122,6 +1232,44 @@ pub enum Expr {
         /// Source span.
         span: Span,
     },
+    /// `value as Type`: what arrived, compared with a type at the place it
+    /// arrives, and from there a value of that type. A reply of another shape
+    /// goes to the `err` arm of the call that brought it, with the path of the
+    /// first field that does not fit.
+    Cast {
+        /// What is compared.
+        value: Box<Expr>,
+        /// The type it is compared with.
+        ty: Type,
+        /// Source span.
+        span: Span,
+    },
+    /// `200ms`, from edition 2027: a length of time, in milliseconds, which is
+    /// not a whole number. Before it, and once the checks are done, it is the
+    /// [`Expr::IntLit`] of its milliseconds.
+    DurationLit(i64, Span),
+    /// `["ada": 36, "bo": 1]`, a map: each key with its value, in the order
+    /// written. `[:]` is the one with none.
+    MapLit(Vec<(Expr, Expr)>, Span),
+    /// `for item in items { stmt* }` as an action statement: the block runs
+    /// once for each item, in order, with `item` bound (and `i` for the
+    /// `for i, item in items` form). Its structural counterpart in a view
+    /// body is [`Member::For`]. It ends: a list has an end.
+    ForEach {
+        /// The name each item is bound to.
+        var: Symbol,
+        /// The name the position is bound to, in `for i, item in …`.
+        index: Option<Symbol>,
+        /// The list.
+        iter: Box<Expr>,
+        /// The statements run for each item, an [`Expr::Block`].
+        body: Box<Expr>,
+        /// Source span.
+        span: Span,
+    },
+    /// `return`, an action statement: the action stops here, and what comes
+    /// after it in the action does not run.
+    Return(Span),
     /// `let name: Type = value`, a statement of an action block: `name` holds
     /// `value` for the statements after it in the same block, and for the
     /// arms of any call placed there. A record `Type` makes `byard check`
@@ -1192,7 +1340,131 @@ pub enum Expr {
     Error(Span),
 }
 
+/// One step of the path an assignment writes through.
+enum Step {
+    /// `.name`
+    Field(Symbol),
+    /// `[index]`
+    Item(Expr),
+}
+
 impl Expr {
+    /// `u.score = 10`, `u.a.b += 1`, `u.n++` and `xs[i] = v` as the write to the
+    /// whole value they mean: `u = { ..u, score: 10 }`, `xs = xs.updateAt(i, v)`,
+    /// one level down for each field or item of the path. `None` for anything
+    /// else.
+    #[must_use]
+    pub fn field_write(&self) -> Option<Expr> {
+        let (target, op, value, span) = match self {
+            Self::Assign {
+                target,
+                op,
+                value,
+                span,
+            } => (target, *op, (**value).clone(), *span),
+            Self::Postfix { target, op, span } => {
+                let one = Self::IntLit(1, *span);
+                let op = match op {
+                    PostfixOp::Inc => AssignOp::Add,
+                    PostfixOp::Dec => AssignOp::Sub,
+                };
+                (target, op, one, *span)
+            }
+            _ => return None,
+        };
+        // The path from the root: `u.a[i]` is `u` and [`.a`, `[i]`].
+        let mut steps: Vec<Step> = Vec::new();
+        let mut at: &Self = target;
+        loop {
+            match at {
+                Self::Member { base, field, .. } => {
+                    steps.push(Step::Field(field.clone()));
+                    at = base;
+                }
+                Self::Index { base, index, .. } => {
+                    steps.push(Step::Item((**index).clone()));
+                    at = base;
+                }
+                _ => break,
+            }
+        }
+        let Self::Ident(root, root_span) = at else {
+            return None;
+        };
+        if steps.is_empty() {
+            return None;
+        }
+        steps.reverse();
+        // The value at the end of the first `depth` steps of the path.
+        let read = |depth: usize| {
+            let mut e = Self::Ident(root.clone(), *root_span);
+            for step in &steps[..depth] {
+                e = match step {
+                    Step::Field(f) => Self::Member {
+                        base: Box::new(e),
+                        field: f.clone(),
+                        span,
+                    },
+                    Step::Item(i) => Self::Index {
+                        base: Box::new(e),
+                        index: Box::new(i.clone()),
+                        span,
+                    },
+                };
+            }
+            e
+        };
+        // What the innermost field becomes.
+        let mut new = match op {
+            AssignOp::Assign => value,
+            AssignOp::Add | AssignOp::Sub => Self::Binary {
+                op: if op == AssignOp::Add {
+                    BinOp::Add
+                } else {
+                    BinOp::Sub
+                },
+                lhs: Box::new(read(steps.len())),
+                rhs: Box::new(value),
+                span,
+            },
+        };
+        for depth in (0..steps.len()).rev() {
+            new = match &steps[depth] {
+                Step::Field(f) => Self::Record {
+                    fields: vec![(f.clone(), new)],
+                    spread: Some(Box::new(read(depth))),
+                    span,
+                },
+                Step::Item(i) => Self::Call {
+                    callee: Box::new(Self::Member {
+                        base: Box::new(read(depth)),
+                        field: Symbol::intern("updateAt"),
+                        span,
+                    }),
+                    args: vec![
+                        Arg {
+                            name: None,
+                            value: i.clone(),
+                            bind: false,
+                        },
+                        Arg {
+                            name: None,
+                            value: new,
+                            bind: false,
+                        },
+                    ],
+                    span,
+                },
+            };
+        }
+        Some(Self::Assign {
+            target: Box::new(Self::Ident(root.clone(), *root_span)),
+            op: AssignOp::Assign,
+            value: Box::new(new),
+            span,
+        })
+    }
+
     /// The source span of this expression.
     #[must_use]
     pub fn span(&self) -> Span {
@@ -1207,6 +1479,8 @@ impl Expr {
             | Self::ClassRef(_, span)
             | Self::Member { span, .. }
             | Self::Call { span, .. }
+            | Self::OptionalMember { span, .. }
+            | Self::Match { span, .. }
             | Self::ControllerCall { span, .. }
             | Self::Lambda { span, .. }
             | Self::Block(_, span)
@@ -1224,6 +1498,11 @@ impl Expr {
             | Self::KeyframeStep { span, .. }
             | Self::StyleValue { span, .. }
             | Self::Merge { span, .. }
+            | Self::ForEach { span, .. }
+            | Self::MapLit(_, span)
+            | Self::DurationLit(_, span)
+            | Self::Cast { span, .. }
+            | Self::Return(span)
             | Self::Error(span) => *span,
         }
     }
@@ -1279,6 +1558,7 @@ mod tests {
             anchor_name: None,
         };
         let view = ViewDecl {
+            edition: crate::edition::Edition::BASELINE,
             helpers: std::sync::Arc::default(),
             records: std::sync::Arc::default(),
             consts: std::sync::Arc::default(),

@@ -15,7 +15,7 @@ So every step below ends the same way: **its cases lose their `gap:` line, the r
 loses its note, and this file loses the step.** When this file is empty and the suite has no
 gap, the language is where this document wanted it.
 
-As written, the suite has 564 cases: 485 hold and 79 are gaps.
+As written, the suite has 849 cases, and every one holds: there are no gaps.
 
 ```sh
 cargo test -p byard-cli --test it conformance -- --nocapture
@@ -78,120 +78,95 @@ This part closes that. Nothing here adds syntax.
 
 ### 2. Editions, and `byard fix`
 
-*Done, except for what only the first **(edition)** change can show.* `edition = "…"` is read
-from `[project]` or `[package]`, a manifest without it is `2026`, and `byard fix` moves a
-project to `2027`, rewriting its sources through the formatter and naming the edition in the
-manifest. The two editions differ by nothing yet. What is left is the first rewrite: step 6's
-`equality-ignores-field-order` or step 12's ternary, whichever comes first, adds a migration to
-`Edition::migrations` in `byard-compiler/src/edition.rs`, and the case that proves `byard fix`
-keeps a program's meaning. Until then `byard new` writes no edition, and a project without one
-stays on `2026`.
-
-### 6. Records
-
-*Cases:* `declared-type-literal-with-a-wrong-field-type`,
-`declared-type-literal-with-an-extra-field`,
-`declared-type-literal-missing-a-required-field`, `missing-field-on-a-literal-is-an-error`,
-`duplicate-field-in-a-literal`, `lambda-field-typo-on-a-typed-list`,
-`lambda-field-typo-on-an-inferred-list`, `equality-ignores-field-order` **(edition)**.
-
-- A literal given to something with a record type is checked field by field.
-- A literal with no declared type has the type its fields give it, so `u.nmae` on
-  `let u = { name: "Ada" }` is `UnknownField`. Only a value from JSON or from a controller
-  with no types is still "anything".
-- A lambda's parameter takes the item type of the list its method is called on.
-- Equality compares fields by name.
-
-### 7. Conditions, and what can be written to
-
-*Cases:* `when-condition-must-be-bool`, `action-if-condition-must-be-bool`,
-`ternary-condition-must-be-bool`, `ternary-arms-of-different-types`,
-`logic-on-a-number-is-an-error`, `assign-to-a-let`, `assign-to-a-parameter`,
-`assign-to-a-literal`, `assign-to-a-loop-variable`,
-`assignment-is-not-an-expression-in-a-text`, `increment-in-a-let-is-an-error`,
-`for-over-a-non-list`.
-
-- The condition of `when`, `if` and `? :` is a `Bool`. The two arms of `? :` are of one
-  type (an `Int` and a `Float` are a `Float`).
-- An assignment's target is a `var`, a binding, or a field of one (step 9). Anything else
-  is `NotAssignable`, which exists and is not raised for these.
-- An assignment outside an action is `EffectInPureContext`, which exists too.
-- `for` takes a list.
+*Done.* `edition = "…"` is read from `[project]` or `[package]`, a manifest without it is
+`2026`, and `byard fix` moves a project to `2027`, rewriting its sources through the formatter
+and naming the edition in the manifest. The first rewrite is step 12's ternary: it writes the
+parentheses that keep `a || b ? x : y` meaning what it meant, and a unit test parses the old
+file in 2026 and the new one in 2027 and finds the same program. What `2027` changes that no
+rewrite can keep (step 10's saturation, step 11's graphemes and what a list shows in a text)
+changes no source, as step 6's `equality-ignores-field-order` shipped in every edition for the
+same reason. Left: a package is parsed in `2026` whatever the app that uses it says, since a
+provider does not tell its edition yet, and `byard new` writes no edition, so a project
+without one stays on `2026`.
 
 ### 8. Names
 
-*Cases:* `var-declared-twice`, `var-and-let-of-one-name`, `var-named-like-a-parameter`,
-`view-duplicate-parameter`, `var-inside-an-element-body`, `let-cycle`,
-`attribute-written-twice`, `state-block-twice`, `intrinsic-unknown-named-argument`,
-`trailing-action-on-an-element-that-takes-none`, `with-outside-an-attribute`,
-`view-named-before-positional`, `view-lowercase-name`, `enum-empty`, `timer-of-zero`,
-`var-unused`.
+*Left:* three bullets, with no case yet. The sixteen cases (`var-declared-twice`,
+`var-and-let-of-one-name`, `var-named-like-a-parameter`, `view-duplicate-parameter`,
+`var-inside-an-element-body`, `let-cycle`, `attribute-written-twice`, `state-block-twice`,
+`intrinsic-unknown-named-argument`, `trailing-action-on-an-element-that-takes-none`,
+`with-outside-an-attribute`, `view-named-before-positional`, `view-lowercase-name`,
+`enum-empty`, `timer-of-zero`, `var-unused`) hold, and so do the twenty-nine added with them.
+Eleven older cases that declare a name and never use it (the `…-does-not-panic` ones, and
+two that test scope) now name the warning they get, `//# warning: UnusedVariable`, and
+nothing else of them changed.
 
-- Two declarations of one name in a view, or a declaration over a parameter, is
-  `NameCollision`.
-- A `var` in an element's braces is refused (`LetInElementBody` exists for `let`) until
-  block-scoped state is designed; today it is accepted and then reads as the text `n`.
-- `let`s in a view that read each other in a circle are the error constants already get.
-- An attribute or a state block written twice, a named argument an element lacks, and an
-  action after an element that has no press are errors, not silence.
-- Lints, as warnings with names, each switchable in `byard.toml` under `[lints]`: a name
-  never read, a view never used, a parameter never read.
+- A name that is only written, `n++` and nothing else, counts as used. "Never read" is the
+  stricter test the lint is called for, and the suite's `timer-of-zero` and `timers-are-accepted`
+  both keep such a `var` and expect no warning, so it wants those cases to say what they mean
+  first.
+- A circle of `let`s is an error only when something reads it (`let-cycle-does-not-hang`
+  pins that a circle nobody reads draws), and only in the view's own body: in a `when` or a
+  `for` a name below is `UnknownName`, once, which is the right error for it.
+- `UnusedView` is for a `private View` nothing draws. A view of an app that is not `Main`
+  and that nothing draws is not reported, because nothing here says which view an app runs
+  but the name.
 
 ## Part 2: stop failing quietly
 
 ### 9. Writing a field
 
-*Cases:* `field-assignment`, `nested-field-assignment`.
+*Left:* one bullet, with a case, `index-assignment`. `field-assignment` and `nested-field-assignment` hold,
+and so do the eight cases added with them.
 
-`u.score = 10` means `u = { ..u, score: 10 }`, and `u.a.b = 2` the same, one level down;
-`xs[i] = v` likewise for a list. The root has to be a `var` or a binding. This is sugar
-over what the language already does, and it is the one place where today's behaviour is
-worst: it checks clean and does nothing.
+- `xs[i] = v` is still accepted and changes nothing. It wants a list update to rebuild the
+  list with (`updateAt`, step 17).
 
 ### 10. Faults a developer can see
 
-*Cases:* `division-by-zero-int`, `int-overflow-add`, `index-out-of-range-is-reported`.
+*Left:* the half that runs. `division-by-zero-int`, `int-overflow-add` and
+`index-out-of-range-is-reported` hold, and so do the eleven cases added with them: `byard
+check` warns of a written zero divisor (`DivisionByZero`) and of a number written as an index
+past a list written beside it (`IndexOutOfRange`, not where a `&&`, `??` or `? :` guards
+it), and edition `2027` saturates an `Int` (`+ - * /`, `-x`, `abs`, `+=`, `-=`, `++`, `--`)
+where `2026` wraps. The harness has an `//# edition:` header for it. `byard fix` rewrites
+nothing for the change, since no rewrite can tell which programs relied on wrapping.
 
 A *fault* is a division by zero, an overflow, an index past the end, or a field read from
-nothing. A fault never stops a shipped app, and that stays. What changes:
+nothing. A fault never stops a shipped app, and that stays. What is not done:
 
 - Under `byard dev`, `byard shot` and `byard test`, a fault is reported once per place,
-  with its line: in the status line, in the HUD, and as a failed step of a test.
-- `byard check` reports the ones it can see without running: a literal zero divisor, a
-  literal index past a literal list.
+  with its line: in the status line, in the HUD, and as a failed step of a test. Nothing
+  reports a fault that only happens while the program runs, and a field read from nothing is
+  not seen at all. The suite cannot hold a case for it, since it runs `byard check`; it
+  wants a harness that can run a frame and read what was reported.
 - In a shipped app a fault goes to the app's log, and to a hook `App::on_fault` gives a
   Rust half.
-- Overflow saturates instead of wrapping **(edition)**. A total that wraps to a negative
-  number is worse than one that stops at the largest.
+- `byard check` sees a literal zero divisor and a literal index; a `let` that is zero, or
+  an index in a `var`, it does not.
 
 Do not make these errors that stop the program. An interface that goes blank because a
 server sent an empty list is worse than one that shows a gap.
 
 ### 11. Text
 
-*Cases:* `string-interpolation-trailing-junk`, `format-too-many-decimals`,
-`list-in-text-shows-its-items`, `len-of-grapheme-cluster` **(edition)**, `index-into-text`.
-
-- What follows the expression in `{ }` is an error, not dropped.
-- A list in a text shows as `[1, 2, 3]`, a record as `{ name: Ada }`. Never the debug form
-  of the Rust value, and never nothing.
-- `len`, `slice` and `indexOf` count what a reader sees as characters. `s[i]` is the
-  character at `i`, or nothing.
+*Left:* nothing, with a note. `string-interpolation-trailing-junk`, `format-too-many-decimals`,
+`list-in-text-shows-its-items`, `len-of-grapheme-cluster` and `index-into-text` hold, and so do
+the twelve cases added with them. Trailing junk in a `{ }` and a tenth decimal are
+`UnexpectedToken`; `s[i]` is the character at `i`, or nothing, in every edition. Counting by
+grapheme (`len`, `slice`, `indexOf`, `split("")`, `s[i]`) and showing a list or a record in a
+text are edition `2027`, because `len-counts-code-points-not-graphemes` and
+`list-in-text-is-nothing-today` pin the old behaviour in `2026`. `byard fix` rewrites nothing
+for either. A `Map` has no text form yet, since there is no `Map` (step 17).
 
 ### 12. Small things that parse wrongly
 
-*Cases:* `int-literal-with-separators`, `float-literal-exponent`, `int-literal-binary`,
-`block-comment`, `byte-order-mark-at-the-start`, `untrack`, `slot-passed-on`,
-`ternary-after-or-means-or-of-a-ternary` **(edition)**.
-
-- `1_000`, `1e3`, `1.5e-3` and `0b101` are numbers. A digit followed by a letter that
-  makes no literal is one lexing error, not a number and a name.
-- `/* … */`, nesting, and a byte order mark skipped.
-- `untrack(expr)` parses, as RFC-0004 has said since the start (#358).
-- A required `Slot` can be handed to another view, as the guide says.
-- `? :` becomes looser than `||`, as in every language people come from. `byard fix`
-  adds the parentheses that keep an old program meaning what it meant, and
-  `MixedTernaryPrecedence` goes.
+*Left:* nothing, with a note. All eight cases hold (`int-literal-with-separators`,
+`float-literal-exponent`, `int-literal-binary`, `block-comment`, `byte-order-mark-at-the-start`,
+`untrack`, `slot-passed-on`, `ternary-after-or-means-or-of-a-ternary`), and so do the fifteen
+added with them. `? :` is looser than `||` from edition `2027` and tighter in `2026`, so
+`MixedTernaryPrecedence` is still told in `2026` and never in `2027`; it goes when `2026` does.
+`///` is still an ordinary comment.
 
 ## Part 3: what a 1.0 language has
 
@@ -201,90 +176,168 @@ is only the order.
 
 ### 13. `none` for any value
 
-*Cases:* `optional-var`, `if-let-on-an-optional`, `optional-chaining`,
-`list-get-is-optional`.
+*Left:* a few forms, with no case yet. `optional-var`, `if-let-on-an-optional`,
+`optional-chaining` and `list-get-is-optional` hold, and so do the fourteen cases added with
+them. `T?` is written on a `var`, a `let` and in a record; `a?.b` is a field read that is
+nothing when `a` is; `if let v = a { … } else { … }` in an action binds `v` to the value, in
+that block only; `xs.get(i)` is a `T?`. All of it is in every edition: none of it was written
+before. Passing an optional on to a `let` (`let v = n`) is not a read, and writing one is not
+either.
 
-`T?` on a `var`, a field and a result, not only a parameter. Then the three things that
-make it pleasant: `a?.b`, `if let v = a { … }` in an action, and `xs.get(i)`, which is
-`T?` where `xs[i]` is `T`. Do this before `match`, which needs it.
+- `when let v = a { … }` in a view. `when a != none { … }` does it for a name today.
+- `T?` as the result of a `fn` or the type of a lambda's parameter.
+- `optional-var` was written with `picked ?? "none"` on an `Int?`, which the neighbouring
+  `otherwise-default-of-the-wrong-type` refuses for the same shape; its default is `0` now,
+  and `??` stays strict.
 
 ### 14. `match`, and enums that carry values
 
-*Cases:* `match-on-an-enum`, `match-as-a-view-member`, `match-must-cover-every-case`,
-`enum-with-data`, `when-chain-over-an-enum-is-not-checked-for-missing-cases`.
+*Done.* `enum-with-data` holds, and so do the twenty-one cases added with it.
+What stays open:
 
-One feature in two pull requests: `match` over today's enums with the missing-case check,
-then cases with fields. Together they replace the three parallel `var`s every loading
-screen carries.
-
-### 15. Loops in actions, and ranges
-
-*Cases:* `action-for-loop`, `for-with-range`, `action-early-return`.
-
-`for x in xs { … }` as a statement, `a..b` as a list of `Int`s, and `return` to leave an
-action. No `while`: every action still ends.
+- A name a pattern binds, `.failed(message)`, is not told when it is never read, as an unused
+  `let` is (`UnusedVariable`).
+- A case with values is a record at run time, `{ case: "failed", message: … }`, and a reply from
+  a controller or JSON with that shape is taken as that case without being checked against the
+  fields it declares. Step 19, with the other data from outside, is where it is.
 
 ### 16. Functions that scale
 
-*Cases:* `function-with-a-block-body`, `function-named-arguments`, `generic-function`.
+*Done.* `function-with-a-block-body`, `function-named-arguments` and `generic-function` hold, and
+so do the twenty-two cases added with them. What stays open:
 
-A block body with `let`s and a last expression; arguments by name, as views take them;
-type parameters on `fn` and `type`.
+- Type parameters on `type`, `type Box<T> = { value: T }`. A type the checker knows is a
+  name with no arguments, so a generic one needs the checker to carry them.
+- Default values on a `fn`, `fn total(items: List<Item>, tax: Float = 0.0)`. The parameter
+  is parsed and not used.
+- A function that reads a name it cannot reach is told twice, `UnknownName` and
+  `ImpureFunction`, for one mistake. It was before this step.
 
 ### 17. Collections
 
-*Cases:* `map-type`, `list-helpers`, `list-insert-and-update`.
+*Done.* `map-type`, `list-helpers` and `list-insert-and-update` hold, and so does
+`index-assignment`, left from step 9, with the forty-one cases added with them. What stays open:
 
-`Map<K, V>` and `Set<T>`, and the list methods people write by hand every week.
+- The other list methods the proposal names: `take`, `skip`, `flatMap`, `groupBy`, `unique`,
+  `zip`, `chunk` and `enumerate`.
+- A lookup in a `Map` or a `Set` searches what was added, as `find` does. The order they keep
+  is what the reference promises; a hash for the keys that can be hashed would make the lookup
+  fast without changing it.
+- `m.keys()`, `m.values()` and a `Set` operation such as `union` do not exist. A `for` goes over
+  a map for its keys.
+- `var-map-type-does-not-exist` said `Map` was not a type; it is one now, so it asks the same of
+  `Dict`.
 
 ### 18. Types for what is an `Int` today
 
-*Cases:* `colour-type-shows-as-a-colour`, `duration-type-keeps-its-unit` **(edition)**.
+*Done, in edition 2027.* `colour-type-shows-as-a-colour` and `duration-type-keeps-its-unit` hold
+with `//# edition: 2027`, and so do the twenty-one cases added with them; the baseline edition
+is as it was (`colour-is-still-a-number-before-2027`). What stays open:
 
-`Color`, `Duration` and `Angle` as types of their own. `0xFF0000 + 200ms` stops meaning
-something.
+- `Color.mix`, `Color.lighten` and `Color.rgb(r, g, b)` from the proposal, and a colour
+  written as `#3B82F6`. `alpha` is the one method a `Color` has.
+- A colour is still told apart from an `Int` only by the type written for it: `0xFF0000` is
+  a number until it is given to a `Color`. A text shows it as a colour only where the checker
+  knows the type, so a colour that went through a function or a list of `Unknown` shows as a
+  number.
+- `byard fix` writes nothing for this change: no rewrite can tell which `Int` was a colour.
 
 ### 19. Data from outside, with a type
 
-*Case:* `typed-json`.
+*Done.* `typed-json` holds, with the eight cases added with it and a Rust test file for the half the
+suite cannot run (`typed_reply.rs`: a call that waits for its reply). What stays open:
 
-`value as Type` checks a reply's shape where it arrives and fails into the `err` arm with
-the path of the first field that does not fit. Reading a field of an untyped reply becomes
-a warning. With step 6, this ends the misspelt-JSON-field problem both reference apps
-recorded.
+- `as` checks a record, a list or a scalar, and a record's optional fields; it does not check an
+  enum case or a `Map` against what arrives, and a number written as text is not told apart
+  from a number.
+- `untyped-reply` is a lint of the field read: `res.json` and `res.status` are both reads of the
+  reply and both told. A reply passed whole to a function is not a read.
+- The three examples that read replies, `aura_weather`, `weather` and `inventory`, now give
+  theirs a type.
 
 ### 20. State above the views
 
-*Case:* `global-store`.
+*Done, except what is kept between runs.* `global-store` holds, with the twelve cases added with it.
+A `store` is a context with one instance for the program, whose fields are signals; a write through
+an `inject` is a write of that field. What stays open:
 
-`store Name { field: Type = default }`, read and written through `inject`. One instance
-for the program, optionally kept between runs.
+- `store Name persist "key" { … }`, kept between runs over the `Store` capability. It is a syntax
+  error that says so, and not read as something else. It needs the interpreter to load the fields
+  from the host's `Store` when the program starts and write them when they change.
+- A store is made again by a hot reload: the state of the program is not held across one.
 
 ### 21. The rest of text
 
-*Cases:* `multi-line-string`, `string-format-width`.
+*Done, but for doc comments.* `multi-line-string` and `string-format-width` hold, with the fourteen
+cases added with them. A text between `"""` drops the indentation of its closing quotes, and a
+format has a width, a fill, an alignment and a percentage. What stays open:
 
-Multi-line strings that drop their indentation, padding in a format, and doc comments that
-the language server and `byard doc` read.
+- `///` is still a comment. The language server does not show it on hover and there is no
+  `byard doc`: that is a command and a page format of its own, and no case asks for it.
+- A format cannot fill with a character other than a zero (`{x:*>8}`), and `%` is for numbers only.
+- A text over lines is not checked for a closing line that is less indented than a line above it:
+  that line keeps the whole of what it has.
 
 ## Part 4: freeze
 
 22. **The specification.** The reference becomes the normative text. Every rule in it has
     a case, and a case with no rule is deleted or given one.
+
+    *Prepared, and needing the author to finish it.* The reference says it is the
+    specification. Every file of cases says which sections it is the cases of
+    (`//# covers:`), and `every_section_of_the_reference_has_cases` fails for a section with
+    none that is not in `uncovered.txt`, a list that can only shrink: 49 of 51 sections have
+    cases, and `use` and `built-in-names` have none (`use` needs a package the harness does not
+    have). What the test cannot say is whether each *rule* in a section has a case, or which
+    rule a case is the case of: that is a reading of the whole reference, and the suite does
+    not tie a case to a sentence. The last gap, `only-a-comment`, closed here: a program with
+    no `View` is a `Project` error that says so.
 23. **Fuzzing past the parser.** Today's fuzzing is random text into the lexer and parser.
     Add: random *well-formed* programs into the checker and the interpreter, which must
     never panic; and `fmt(fmt(x)) == fmt(x)` with the same tree, for every case in the
     suite.
+
+    *Done.* `crates/byard-cli/tests/it/conformance.rs` formats every case's program to a fixed
+    point (774 of them parse), damages each of them six ways and runs the result through
+    `byard check` and a frame (5,094 programs), and writes 2,400 programs from the grammar in
+    both editions, a fifth of which reach a frame. None panics. It found `byard fmt` refusing
+    files that use the syntax of steps 8 to 21; that was fixed in step 19. What it is not: the
+    generator is typed by hand and a seeded one, so it does not shrink a failure or explore
+    what it did not write, and a coverage-guided fuzzer (`cargo fuzz`) over the checker would.
 24. **Three applications nobody on the project wrote**, each run through the edition
     migration, before the edition is named 1.0.
+
+    *Prepared, and needing people.* `migration.rs` runs the migration over the seventy-six
+    projects of the repository, which is the half that needs no one, and
+    [third-party-trial.md](third-party-trial.md) says how the other half goes and what ends
+    it. Choosing the three people is not something this repository can do.
 25. **The promise.** A program that checks under an edition keeps its meaning for as long
     as that edition exists. The suite, frozen per edition, is the test of that promise.
 
+    *Prepared, and needing the author to decide.* The reference states the promise. A lock file
+    for an edition (`BYARD_FREEZE=2026 cargo test … write_the_lock -- --ignored`) fingerprints each
+    case written in it, and `a_frozen_edition_keeps_its_cases` fails for a locked case that was
+    edited or removed. No lock is committed: freezing is the decision to name the edition stable,
+    and it cannot be taken back without breaking the promise.
+
 ## How to tell it is done
 
-- `cargo test -p byard-cli --test it conformance` prints `0 gaps open`.
-- No `Not yet` is left in the language reference.
+As of the last step:
+
+- `cargo test -p byard-cli --test it conformance` prints `0 gaps open`. **Done.**
+- No `Not yet` is left in the language reference. **Not done:** there are eight, each a thing
+  a step left out on purpose, listed in "What stays open" under that step: `///` doc comments
+  (twice), that `T?` and enums are let through in a few places, a hash for `Map` and `Set`,
+  default values on a `fn` and parameters on a `type`, a store kept between runs, a `var` only
+  ever written counting as used, and attribute errors reported only after the others.
 - Every example in the repository and every sample in the guide checks under the newest
-  edition with no warning.
+  edition with no warning. **Mostly:** every project moves to `2027` and checks clean
+  (`migration.rs`), and every guide sample checks; the one warning left is `inventory`'s
+  `UncheckableInject`, which says its Rust controller cannot be seen from `byard check`.
 - Aura Weather and Stockroom have deleted the workarounds their READMEs list under "still
-  could not be built with".
+  could not be built with". **Partly:** Aura Weather's misspelt-JSON-field workaround is gone
+  (every reply has a type); what is left in both READMEs is not the language's (the Rust half
+  not reloading, a `for` that builds every row, autofocus, a label that is part of a `Toggle`).
+
+Steps 22, 24 and 25 are prepared and need the author: the reading of the whole reference, the
+three people, and the decision to freeze an edition.

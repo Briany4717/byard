@@ -93,6 +93,8 @@ enum Role {
     TernaryColon,
     /// A `.` of member access, written against its operand.
     Access,
+    /// The `..` of a range, `0..3`, written against both ends.
+    Range,
     /// The `+` that joins interaction states: `on focused+hover { … }`.
     Joiner,
 }
@@ -129,7 +131,7 @@ fn kind_of(token: &Token) -> K {
         Token::RBrace => K::RBrace,
         Token::Comma => K::Comma,
         Token::Colon => K::Colon,
-        Token::Dot => K::Dot,
+        Token::Dot | Token::QuestionDot => K::Dot,
         Token::DotDot => K::DotDot,
         Token::PlusPlus | Token::MinusMinus => K::Incr,
         Token::Minus => K::Minus,
@@ -223,6 +225,8 @@ struct Prev {
     is_if: bool,
     /// An identifier starting with a capital: a type name.
     upper: bool,
+    /// The name of a function, which a `<` after it opens type parameters.
+    fn_name: bool,
     /// Whether the token ends an operand, so a following `-` subtracts.
     operand_end: bool,
     /// Whether it leaves its statement unfinished, so a line break after it
@@ -259,6 +263,8 @@ struct State {
     on_selector: bool,
     /// Output length just after the last token.
     last_tok_end: usize,
+    /// The last token was the `fn` keyword, so a word next is a function's name.
+    after_fn: bool,
 }
 
 impl State {
@@ -275,6 +281,7 @@ impl State {
         route_pipe: false,
         on_selector: false,
         last_tok_end: 0,
+        after_fn: false,
     };
 }
 
@@ -458,11 +465,14 @@ impl<'s> Printer<'_, 's> {
         }
 
         let is_if = k == K::Word && text == "if";
+        let fn_name = k == K::Word && self.s.after_fn;
+        self.s.after_fn = matches!(token, Token::Fn);
         self.s.prev = Some(Prev {
             k,
             role,
             end: span.end,
             is_if,
+            fn_name,
             upper: k == K::Word && text.starts_with(|c: char| c.is_ascii_uppercase()),
             operand_end: matches!(k, K::Lit | K::RParen | K::RBrack | K::Incr)
                 || (k == K::Word && !is_if),
@@ -531,7 +541,7 @@ impl<'s> Printer<'_, 's> {
                 }
             }
             K::Lt => {
-                if !had_space && prev.is_some_and(|p| p.k == K::Word && p.upper) {
+                if !had_space && prev.is_some_and(|p| p.k == K::Word && (p.upper || p.fn_name)) {
                     let top = self.top_mut();
                     top.generic = top.generic.saturating_add(1);
                     Role::GenOpen
@@ -576,6 +586,8 @@ impl<'s> Printer<'_, 's> {
                     Role::Plain
                 }
             }
+            // A `..` after an operand is a range, and spread otherwise.
+            K::DotDot if operand_end => Role::Range,
             K::Op if self.s.on_selector && matches!(token, Token::Plus) => Role::Joiner,
             _ => Role::Plain,
         }
@@ -594,7 +606,7 @@ impl<'s> Printer<'_, 's> {
             K::LParen | K::LBrack | K::HashBrack | K::Dot | K::DotDot | K::Bang
         ) || matches!(
             p.role,
-            Role::Unary | Role::PipeOpen | Role::GenOpen | Role::Joiner
+            Role::Unary | Role::PipeOpen | Role::GenOpen | Role::Joiner | Role::Range
         ) {
             // `- -x` must not become `--x`.
             return p.role == Role::Unary && matches!(k, K::Minus | K::Incr);
@@ -608,6 +620,7 @@ impl<'s> Printer<'_, 's> {
             K::Colon => role == Role::TernaryColon,
             K::Question => role != Role::OptionalMark,
             K::Dot => role != Role::Access,
+            K::DotDot => role != Role::Range,
             K::Pipe => match role {
                 Role::PipeClose => false,
                 _ => p.k != K::LBrace,
@@ -615,7 +628,9 @@ impl<'s> Printer<'_, 's> {
             K::Lt => role != Role::GenOpen,
             K::Gt => role != Role::GenClose,
             K::LParen | K::LBrack => {
-                !(matches!(p.k, K::RParen | K::RBrack) || (p.k == K::Word && !p.is_if))
+                !(matches!(p.k, K::RParen | K::RBrack)
+                    || (p.k == K::Word && !p.is_if)
+                    || p.role == Role::GenClose)
             }
             K::RBrace => p.k != K::LBrace,
             _ => true,

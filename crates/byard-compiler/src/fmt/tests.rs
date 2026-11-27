@@ -938,3 +938,25 @@ fn context_provide_and_optional_parameters_format_stably() {
     assert!(out.contains("provide C(n: sel)"), "{out}");
     assert!(out.contains("c: Color? = none"), "{out}");
 }
+
+#[test]
+fn the_syntax_of_the_roadmap_steps_formats_and_keeps_its_meaning() {
+    // `match`, `?.`, `T?` on a var, cases with values, maps and sets, ranges
+    // and loops in actions, `return`, `as`, block bodies, arguments by name
+    // and type parameters: the formatter refuses a file whose meaning it
+    // cannot compare, so each of these has to be known to the comparison.
+    let out = fmt_stable(
+        "enum Load{idle,failed(message:Str),ready(count:Int)}\n\
+         fn first<T>(xs:List<T>)->T=>xs[0]\n\
+         fn area(w:Int,h:Int)->Int=>{\nlet a=w*h\na\n}\n\
+         View Main(){\nvar state=Load.failed(message:\"x\")\n\
+         var m:Map<Str,Int> = [\"a\":1]\nvar s=Set([1,2])\nvar n=0\nvar u:Str?=none\n\
+         on mount=>{\nfor i,x in 0..3{n+=i*x}\nfor k,v in m{n+=v}\nif n>2{return}\nn=area(h:2,w:3)\n}\n\
+         Text(match state{\n.idle=>\"i\"\n.failed(message)=>\"f {message}\"\n.ready(count)=>\"{count}\"\n})\n\
+         Text(\"{u?.len??0} {first([1]) as Int}\")\n}",
+    );
+    assert!(out.contains("failed(message: Str)"), "{out}");
+    assert!(out.contains("for i, x in 0..3"), "{out}");
+    assert!(out.contains("area(h: 2, w: 3)"), "{out}");
+    assert!(out.contains("[\"a\": 1]"), "{out}");
+}

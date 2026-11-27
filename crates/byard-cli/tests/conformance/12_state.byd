@@ -1,5 +1,7 @@
 // `var`, `let`, inference, annotations, reactivity and scope.
 
+//# covers: var, let, what-a-view-holds, types, what-the-checker-checks, what-has-to-be-written-and-what-is-inferred, stores, how-the-screen-follows, lifecycle-and-timers
+
 //# case: var-infers-from-its-first-value
 //# fragment
 //# text: 1 4.5 hi true 2
@@ -42,10 +44,10 @@ Text("{xs.len}")
 var q: Qux = 1
 Text("{q}")
 
-//# case: var-map-type-does-not-exist
+//# case: var-generic-type-that-does-not-exist
 //# fragment
 //# error: UnknownType
-var m: Map<Str, Int> = {}
+var m: Dict<Str, Int> = {}
 Text("x")
 
 //# case: var-assigned-another-type
@@ -70,7 +72,6 @@ on mount => { s++ }
 Text(s)
 
 //# case: var-declared-twice
-//# gap: two `var`s of one name in a view are accepted; the second wins
 //# fragment
 //# error: NameCollision
 var x = 1
@@ -78,7 +79,6 @@ var x = 2
 Text("{x}")
 
 //# case: var-and-let-of-one-name
-//# gap: a `let` over a `var` of the same name is accepted
 //# fragment
 //# error: NameCollision
 var x = 1
@@ -86,7 +86,6 @@ let x = 2
 Text("{x}")
 
 //# case: var-named-like-a-parameter
-//# gap: a `var` over a parameter of the same name is accepted
 //# error: NameCollision
 View Card(n: Int) {
     var n = 2
@@ -94,12 +93,103 @@ View Card(n: Int) {
 }
 View Main() { Card(1) }
 
+//# case: var-and-fn-of-one-name
+//# fragment
+//# error: NameCollision
+//# diagnostics: 1
+var total = 1
+fn total(x: Int) -> Int => x
+Text("{total}")
+
+//# case: var-three-times-is-two-errors-one-for-each-repeat
+//# fragment
+//# error: NameCollision
+//# diagnostics: 2
+var x = 1
+var x = 2
+var x = 3
+Text("{x}")
+
+//# case: name-reused-in-an-inner-body-is-fine
+//# fragment
+//# text: 1 | 2
+var x = 1
+Text("{x}")
+when x == 1 {
+    let x = 2
+    Text("{x}")
+}
+
+//# case: the-same-name-in-two-bodies-is-fine
+//# fragment
+//# text: a | b
+var on = true
+when on {
+    let word = "a"
+    Text(word)
+} else {
+    let word = "b"
+    Text(word)
+}
+when !on {
+    Text("never")
+} else {
+    let word = "b"
+    Text(word)
+}
+
 //# case: var-unused
-//# gap: nothing says a `var` is never read
 //# fragment
 //# warning: UnusedVariable
 var unused = 0
 Text("x")
+
+//# case: var-unused-in-a-when-body
+//# fragment
+//# warning: UnusedVariable
+var on = true
+when on {
+    let spare = 1
+    Text("x")
+}
+
+//# case: let-unused
+//# fragment
+//# warning: UnusedVariable
+let spare = 1
+Text("x")
+
+//# case: unused-name-with-an-underscore-is-meant
+//# fragment
+//# text: x
+var _spare = 0
+let _other = 1
+Text("x")
+
+//# case: param-unused
+//# warning: UnusedParam
+View Card(label: Str) { Text("x") }
+View Main() { Card("a") }
+
+//# case: param-unused-with-an-underscore-is-meant
+//# text: x
+View Card(_label: Str) { Text("x") }
+View Main() { Card("a") }
+
+//# case: param-read-only-in-a-default-is-read
+//# text: 5
+View Card(n: Int, double: Int = n * 2 - 3) { Text("{double}") }
+View Main() { Card(4) }
+
+//# case: private-view-nobody-draws
+//# warning: UnusedView
+private View Hidden() { Text("h") }
+View Main() { Text("m") }
+
+//# case: private-view-that-is-drawn
+//# text: h
+private View Hidden() { Text("h") }
+View Main() { Hidden() }
 
 //# case: var-used-before-its-line
 //# fragment
@@ -108,7 +198,6 @@ Text("{n}")
 var n = 5
 
 //# case: var-inside-an-element-body
-//# gap: a `var` in an element's braces checks clean and reads as its own name, `n`
 //# fragment
 //# error: LetInElementBody
 Column {
@@ -167,12 +256,28 @@ let z: Str = 5
 Text(z)
 
 //# case: let-cycle
-//# gap: two `let`s in a view that read each other are accepted
 //# fragment
 //# error: ConstantCycle
 let a = b + 1
 let b = a + 1
 Text("{a}")
+
+//# case: let-cycle-of-three-is-one-error
+//# fragment
+//# error: ConstantCycle
+//# diagnostics: 1
+let a = c + 1
+let b = a + 1
+let c = b + 1
+Text("{b}")
+
+//# case: let-reading-the-one-before-is-not-a-cycle
+//# fragment
+//# text: 3
+let a = 1
+let b = a + 1
+let c = b + 1
+Text("{c}")
 
 //# case: let-cycle-does-not-hang
 //# fragment
@@ -285,12 +390,19 @@ after wait * 1ms => { n++ }
 Text("a")
 
 //# case: timer-of-zero
-//# gap: `every 0ms` is refused only when it runs
 //# fragment
 //# error: InvalidAnimation
 var n = 0
 every 0ms => { n++ }
 Text("a")
+
+//# case: after-zero-is-refused-too
+//# fragment
+//# error: InvalidAnimation
+//# diagnostics: 1
+var n = 0
+after 0ms => { n++ }
+Text("{n}")
 
 //# case: on-change-does-not-see-what-mount-wrote
 //# fragment
@@ -445,3 +557,127 @@ View Main() {
     var xs: List<Place> = [p]
     Text("{p.name} {s} {n} {xs.len}")
 }
+
+//# case: store-starts-at-its-default
+//# text: 5
+store Counter { n: Int = 5 }
+View Main() {
+    inject Counter as c
+    Text("{c.n}")
+}
+
+//# case: store-is-one-for-the-whole-program
+//# text: 2
+store Session { count: Int = 0 }
+View Bump() {
+    inject Session as s
+    on mount => { s.count++ }
+    Box {}
+}
+View Main() {
+    inject Session as s
+    Bump()
+    Bump()
+    Text("{s.count}")
+}
+
+//# case: store-field-is-written-with-an-operator
+//# text: 7
+store Counter { n: Int = 5 }
+View Main() {
+    inject Counter as c
+    on mount => { c.n += 3  c.n-- }
+    Text("{c.n}")
+}
+
+//# case: store-field-may-be-nothing
+//# text: Guest
+type User = { name: Str }
+store Session { user: User? = none }
+View Main() {
+    inject Session as s
+    Text("{s.user?.name ?? "Guest"}")
+}
+
+//# case: store-field-set-in-one-view-is-read-in-another
+//# text: Ada
+type User = { name: Str }
+store Session { user: User? = none }
+View Reader() {
+    inject Session as s
+    Text("{s.user?.name ?? "Guest"}")
+}
+View Main() {
+    inject Session as s
+    on mount => { s.user = { name: "Ada" } }
+    Reader()
+}
+
+//# case: store-field-is-set-back-to-nothing
+//# text: Guest
+type User = { name: Str }
+store Session { user: User? = none }
+View Main() {
+    inject Session as s
+    on mount => { s.user = { name: "Ada" }  s.user = none }
+    Text("{s.user?.name ?? "Guest"}")
+}
+
+//# case: store-field-written-with-a-wrong-type
+//# error: TypeMismatch
+//# diagnostics: 1
+store Counter { n: Int = 5 }
+View Main() {
+    inject Counter as c
+    on mount => { c.n = "a" }
+    Text("{c.n}")
+}
+
+//# case: store-field-it-does-not-have
+//# error: UnknownField
+//# diagnostics: 1
+store Counter { n: Int = 5 }
+View Main() {
+    inject Counter as c
+    on mount => { c.m = 1 }
+    Text("{c.n}")
+}
+
+//# case: store-field-needs-a-default
+//# error: ContextFieldNeedsDefault
+//# diagnostics: 1
+store Counter { n: Int }
+View Main() {
+    inject Counter as c
+    Text("{c.n}")
+}
+
+//# case: store-is-not-provided
+//# error: StoreProvided
+//# diagnostics: 1
+store Counter { n: Int = 5 }
+View Main() {
+    provide Counter(n: 1)
+    Text("x")
+}
+
+//# case: store-with-an-enum-field
+//# text: system
+enum Scheme { system, light, dark }
+store Prefs { scheme: Scheme = .system }
+View Main() {
+    inject Prefs as p
+    Text("{p.scheme}")
+}
+
+//# case: store-persist-is-not-available-yet
+//# error: UnexpectedToken
+//# diagnostics: 1
+store Session persist "session" { n: Int = 0 }
+View Main() { Text("x") }
+
+//# case: store-is-still-a-name
+//# fragment
+//# text: 3
+let store = 3
+Text("{store}")

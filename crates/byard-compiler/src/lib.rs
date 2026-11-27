@@ -18,6 +18,7 @@
 )]
 
 pub mod consts;
+pub(crate) mod desugar;
 pub mod diagnostics;
 pub mod edition;
 pub mod fmt;
@@ -25,6 +26,7 @@ pub mod icons;
 pub mod infer;
 pub mod interp;
 pub mod lexer;
+pub mod names;
 pub mod parser;
 pub mod resolve;
 pub mod surfaces;

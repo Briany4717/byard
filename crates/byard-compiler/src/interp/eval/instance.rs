@@ -153,6 +153,9 @@ impl Interpreter {
             } else {
                 self.slot_argument(param, el)
             };
+            // A slot passed on that was not given to the caller is the caller's
+            // `MissingParam`, said once where it was left out.
+            let passed_on = matches!(wrote, Some(SlotArg::Forward(_)));
             let given = match wrote {
                 // A slot passed on keeps the source of the view that wrote it.
                 Some(SlotArg::Forward(source)) => source,
@@ -171,10 +174,12 @@ impl Interpreter {
                 None => None,
             };
             if given.is_none()
+                && !passed_on
                 && param.name.as_str() != RESERVED_CONTENT
                 && param_default(param).is_none()
             {
                 self.errors.push(CompileError::MissingParam {
+                    function: false,
                     span: el.span,
                     name: param.name.as_str().to_string(),
                     callee: el.name.as_str().to_string(),
@@ -197,11 +202,14 @@ impl Interpreter {
             {
                 Some(SlotArg::Members(Vec::new()))
             }
-            Expr::Ident(name, _) => self
-                .slot_stack
-                .last()
-                .and_then(|f| f.get(name))
-                .map(|source| SlotArg::Forward(source.clone())),
+            Expr::Ident(name, _) => match self.slot_stack.last().and_then(|f| f.get(name)) {
+                Some(source) => Some(SlotArg::Forward(source.clone())),
+                // A view checked on its own has no call above it, so the slot
+                // it passes on has not been given anything: that is for the
+                // call of this view to say, not for this one.
+                None if self.env.lookup(name).is_none() => Some(SlotArg::Forward(None)),
+                None => None,
+            },
             _ => None,
         }
     }
@@ -294,6 +302,8 @@ impl Interpreter {
                     binds[i] = Some(self.resolve_binding_arg(value));
                 } else {
                     self.errors.push(CompileError::DuplicateParam {
+                        function: false,
+                        declared: false,
                         span: value.span(),
                         name: params[i].name.as_str().to_string(),
                         callee: callee.to_string(),
@@ -308,6 +318,8 @@ impl Interpreter {
                 slots[i] = Some(self.param_arg(&params[i], value));
             }
             Some(_) => self.errors.push(CompileError::DuplicateParam {
+                function: false,
+                declared: false,
                 span: value.span(),
                 name: name.as_str().to_string(),
                 callee: callee.to_string(),
@@ -317,6 +329,8 @@ impl Interpreter {
             None if crate::interp::intrinsics::VIEW_CALL_LAYOUT.contains(&name.as_str()) => {
                 if layout.iter().any(|(n, ..)| n == name) {
                     self.errors.push(CompileError::DuplicateParam {
+                        function: false,
+                        declared: false,
                         span: value.span(),
                         name: name.as_str().to_string(),
                         callee: callee.to_string(),
@@ -336,6 +350,7 @@ impl Interpreter {
                 let hint = closest_match(name.as_str(), params.iter().map(|p| p.name.as_str()))
                     .map(str::to_string);
                 self.errors.push(CompileError::UnknownParam {
+                    function: false,
                     span: value.span(),
                     name: name.as_str().to_string(),
                     callee: callee.to_string(),
@@ -405,6 +420,8 @@ impl Interpreter {
                     let scope = self.param_arg(&params[i], &arg.value);
                     if slots[i].is_some() {
                         self.errors.push(CompileError::DuplicateParam {
+                            function: false,
+                            declared: false,
                             span: arg.value.span(),
                             name: params[i].name.as_str().to_string(),
                             callee: callee_name.clone(),
@@ -484,6 +501,7 @@ impl Interpreter {
                 && !is_callback_param(&params[i])
             {
                 self.errors.push(CompileError::MissingParam {
+                    function: false,
                     span: call.span,
                     name: params[i].name.as_str().to_string(),
                     callee: callee_name.clone(),
@@ -662,6 +680,7 @@ impl Interpreter {
         } else {
             // A required callback with no default and no argument.
             self.errors.push(CompileError::MissingParam {
+                function: false,
                 span: call.span,
                 name: param.name.as_str().to_string(),
                 callee: call.name.as_str().to_string(),

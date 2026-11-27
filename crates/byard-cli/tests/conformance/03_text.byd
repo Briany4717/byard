@@ -1,5 +1,7 @@
 // Str: length, slicing, methods, comparison and Unicode edges.
 
+//# covers: text, values-as-text
+
 //# case: len-counts-characters
 //# fragment
 //# text: 5 0 5
@@ -11,10 +13,33 @@ Text("{"hello".len} {"".len} {"héllo".len}")
 Text("{"👨‍👩‍👧".len}")
 
 //# case: len-of-grapheme-cluster
-//# gap: `len` counts code points, so one family emoji is 5
+//# edition: 2027
 //# fragment
 //# text: 1
 Text("{"👨‍👩‍👧".len}")
+
+//# case: slice-counts-graphemes-in-2027
+//# edition: 2027
+//# fragment
+//# text: éx ab
+Text("{"aéxab".slice(1, 3)} {"👨‍👩‍👧ab".slice(1, 3)}")
+
+//# case: index-of-counts-graphemes-in-2027
+//# edition: 2027
+//# fragment
+//# text: 2 -1
+Text("{"👨‍👩‍👧ab".indexOf("b")} {"ab".indexOf("z")}")
+
+//# case: split-by-nothing-keeps-a-cluster-whole-in-2027
+//# edition: 2027
+//# fragment
+//# text: 3
+Text("{"a👨‍👩‍👧b".split("").len}")
+
+//# case: split-by-nothing-cuts-a-cluster-in-2026
+//# fragment
+//# text: 7
+Text("{"a👨‍👩‍👧b".split("").len}")
 
 //# case: slice
 //# fragment
@@ -29,6 +54,7 @@ Text("{"héllo".slice(1, 3)}")
 //# case: slice-negative-does-not-panic
 //# fragment
 //# text: ok
+//# warning: UnusedVariable
 let a = "hello".slice(-2, 3)
 let b = "hello".slice(2, -1)
 let c = "".slice(0, 0)
@@ -92,6 +118,7 @@ Text("{"2026-11-05T14:03:12".formatDate("YYYY-MM-DD HH:mm")}")
 //# case: format-date-of-nonsense-does-not-panic
 //# fragment
 //# text: ok
+//# warning: UnusedVariable
 let a = "not a date".formatDate("YYYY")
 let b = "".formatDate("")
 let c = "2026-99-99T99:99:99".formatDate("dddd D MMMM")
@@ -128,10 +155,26 @@ Text("{"a".reversed()}")
 Text("{"  ada ".trim().toUpper().slice(0, 3)}")
 
 //# case: index-into-text
-//# gap: `s[i]` on text is nothing; should be the character or an error
 //# fragment
 //# text: e
 Text("{"hello"[1]}")
+
+//# case: index-into-text-past-the-end-is-nothing
+//# fragment
+//# text: [] [] x
+let s = "ab"
+Text("[{s[5]}] [{s[-1]}] {s[5] ?? "x"}")
+
+//# case: index-into-text-by-grapheme-in-2027
+//# edition: 2027
+//# fragment
+//# text: b
+Text("{"👨‍👩‍👧b"[1]}")
+
+//# case: index-into-text-with-a-float-is-an-error
+//# fragment
+//# error: TypeMismatch
+Text("{"ab"[0.5]}")
 
 //# case: join-shows-each-item
 //# fragment
@@ -146,10 +189,23 @@ Text("[{[].join(",")}]")
 Text("<{[1, 2] + [3]}>")
 
 //# case: list-in-text-shows-its-items
-//# gap: a list written into a text draws nothing
+//# edition: 2027
 //# fragment
 //# text: [1, 2, 3]
 Text("{[1, 2] + [3]}")
+
+//# case: list-of-text-shows-bare
+//# edition: 2027
+//# fragment
+//# text: [a, b] [] [[1], [2, 3]]
+Text("{["a", "b"]} {[]} {[[1], [2, 3]]}")
+
+//# case: record-in-text-shows-its-fields
+//# edition: 2027
+//# fragment
+//# text: { name: Ada, score: 3 }
+let r = { name: "Ada", score: 3 }
+Text("{r}")
 
 //# case: record-in-text-is-not-debug-form
 //# fragment
@@ -167,3 +223,97 @@ let c = b + b + b + b
 let d = c + c + c + c
 let e = d + d + d + d
 Text("{e.len}")
+
+//# case: format-pads-text-to-a-width
+//# fragment
+//# text: [ab    ] [    ab] [  ab  ]
+let name = "ab"
+Text("[{name:<6}] [{name:>6}] [{name:^6}]")
+
+//# case: format-pads-a-number-to-the-right-by-default
+//# fragment
+//# text: [   42] [42   ]
+Text("[{42:5}] [{42:<5}]")
+
+//# case: format-fills-a-number-with-zeros-after-its-sign
+//# fragment
+//# text: -0007 | 00042
+Text("{-7:05}")
+Text("{42:05}")
+
+//# case: format-width-and-decimals-together
+//# fragment
+//# text: [    3.14] [00003.14]
+Text("[{3.14159:8.2}] [{3.14159:08.2}]")
+
+//# case: format-a-percentage
+//# fragment
+//# text: 25.6% | 50%
+Text("{0.256:.1%}")
+Text("{0.5:%}")
+
+//# case: format-grouping-with-a-width
+//# fragment
+//# text: [ 1,234,567]
+Text("[{1234567:10,}]")
+
+//# case: format-width-does-not-cut-a-wider-text
+//# fragment
+//# text: abcdef
+let word = "abcdef"
+Text("{word:3}")
+
+//# case: a-ternary-in-an-interpolation-is-not-a-format
+//# fragment
+//# text: 1 | [  1]
+let on = true
+Text("{on ? 1 : 2}")
+Text("[{on ? 1 : 2:3}]")
+
+//# case: a-spec-that-is-not-one-stays-in-the-expression
+//# fragment
+//# error: UnexpectedToken
+//# diagnostics: 1
+let n = 1
+Text("{n:x}")
+
+//# case: multi-line-string-keeps-its-inner-indentation
+//# fragment
+//# text: a | 2
+let s = """
+    a
+      b
+    """
+Text("{s.slice(0, 1)}")
+Text("{s.split("\n").len}")
+
+//# case: multi-line-string-reads-interpolations
+//# fragment
+//# text: x=1
+let n = 1
+let s = """
+    x={n}
+    """
+Text(s)
+
+//# case: multi-line-string-with-its-quotes-on-the-text-line
+//# fragment
+//# text: ab
+let s = """
+ab"""
+Text(s)
+
+//# case: an-empty-multi-line-string
+//# fragment
+//# text: 0
+let s = """
+"""
+Text("{s.len}")
+
+//# case: multi-line-string-that-never-ends
+//# fragment
+//# error: UnterminatedString
+//# diagnostics: 1
+let s = """
+    a
+Text("x")

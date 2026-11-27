@@ -15,6 +15,7 @@
 //! | ```` ```byld,fragment ```` | Statements or elements. Wrapped in `View Main() { … }`, then as above. |
 //! | ```` ```byld,fails ````    | At least one diagnostic. For showing what an error looks like. |
 //! | ```` ```byld,ignore ````   | Not checked. Say why in a comment beside it.            |
+//! | ```` ```byld,edition2027 ```` | As the plain fence, written in edition 2027 (it combines with `fragment`: `byld,fragment,edition2027`). |
 //!
 //! Two more tags keep the prose honest:
 //!
@@ -46,7 +47,7 @@ use std::path::{Path, PathBuf};
 use byard_compiler::CompileError;
 use byard_compiler::interp::eval::Interpreter;
 use byard_compiler::interp::theme::Theme;
-use byard_compiler::resolve::{PackageProvider, SourceFile, resolve_program};
+use byard_compiler::resolve::{PackageProvider, SourceFile};
 
 /// The repository, as the book links to it.
 const REPO_URL: &str = "https://github.com/Briany4717/byard/";
@@ -213,13 +214,14 @@ impl PackageProvider for NoPackages {
 /// (parse and type check), then lower and render every view into a throwaway
 /// frame, so the checks that run while lowering are exercised too. If
 /// `byard_project::check::check_program` changes, change this with it.
-fn diagnostics_of(src: &str) -> Vec<String> {
-    let program = resolve_program(
+fn diagnostics_of(src: &str, edition: byard_compiler::edition::Edition) -> Vec<String> {
+    let program = byard_compiler::resolve::resolve_program_in(
         vec![SourceFile {
             name: "main.byd".to_string(),
             source: src.to_string(),
         }],
         &mut NoPackages,
+        edition,
     );
     let errors: Vec<CompileError> = if program.errors.is_empty() {
         let known: Vec<&str> = program.views.iter().map(|v| v.name.as_str()).collect();
@@ -276,6 +278,7 @@ fn mode_of(block: &Block) -> Result<Mode, String> {
             "fragment" => Mode::Fragment,
             "fails" => Mode::Fails,
             "ignore" => Mode::Ignore,
+            "edition2027" => continue,
             other => {
                 return Err(format!(
                     "{}: unknown tag `{other}` on a byld block (use fragment, fails or ignore)",
@@ -343,7 +346,12 @@ fn check_samples(blocks: &[Block]) -> Result<Tally, String> {
             continue;
         }
         let (src, added) = source_of(block, mode);
-        let found = diagnostics_of(&src);
+        let edition = if block.tags.iter().any(|t| t == "edition2027") {
+            byard_compiler::edition::Edition::E2027
+        } else {
+            byard_compiler::edition::Edition::BASELINE
+        };
+        let found = diagnostics_of(&src, edition);
         match mode {
             Mode::Whole | Mode::Fragment => {
                 if mode == Mode::Whole {

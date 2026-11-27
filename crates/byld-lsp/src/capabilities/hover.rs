@@ -174,6 +174,7 @@ fn type_text(ty: &byard_compiler::parser::ast::Type) -> String {
             let args: Vec<String> = args.iter().map(type_text).collect();
             format!("{name}<{}>", args.join(", "))
         }
+        Type::Optional { inner, .. } => format!("{}?", type_text(inner)),
         Type::Function { params, ret, .. } => {
             let params: Vec<String> = params.iter().map(type_text).collect();
             let ret = ret
@@ -247,6 +248,11 @@ pub(crate) fn format_ty(ty: &Ty) -> String {
         Ty::Bool => "Bool".to_string(),
         Ty::Str => "Str".to_string(),
         Ty::List(inner) => format!("List<{}>", format_ty(inner)),
+        Ty::Map(key, value) => format!("Map<{}, {}>", format_ty(key), format_ty(value)),
+        Ty::Set(inner) => format!("Set<{}>", format_ty(inner)),
+        Ty::Color => "Color".to_string(),
+        Ty::Duration => "Duration".to_string(),
+        Ty::Angle => "Angle".to_string(),
         Ty::Fn(params, ret) => {
             let params_str: Vec<String> = params.iter().map(format_ty).collect();
             let ret_str = match ret {
@@ -257,6 +263,13 @@ pub(crate) fn format_ty(ty: &Ty) -> String {
         }
         Ty::Optional(inner) => format!("{}?", format_ty(inner)),
         Ty::Named(sym) => sym.as_str().to_string(),
+        Ty::Shape(fields) => {
+            let fields: Vec<String> = fields
+                .iter()
+                .map(|(name, ty)| format!("{}: {}", name.as_str(), format_ty(ty)))
+                .collect();
+            format!("{{ {} }}", fields.join(", "))
+        }
         Ty::Unknown => "Unknown".to_string(),
     }
 }

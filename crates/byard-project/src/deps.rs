@@ -1359,10 +1359,16 @@ pub fn resolve_project(
     let files = project_source_files(manifest)?;
     declare_native_views(manifest);
     let program = if manifest.library {
-        byard_compiler::resolve::resolve_library(&manifest.name, files, &mut provider)
+        byard_compiler::resolve::resolve_library_in(
+            &manifest.name,
+            files,
+            &mut provider,
+            manifest.edition,
+        )
     } else {
-        byard_compiler::resolve::resolve_program(files, &mut provider)
+        byard_compiler::resolve::resolve_program_in(files, &mut provider, manifest.edition)
     };
+    // Every view carries the edition the manifest names.
     Ok((program, provider))
 }
 
@@ -1436,6 +1442,7 @@ mod tests {
             icon: None,
             bundle: crate::manifest::BundleConfig::default(),
             edition: byard_compiler::edition::Edition::BASELINE,
+            allowed_lints: Vec::new(),
         };
         let (program, provider) = resolve_project(&manifest).unwrap();
         assert!(program.errors.is_empty(), "{:?}", program.errors);

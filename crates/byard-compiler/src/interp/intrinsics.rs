@@ -1405,6 +1405,7 @@ fn describe_member(m: &Member) -> String {
         Member::Provide { .. } => "a `provide` declaration".to_string(),
         Member::For { .. } => "a `for` loop".to_string(),
         Member::When { .. } => "a `when` block".to_string(),
+        Member::Match { .. } => "a `match` block".to_string(),
         Member::Style { .. } => "a `style` block".to_string(),
         Member::Route { kind, .. } => format!("a `{}` block", kind.as_str()),
         Member::Timer { every, .. } => {
@@ -1433,6 +1434,7 @@ fn member_span(m: &Member) -> crate::diagnostics::Span {
         | Member::Provide { span, .. }
         | Member::For { span, .. }
         | Member::When { span, .. }
+        | Member::Match { span, .. }
         | Member::Route { span, .. }
         | Member::Lifecycle { span, .. }
         | Member::Timer { span, .. }
@@ -1441,6 +1443,27 @@ fn member_span(m: &Member) -> crate::diagnostics::Span {
         | Member::Style { span, .. } => *span,
         Member::Element(e) => e.span,
         Member::Expr(e) => e.span(),
+    }
+}
+
+/// Whether lowering hands `Name(…) => action` to the element. A `Text` is
+/// drawn and not pressed (a `Button` is the one that is), and an image, a
+/// spacer, an overlay and a navigation container have nothing to press either,
+/// so the action written after one is dropped; it is refused instead.
+fn takes_a_trailing_action(element: &str) -> bool {
+    !matches!(
+        element,
+        "Text" | "Spacer" | "Image" | "VectorIcon" | "Overlay" | "NavStack" | "NavHost"
+    )
+}
+
+/// The one name an element's `( … )` argument can be given, for the elements
+/// whose argument is named at all: `NavStack(path: stack)`, `NavHost(active: tab)`.
+fn content_param_name(element: &str) -> Option<&'static str> {
+    match element {
+        "NavStack" => Some("path"),
+        "NavHost" => Some("active"),
+        _ => None,
     }
 }
 
@@ -1499,15 +1522,50 @@ pub fn validate_element_in(
         return errs;
     };
 
+    // A named argument the element has no parameter of that name for. It is
+    // that one mistake: it is not also one too many.
+    let accepted = content_param_name(name);
+    let mut unknown_names = 0;
+    for arg in &el.content {
+        if let Some(given) = &arg.name {
+            if accepted != Some(given.as_str()) {
+                unknown_names += 1;
+                errs.push(CompileError::UnknownParam {
+                    function: false,
+                    span: arg.value.span(),
+                    name: given.as_str().to_string(),
+                    callee: name.to_string(),
+                    hint: accepted
+                        .and_then(|a| closest_match(given.as_str(), std::iter::once(a)))
+                        .map(str::to_string),
+                });
+            }
+        }
+    }
+
+    // A trailing `=> action` is the element's `tap`; one that is not pressed
+    // would never run it.
+    if let Some(action) = &el.action {
+        if !takes_a_trailing_action(name) {
+            errs.push(CompileError::ViewCallAction {
+                span: action.span(),
+                callee: name.to_string(),
+                event: None,
+                callback: None,
+            });
+        }
+    }
+
     // Rule 2, content arity.
-    if el.content.len() != info.arity {
+    let found = el.content.len() - unknown_names;
+    if found != info.arity {
         errs.push(CompileError::ArityMismatch {
             span: el.span,
             name: name.to_string(),
             expected: info.arity,
-            found: el.content.len(),
+            found,
         });
-    } else if let Some(ty) = info.content {
+    } else if let Some(ty) = info.content.filter(|_| unknown_names == 0) {
         // Rule 3, content type.
         for arg in &el.content {
             if let Some(err) = check_value_type(ty, &arg.value) {
@@ -1928,6 +1986,7 @@ fn animated_anywhere(value: &Expr) -> bool {
         Expr::IntLit(..)
         | Expr::FloatLit(..)
         | Expr::AngleLit(..)
+        | Expr::DurationLit(..)
         | Expr::StrLit(..)
         | Expr::Ident(..)
         | Expr::ClassRef(..)
@@ -1936,13 +1995,16 @@ fn animated_anywhere(value: &Expr) -> bool {
         // A controller call is a statement, never a property value, so it can
         // never carry a layout animation.
         | Expr::ControllerCall { .. }
+        | Expr::Return(_)
         | Expr::Error(..) => false,
         Expr::Array(items, _) | Expr::Block(items, _) => items.iter().any(animated_anywhere),
         Expr::Tuple(items, _) => args(items),
         Expr::Call {
             callee, args: a, ..
         } => animated_anywhere(callee) || args(a),
-        Expr::Member { base, .. } | Expr::Postfix { target: base, .. } => animated_anywhere(base),
+        Expr::Member { base, .. }
+        | Expr::OptionalMember { base, .. }
+        | Expr::Postfix { target: base, .. } => animated_anywhere(base),
         Expr::Lambda { body, .. } | Expr::Unary { rhs: body, .. } => animated_anywhere(body),
         Expr::Assign { target, value, .. } => animated_anywhere(target) || animated_anywhere(value),
         Expr::Index { base, index, .. } => animated_anywhere(base) || animated_anywhere(index),
@@ -1959,6 +2021,13 @@ fn animated_anywhere(value: &Expr) -> bool {
         Expr::Ternary {
             cond, then, els, ..
         } => animated_anywhere(cond) || animated_anywhere(then) || animated_anywhere(els),
+        Expr::Match {
+            scrutinee, arms, ..
+        } => animated_anywhere(scrutinee) || arms.iter().any(|a| animated_anywhere(&a.body)),
+        Expr::ForEach { iter, body, .. } => animated_anywhere(iter) || animated_anywhere(body),
+        Expr::MapLit(pairs, _) => pairs
+            .iter()
+            .any(|(k, v)| animated_anywhere(k) || animated_anywhere(v)),
         Expr::If {
             cond, then, els, ..
         } => {
@@ -1966,7 +2035,9 @@ fn animated_anywhere(value: &Expr) -> bool {
                 || animated_anywhere(then)
                 || els.as_deref().is_some_and(animated_anywhere)
         }
-        Expr::KeyframeStep { value, .. } | Expr::Let { value, .. } => animated_anywhere(value),
+        Expr::KeyframeStep { value, .. }
+        | Expr::Let { value, .. }
+        | Expr::Cast { value, .. } => animated_anywhere(value),
 
     }
 }
@@ -2437,6 +2508,7 @@ fn first_path_command(members: &[Member]) -> Option<&ElementNode> {
         Member::When { then, els, .. } => {
             first_path_command(then).or_else(|| els.as_deref().and_then(first_path_command))
         }
+        Member::Match { arms, .. } => arms.iter().find_map(|a| first_path_command(&a.body)),
         _ => None,
     })
 }
@@ -2455,6 +2527,12 @@ fn validate_path_members(members: &[Member], errs: &mut Vec<CompileError>) {
             Member::For { key, body, .. } => {
                 push_key_in_canvas(key.as_ref(), errs);
                 validate_path_members(body, errs);
+                continue;
+            }
+            Member::Match { arms, .. } => {
+                for arm in arms {
+                    validate_path_members(&arm.body, errs);
+                }
                 continue;
             }
             Member::When { then, els, .. } => {
@@ -2599,6 +2677,11 @@ fn walk_fused_members(members: &[Member], seen: &mut usize, errs: &mut Vec<Compi
                 }
             }
             Member::For { body, .. } => walk_fused_members(body, seen, errs),
+            Member::Match { arms, .. } => {
+                for arm in arms {
+                    walk_fused_members(&arm.body, seen, errs);
+                }
+            }
             Member::When { then, els, .. } => {
                 walk_fused_members(then, seen, errs);
                 if let Some(els) = els {
@@ -2858,6 +2941,11 @@ fn validate_canvas_body(members: &[Member], errs: &mut Vec<CompileError>, theme:
             Member::For { key, body, .. } => {
                 push_key_in_canvas(key.as_ref(), errs);
                 validate_canvas_body(body, errs, theme);
+            }
+            Member::Match { arms, .. } => {
+                for arm in arms {
+                    validate_canvas_body(&arm.body, errs, theme);
+                }
             }
             Member::When { then, els, .. } => {
                 validate_canvas_body(then, errs, theme);

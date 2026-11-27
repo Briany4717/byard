@@ -19,17 +19,46 @@ use std::collections::{HashMap, HashSet};
 use crate::diagnostics::{BindTarget, BindingProblem, CompileError, Span};
 use crate::interp::style::check_static;
 use crate::parser::ast::{
-    AssignOp, AttrKind, BinOp, ConstDecl, EnumDecl, Expr, FnDecl, Member, Param, PostfixOp,
-    StrPart, Type, UnOp, ViewDecl,
+    AssignOp, AttrKind, BinOp, ConstDecl, EnumDecl, Expr, FnDecl, Member, Param, Pattern,
+    PostfixOp, StrPart, Type, UnOp, ViewDecl,
 };
 use crate::symbol::Symbol;
 
+thread_local! {
+    /// Whether the program being checked is of an edition that has `Color`,
+    /// `Duration` and `Angle` as types of their own (from 2027).
+    static TYPED_UNITS: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+}
+
+/// Whether `Color`, `Duration` and `Angle` are types of their own here.
+fn typed_units() -> bool {
+    TYPED_UNITS.with(std::cell::Cell::get)
+}
+
+/// What a text shows a value of one of those types as.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Shown {
+    /// `#FF0000`.
+    Color,
+    /// `200ms`.
+    Duration,
+    /// `90deg`.
+    Angle,
+}
+
 /// The closed set of list methods (RFC-0027 §4), used for the `UnknownMethod`
 /// suggestion.
-const LIST_METHODS: [&str; 15] = [
+const LIST_METHODS: [&str; 24] = [
     "push", "removeAt", "contains", "map", "filter", "slice", "sort", "sortBy", "reduce", "find",
-    "indexOf", "min", "max", "reverse", "join",
+    "indexOf", "min", "max", "reverse", "join", "get", "first", "last", "any", "all", "count",
+    "sum", "insertAt", "updateAt",
 ];
+
+/// The methods of a `Map`, and of a `Set`.
+const MAP_METHODS: [&str; 2] = ["set", "remove"];
+/// The methods of a `Color`.
+const COLOR_METHODS: [&str; 1] = ["alpha"];
+const SET_METHODS: [&str; 3] = ["add", "remove", "contains"];
 
 /// The methods a `Str` has at runtime (`len` is a field). Any other call on a
 /// `Str` silently evaluates to nothing, which is exactly what this diagnostic
@@ -70,8 +99,8 @@ const BUILT_IN_NAMES: [&str; 5] = ["anim", "scroll_fraction", "route", "window",
 /// Functions the language itself provides: `untrack(expr)`, the
 /// `match(element)` width of an anchored overlay, the navigation actions
 /// (`navigate`, `back`, `replace`), and the clock (`now`, `nowUtc`; RFC-0049).
-const BUILT_IN_CALLS: [&str; 7] = [
-    "untrack", "match", "navigate", "back", "replace", "now", "nowUtc",
+const BUILT_IN_CALLS: [&str; 8] = [
+    "untrack", "match", "navigate", "back", "replace", "now", "nowUtc", "Set",
 ];
 
 /// Whether the property `prop` of the element `element` takes only values (a
@@ -118,6 +147,16 @@ pub enum Ty {
     Bool,
     /// `List<T>`.
     List(Box<Ty>),
+    /// `Map<K, V>`.
+    Map(Box<Ty>, Box<Ty>),
+    /// `Set<T>`.
+    Set(Box<Ty>),
+    /// `Color`, from edition 2027: before it a colour is an `Int`.
+    Color,
+    /// `Duration`, a length of time (`200ms`), from edition 2027.
+    Duration,
+    /// `Angle` (`90deg`), from edition 2027.
+    Angle,
     /// `Fn(params) -> ret`.
     Fn(Vec<Ty>, Option<Box<Ty>>),
     /// `T?` (RFC-0065): a value that may be none. Only a parameter or a context
@@ -126,6 +165,8 @@ pub enum Ty {
     Optional(Box<Ty>),
     /// A named type the checker does not model further (e.g. `AppEnvironment`).
     Named(Symbol),
+    /// The type a record literal has: its fields and their types, by name.
+    Shape(Vec<(Symbol, Ty)>),
     /// A type Phase 2 cannot determine; permitted, never an error by itself.
     Unknown,
 }
@@ -144,6 +185,12 @@ pub struct Inference {
     /// What surfaces the program writes (RFC-0068 §1): whether it is a
     /// single-surface program, the implicit window, or has a `Window`.
     pub surfaces: crate::surfaces::SurfaceShape,
+    /// The `for` loops that go over a map, by their spans: what each runs for
+    /// is an entry, `{ key, value }`, which the loop's two names are read from.
+    pub map_loops: Vec<Span>,
+    /// The values a text shows as what they are, a `Color`, a `Duration` or an
+    /// `Angle`, by the span of the expression in the `{ }`.
+    pub shown: Vec<(Span, Shown)>,
 }
 
 /// What the value a handler may name is, by event (RFC-0063 §2).
@@ -188,6 +235,16 @@ fn event_record_fields(record: &str) -> Option<&'static [&'static str]> {
 /// Runs the D9 checks and local inference over `views`.
 #[must_use]
 pub fn check_views(views: &[ViewDecl]) -> Inference {
+    let units = views
+        .first()
+        .is_some_and(|v| v.edition >= crate::edition::Edition::E2027);
+    let was = TYPED_UNITS.with(|u| u.replace(units));
+    let out = check_all(views);
+    TYPED_UNITS.with(|u| u.set(was));
+    out
+}
+
+fn check_all(views: &[ViewDecl]) -> Inference {
     let mut out = Inference::default();
     // Every view carries the same table of top-level functions, constants and
     // enums.
@@ -213,6 +270,7 @@ pub fn check_views(views: &[ViewDecl]) -> Inference {
         .collect();
     let type_names = &type_names;
     let (top_fns, top_sigs) = check_top_fns(&helpers, &const_decls, &enums, type_names, &mut out);
+    let top_generics = generics_of(&helpers);
     let consts = check_consts(
         &const_decls,
         &helpers,
@@ -226,6 +284,20 @@ pub fn check_views(views: &[ViewDecl]) -> Inference {
         .iter()
         .filter_map(|c| consts.get(&c.name).map(|ty| (c.name.clone(), ty.clone())))
         .collect();
+    let optional_fields: HashSet<(Symbol, Symbol)> = views
+        .first()
+        .map(|v| {
+            v.records
+                .iter()
+                .flat_map(|r| {
+                    r.fields
+                        .iter()
+                        .filter(|f| f.optional)
+                        .map(|f| (r.name.clone(), f.name.clone()))
+                })
+                .collect()
+        })
+        .unwrap_or_default();
     let names: HashSet<Symbol> = views.iter().map(|v| v.name.clone()).collect();
     let records: HashMap<Symbol, Vec<(Symbol, Type)>> = views
         .first()
@@ -240,6 +312,13 @@ pub fn check_views(views: &[ViewDecl]) -> Inference {
                         .collect();
                     (r.name.clone(), fields)
                 })
+                .chain(v.enums.iter().flat_map(|e| {
+                    // A case that carries values is checked as the record of
+                    // its fields, under the name it is written with.
+                    e.fields
+                        .iter()
+                        .map(|(case, fields)| (case_record(&e.name, case), fields.clone()))
+                }))
                 .collect()
         })
         .unwrap_or_default();
@@ -280,15 +359,19 @@ pub fn check_views(views: &[ViewDecl]) -> Inference {
             type_names,
             top_sigs: top_sigs.clone(),
             local_sigs: Sigs::new(),
+            lenient_fields: false,
             view: Symbol::intern(""),
             env: HashMap::new(),
             undo: Vec::new(),
             origins: HashMap::new(),
+            list_lens: HashMap::new(),
+            guarded: false,
             fns: top_fns.clone(),
             declared: HashSet::new(),
             views: &names,
             view_params: &view_params,
             records: &records,
+            optional_fields: &optional_fields,
             consts: &consts,
             enums: &enums,
             strict: true,
@@ -296,6 +379,11 @@ pub fn check_views(views: &[ViewDecl]) -> Inference {
             contexts: &contexts,
             narrowed: Vec::new(),
             provided: HashSet::new(),
+            type_vars: HashSet::new(),
+            generics: HashMap::new(),
+            map_loops: Vec::new(),
+            shown: Vec::new(),
+            stores: HashSet::new(),
         };
         for decl in record_decls.iter() {
             for field in &decl.fields {
@@ -306,6 +394,11 @@ pub fn check_views(views: &[ViewDecl]) -> Inference {
             }
         }
     }
+    let stores: HashSet<Symbol> = record_decls
+        .iter()
+        .filter(|r| r.store)
+        .map(|r| r.name.clone())
+        .collect();
     for view in views {
         let mut checker = Checker {
             errors: &mut out.errors,
@@ -313,15 +406,19 @@ pub fn check_views(views: &[ViewDecl]) -> Inference {
             type_names,
             top_sigs: top_sigs.clone(),
             local_sigs: Sigs::new(),
+            lenient_fields: false,
             view: Symbol::intern(""),
             env: HashMap::new(),
             undo: Vec::new(),
             origins: HashMap::new(),
+            list_lens: HashMap::new(),
+            guarded: false,
             fns: top_fns.clone(),
             declared: HashSet::new(),
             views: &names,
             view_params: &view_params,
             records: &records,
+            optional_fields: &optional_fields,
             consts: &consts,
             enums: &enums,
             strict: true,
@@ -329,10 +426,20 @@ pub fn check_views(views: &[ViewDecl]) -> Inference {
             contexts: &contexts,
             narrowed: Vec::new(),
             provided: HashSet::new(),
+            type_vars: HashSet::new(),
+            generics: top_generics.clone(),
+            map_loops: Vec::new(),
+            shown: Vec::new(),
+            stores: stores.clone(),
         };
         checker.check_view(view);
+        let loops = std::mem::take(&mut checker.map_loops);
+        let shown = std::mem::take(&mut checker.shown);
+        out.map_loops.extend(loops);
+        out.shown.extend(shown);
     }
     out.surfaces = crate::surfaces::check_surfaces(views, &mut out.errors);
+    crate::names::check(views, &mut out.errors);
     out
 }
 
@@ -360,6 +467,7 @@ fn check_top_fns(
         .collect();
     let no_views = HashSet::new();
     let no_view_params = HashMap::new();
+    let no_optional = HashSet::new();
     let no_records = HashMap::new();
     let no_consts = HashMap::new();
     let no_contexts = HashMap::new();
@@ -369,10 +477,13 @@ fn check_top_fns(
         type_names,
         top_sigs: top_sigs.clone(),
         local_sigs: Sigs::new(),
+        lenient_fields: false,
         view: Symbol::intern(""),
         env: HashMap::new(),
         undo: Vec::new(),
         origins: HashMap::new(),
+        list_lens: HashMap::new(),
+        guarded: false,
         fns: HashMap::new(),
         // The constants are names a function may read, public or private;
         // their types are not known yet (they may call these functions).
@@ -380,6 +491,7 @@ fn check_top_fns(
         views: &no_views,
         view_params: &no_view_params,
         records: &no_records,
+        optional_fields: &no_optional,
         consts: &no_consts,
         enums,
         // A name a shared function cannot reach is reported below, as
@@ -389,15 +501,22 @@ fn check_top_fns(
         contexts: &no_contexts,
         narrowed: Vec::new(),
         provided: HashSet::new(),
+        type_vars: HashSet::new(),
+        generics: generics_of(helpers),
+        map_loops: Vec::new(),
+        shown: Vec::new(),
+        stores: HashSet::new(),
     };
     let mut top = HashMap::new();
     for decl in helpers {
+        checker.type_vars = decl.type_params.iter().cloned().collect();
         let ty = decl.ret.as_ref().map(|t| checker.resolve_written(t));
         top.insert(decl.name.clone(), ty);
     }
     checker.fns.clone_from(&top);
     for decl in helpers {
         let mark = checker.undo.len();
+        checker.type_vars = decl.type_params.iter().cloned().collect();
         for param in &decl.params {
             checker.check_param(param, "function parameter");
         }
@@ -407,7 +526,10 @@ fn check_top_fns(
                 what: "function return".to_string(),
             });
         }
-        let found = checker.check_expr(&decl.body);
+        let found = match checker.block_result(&decl.body, false) {
+            Some(ty) => ty,
+            None => checker.check_expr(&decl.body),
+        };
         if let Some(Some(ret)) = top.get(&decl.name) {
             checker.must_fit(ret, &found, decl.body.span());
         }
@@ -418,6 +540,11 @@ fn check_top_fns(
             name: decl.name.as_str().to_string(),
         };
         if let Some(span) = effect_span(&decl.body) {
+            // The write is told once, as what makes the function impure.
+            checker.errors.retain(|e| {
+                !matches!(e, CompileError::NotAssignable { span: s }
+                    if span.start <= s.start && s.end <= span.end)
+            });
             checker.errors.push(impure(span));
         }
         // A name the body reads that is none of: its parameters, a lambda's
@@ -430,6 +557,10 @@ fn check_top_fns(
         let mut used: Vec<(Symbol, Span)> = Vec::new();
         crate::resolve::walk::expr(&mut body, &mut |e| match e {
             Expr::Lambda { params, .. } => bound.extend(params.iter().cloned()),
+            // A `let` of a block body names what the lines after it read.
+            Expr::Let { name, .. } => {
+                bound.insert(name.clone());
+            }
             Expr::Ident(name, span) => used.push((name.clone(), *span)),
             _ => {}
         });
@@ -440,8 +571,24 @@ fn check_top_fns(
                 break;
             }
         }
+        checker.type_vars.clear();
     }
     (top, top_sigs)
+}
+
+/// The type parameters of each function that has some.
+fn generics_of(helpers: &[FnDecl]) -> HashMap<Symbol, Vec<Symbol>> {
+    helpers
+        .iter()
+        .filter(|f| !f.type_params.is_empty())
+        .map(|f| (f.name.clone(), f.type_params.clone()))
+        .collect()
+}
+
+/// The name a case that carries values is checked under, as a record of its
+/// fields: `Load.failed`. No program can write it as a type.
+fn case_record(enum_name: &Symbol, case: &Symbol) -> Symbol {
+    Symbol::intern(&format!("{}.{}", enum_name.as_str(), case.as_str()))
 }
 
 /// The program's enums by name, each with its distinct cases.
@@ -508,6 +655,7 @@ fn check_consts(
         .collect();
     let no_views = HashSet::new();
     let no_view_params = HashMap::new();
+    let no_optional = HashSet::new();
     let no_records = HashMap::new();
     let no_contexts = HashMap::new();
     for i in sequence {
@@ -519,15 +667,19 @@ fn check_consts(
                 type_names,
                 top_sigs: top_sigs.clone(),
                 local_sigs: Sigs::new(),
+                lenient_fields: false,
                 view: Symbol::intern(""),
                 env: HashMap::new(),
                 undo: Vec::new(),
                 origins: HashMap::new(),
+                list_lens: HashMap::new(),
+                guarded: false,
                 fns: fns.clone(),
                 declared: untyped.clone(),
                 views: &no_views,
                 view_params: &no_view_params,
                 records: &no_records,
+                optional_fields: &no_optional,
                 consts: &types,
                 enums,
                 // A name a shared constant cannot reach is reported below, as
@@ -537,6 +689,11 @@ fn check_consts(
                 contexts: &no_contexts,
                 narrowed: Vec::new(),
                 provided: HashSet::new(),
+                type_vars: HashSet::new(),
+                generics: generics_of(helpers),
+                map_loops: Vec::new(),
+                shown: Vec::new(),
+                stores: HashSet::new(),
             };
             let declared = decl.ty.as_ref().map(|t| checker.resolve_written(t));
             let found = if declared.is_some() {
@@ -660,6 +817,11 @@ struct Checker<'a> {
     local_sigs: Sigs,
     /// The view being checked, for the errors that name it.
     view: Symbol,
+    /// Whether a field a record literal lacks is let through: it is the left of
+    /// a `??`.
+    lenient_fields: bool,
+    /// The fields of declared records that may be left out: `(record, field)`.
+    optional_fields: &'a HashSet<(Symbol, Symbol)>,
     bindings: &'a mut Vec<(Symbol, Ty)>,
     /// Known binding types in scope (params, vars, lets).
     env: HashMap<Symbol, Ty>,
@@ -669,6 +831,13 @@ struct Checker<'a> {
     undo: Vec<(Symbol, Option<Ty>, Option<Origin>)>,
     /// Where each name in `env` came from.
     origins: HashMap<Symbol, Origin>,
+    /// How many items each `let` bound to a list written out has, for telling
+    /// that a number written as an index is past the end.
+    list_lens: HashMap<Symbol, usize>,
+    /// Whether the expression being checked is only evaluated when something
+    /// before it allows (the right of `&&`, an arm of `? :`, the left of
+    /// `??`): an index past the end there is what the guard is for.
+    guarded: bool,
     /// Declared return types of named `fn`s, for call inference.
     fns: HashMap<Symbol, Option<Ty>>,
     /// Every name the view declares at its top level, whatever the order: a
@@ -700,6 +869,19 @@ struct Checker<'a> {
     narrowed: Vec<String>,
     /// The contexts the view being checked provides, for `DuplicateProvide`.
     provided: HashSet<Symbol>,
+    /// The type parameters of the `fn` whose body is being checked: names a
+    /// type may be written with there, and nowhere else.
+    type_vars: HashSet<Symbol>,
+    /// The type parameters of each `fn` that has some, by its name: a call
+    /// gives them types by the arguments it passes.
+    generics: HashMap<Symbol, Vec<Symbol>>,
+    /// The `for` loops over a map the checker has met.
+    map_loops: Vec<Span>,
+    /// The `{ }` of a text that hold a `Color`, a `Duration` or an `Angle`.
+    shown: Vec<(Span, Shown)>,
+    /// The contexts that are stores, which have one instance and are not
+    /// provided.
+    stores: HashSet<Symbol>,
 }
 
 /// The program's contexts, by name: each field with its type, and whether it
@@ -728,9 +910,21 @@ impl Checker<'_> {
         for member in &view.body {
             match member {
                 Member::Fn {
-                    name, ret, params, ..
+                    name,
+                    type_params,
+                    ret,
+                    params,
+                    ..
                 } => {
+                    let outer = std::mem::replace(
+                        &mut self.type_vars,
+                        type_params.iter().cloned().collect(),
+                    );
+                    if !type_params.is_empty() {
+                        self.generics.insert(name.clone(), type_params.clone());
+                    }
                     let ty = ret.as_ref().map(|t| self.resolve_written(t));
+                    self.type_vars = outer;
                     self.fns.insert(name.clone(), ty);
                     if !params.is_empty() {
                         self.local_sigs.insert(name.clone(), sig_of(params));
@@ -780,6 +974,28 @@ impl Checker<'_> {
         }
     }
 
+    /// The type a `fn` body written as a block has: the lines before the last
+    /// are checked with what they bind in scope, and the result is the last
+    /// one's. `None` for a body that is not a block with a value to give.
+    fn block_result(&mut self, body: &Expr, strict: bool) -> Option<Ty> {
+        let Expr::Block(stmts, _) = body else {
+            return None;
+        };
+        let (last, before) = stmts.split_last()?;
+        if matches!(last, Expr::Let { .. }) {
+            return None;
+        }
+        let mark = self.undo.len();
+        let was = std::mem::replace(&mut self.strict, strict);
+        for stmt in before {
+            self.check_expr(stmt);
+        }
+        let ty = self.check_expr(last);
+        self.strict = was;
+        self.leave(mark);
+        Some(ty)
+    }
+
     /// Binds `name` in the current scope, logging what it replaces.
     fn bind(&mut self, name: Symbol, ty: Ty) {
         self.bind_from(name, ty, Origin::Other);
@@ -787,6 +1003,7 @@ impl Checker<'_> {
 
     /// [`bind`](Self::bind), saying where the name came from.
     fn bind_from(&mut self, name: Symbol, ty: Ty, origin: Origin) {
+        self.list_lens.remove(&name);
         let previous = self.env.insert(name.clone(), ty);
         let previous_origin = self.origins.insert(name.clone(), origin);
         self.undo.push((name, previous, previous_origin));
@@ -1023,6 +1240,16 @@ impl Checker<'_> {
         let Type::Named { name, .. } = ty else {
             return;
         };
+        if self.stores.contains(name) {
+            self.errors.push(CompileError::StoreProvided {
+                span,
+                name: name.as_str().to_string(),
+            });
+            for arg in fields {
+                self.value(&arg.value);
+            }
+            return;
+        }
         if !top_level {
             self.errors.push(CompileError::MisplacedProvide {
                 span,
@@ -1109,6 +1336,249 @@ impl Checker<'_> {
                 }
                 Some(_) => {}
             }
+        }
+    }
+
+    /// The names a pattern binds, with the types of the values they hold: the
+    /// fields of the case when the enum is known, nothing known otherwise.
+    fn pattern_binds(&mut self, held: &Ty, pattern: &Pattern) -> Vec<(Symbol, Ty)> {
+        let Pattern::Case {
+            enum_name: written,
+            name,
+            binds,
+            ..
+        } = pattern
+        else {
+            return Vec::new();
+        };
+        let enum_name = match held {
+            Ty::Named(n) if self.enums.contains_key(n) => Some(n.clone()),
+            _ => written.clone(),
+        };
+        let fields = enum_name
+            .and_then(|e| self.records.get(&case_record(&e, name)).cloned())
+            .unwrap_or_default();
+        binds
+            .iter()
+            .enumerate()
+            .map(|(i, bind)| {
+                let ty = fields
+                    .get(i)
+                    .map_or(Ty::Unknown, |(_, t)| self.resolve_type(t));
+                (bind.clone(), ty)
+            })
+            .collect()
+    }
+
+    /// What the arms of a `match` are for, against what it matches: that a case
+    /// is one of the enum, that a literal is of the value's type, and that
+    /// nothing is left out (`NonExhaustive`).
+    fn check_patterns(&mut self, held: &Ty, patterns: &[&Pattern], span: Span) {
+        let enum_name = match held {
+            Ty::Named(n) if self.enums.contains_key(n) => Some(n.clone()),
+            _ => None,
+        };
+        let mut covered: Vec<Symbol> = Vec::new();
+        let mut literals: Vec<&Expr> = Vec::new();
+        let mut has_else = false;
+        for pattern in patterns {
+            match pattern {
+                Pattern::Else(_) => has_else = true,
+                Pattern::Case {
+                    enum_name: written,
+                    name,
+                    binds,
+                    span: at,
+                } => {
+                    if let Some(enum_name) = &enum_name {
+                        let cases = self.enums.get(enum_name).cloned().unwrap_or_default();
+                        if written.as_ref().is_some_and(|w| w != enum_name) {
+                            self.errors.push(CompileError::TypeMismatch {
+                                span: *at,
+                                op: "match".to_string(),
+                                lhs_ty: enum_name.as_str().to_string(),
+                                rhs_ty: written
+                                    .as_ref()
+                                    .map_or_else(String::new, |w| w.as_str().to_string()),
+                            });
+                        } else if cases.contains(name) {
+                            covered.push(name.clone());
+                            let carried = self
+                                .records
+                                .get(&case_record(enum_name, name))
+                                .map_or(0, Vec::len);
+                            if !binds.is_empty() && binds.len() != carried {
+                                self.errors.push(CompileError::ArityMismatch {
+                                    span: *at,
+                                    name: name.as_str().to_string(),
+                                    expected: carried,
+                                    found: binds.len(),
+                                });
+                            }
+                        } else {
+                            let hint = crate::util::closest_match(
+                                name.as_str(),
+                                cases.iter().map(Symbol::as_str),
+                            )
+                            .map(str::to_string);
+                            self.errors.push(CompileError::UnknownEnumCase {
+                                span: *at,
+                                enum_name: enum_name.as_str().to_string(),
+                                name: name.as_str().to_string(),
+                                hint,
+                            });
+                        }
+                    } else if judged(held) {
+                        self.errors.push(CompileError::TypeMismatch {
+                            span: *at,
+                            op: "match".to_string(),
+                            lhs_ty: ty_name(held),
+                            rhs_ty: "a case".to_string(),
+                        });
+                    }
+                }
+                Pattern::Literal(e) => {
+                    let found = self.check_expr(e);
+                    if (enum_name.is_some() || judged(held))
+                        && is_concrete(&found)
+                        && !(assignable(held, &found) && enum_name.is_none())
+                    {
+                        self.errors.push(CompileError::TypeMismatch {
+                            span: e.span(),
+                            op: "match".to_string(),
+                            lhs_ty: ty_name(held),
+                            rhs_ty: ty_name(&found),
+                        });
+                    }
+                    literals.push(e);
+                }
+            }
+        }
+        if has_else {
+            return;
+        }
+        let missing: Vec<String> = if let Some(enum_name) = &enum_name {
+            self.enums
+                .get(enum_name)
+                .map(|cases| {
+                    cases
+                        .iter()
+                        .filter(|c| !covered.contains(c))
+                        .map(|c| c.as_str().to_string())
+                        .collect()
+                })
+                .unwrap_or_default()
+        } else if *held == Ty::Bool {
+            let said = |word: &str| {
+                literals
+                    .iter()
+                    .any(|l| matches!(l, Expr::Ident(n, _) if n.as_str() == word))
+            };
+            if said("true") && said("false") {
+                Vec::new()
+            } else {
+                vec!["else".to_string()]
+            }
+        } else if judged(held) {
+            vec!["else".to_string()]
+        } else {
+            Vec::new()
+        };
+        if !missing.is_empty() {
+            self.errors.push(CompileError::NonExhaustive {
+                span,
+                missing,
+                chain: false,
+            });
+        }
+    }
+
+    /// A chain of `when`s over one enum that leaves a case out and has no last
+    /// `else { … }` draws nothing for it, and says nothing: a warning, since
+    /// `match` is what says so.
+    fn check_when_chain(&mut self, member: &Member) {
+        let mut links = 0;
+        let mut subject: Option<Symbol> = None;
+        let mut covered: Vec<Symbol> = Vec::new();
+        let mut enum_name: Option<Symbol> = None;
+        let mut at = member;
+        loop {
+            let Member::When { cond, els, .. } = at else {
+                return;
+            };
+            let Expr::Binary {
+                op: BinOp::Eq,
+                lhs,
+                rhs,
+                ..
+            } = cond
+            else {
+                return;
+            };
+            let (Expr::Ident(name, _), Expr::Member { base, field, .. }) = (&**lhs, &**rhs) else {
+                return;
+            };
+            let Expr::Ident(e, _) = &**base else {
+                return;
+            };
+            if !self.enums.contains_key(e)
+                || subject.as_ref().is_some_and(|s| s != name)
+                || enum_name.as_ref().is_some_and(|n| n != e)
+            {
+                return;
+            }
+            subject = Some(name.clone());
+            enum_name = Some(e.clone());
+            covered.push(field.clone());
+            links += 1;
+            match els.as_deref() {
+                None => break,
+                Some([next @ Member::When { .. }]) => at = next,
+                Some(_) => return,
+            }
+        }
+        let (Some(enum_name), true) = (enum_name, links >= 2) else {
+            return;
+        };
+        let mine = member_span(member);
+        if self.errors.iter().any(|e| {
+            matches!(e, CompileError::NonExhaustive { chain: true, span, .. }
+                if span.start <= mine.start && mine.end <= span.end)
+        }) {
+            return;
+        }
+        let missing: Vec<String> = self
+            .enums
+            .get(&enum_name)
+            .map(|cases| {
+                cases
+                    .iter()
+                    .filter(|c| !covered.contains(c))
+                    .map(|c| c.as_str().to_string())
+                    .collect()
+            })
+            .unwrap_or_default();
+        if !missing.is_empty() {
+            self.errors.push(CompileError::NonExhaustive {
+                span: member_span(member),
+                missing,
+                chain: true,
+            });
+        }
+    }
+
+    /// The type of an optional name bound to another name (`let v = n`,
+    /// `if let v = n`): it is passed on, not read, so `v` may be nothing too.
+    fn optional_passed_on(&self, written: Option<&Type>, init: &Expr) -> Option<Ty> {
+        if written.is_some() {
+            return None;
+        }
+        let Expr::Ident(name, _) = init else {
+            return None;
+        };
+        match self.env.get(name) {
+            Some(ty @ Ty::Optional(_)) => Some(ty.clone()),
+            _ => None,
         }
     }
 
@@ -1199,7 +1669,9 @@ impl Checker<'_> {
     fn narrowed_in<T>(&mut self, paths: Vec<String>, check: impl FnOnce(&mut Self) -> T) -> T {
         let mark = self.narrowed.len();
         self.narrowed.extend(paths);
+        let was = std::mem::replace(&mut self.guarded, true);
         let out = check(self);
+        self.guarded = was;
         self.narrowed.truncate(mark);
         out
     }
@@ -1264,7 +1736,8 @@ impl Checker<'_> {
     fn has_equality(&self, ty: &Ty, depth: u32) -> bool {
         match ty {
             Ty::List(_) | Ty::Fn(..) => false,
-            Ty::Optional(inner) => self.has_equality(inner, depth),
+            Ty::Map(key, value) => self.has_equality(key, depth) && self.has_equality(value, depth),
+            Ty::Set(item) | Ty::Optional(item) => self.has_equality(item, depth),
             Ty::Named(name) => match self.records.get(name) {
                 Some(fields) if depth < 8 => fields
                     .iter()
@@ -1279,6 +1752,7 @@ impl Checker<'_> {
     fn type_has_equality(&self, ty: &Type, depth: u32) -> bool {
         match ty {
             Type::Function { .. } => false,
+            Type::Optional { inner, .. } => self.type_has_equality(inner, depth),
             Type::Named { name, args, .. } => match name.as_str() {
                 "List" => false,
                 "Int" | "Color" | "Float" | "Str" | "Bool" => true,
@@ -1661,13 +2135,18 @@ impl Checker<'_> {
                 init,
                 span,
             } => {
-                let inferred = self.infer_binding(ty.as_ref(), init, *span);
+                let inferred = self
+                    .optional_passed_on(ty.as_ref(), init)
+                    .unwrap_or_else(|| self.infer_binding(ty.as_ref(), init, *span));
                 let origin = if matches!(member, Member::Var { .. }) {
                     Origin::Var
                 } else {
                     Origin::Let
                 };
                 self.bind_from(name.clone(), inferred.clone(), origin);
+                if let (Origin::Let, Expr::Array(items, _)) = (origin, init) {
+                    self.list_lens.insert(name.clone(), items.len());
+                }
                 self.note_signature(name, init, origin == Origin::Let);
                 if top_level {
                     self.bindings.push((name.clone(), inferred));
@@ -1675,6 +2154,7 @@ impl Checker<'_> {
             }
             Member::Fn {
                 name,
+                type_params,
                 params,
                 ret,
                 body,
@@ -1682,6 +2162,8 @@ impl Checker<'_> {
             } => {
                 // The parameters are in scope for the body alone.
                 let mark = self.undo.len();
+                let outer =
+                    std::mem::replace(&mut self.type_vars, type_params.iter().cloned().collect());
                 for param in params {
                     self.check_param(param, "function parameter");
                 }
@@ -1691,10 +2173,14 @@ impl Checker<'_> {
                         what: "function return".to_string(),
                     });
                 }
-                let found = self.value(body);
+                let found = match self.block_result(body, true) {
+                    Some(ty) => ty,
+                    None => self.value(body),
+                };
                 if let Some(Some(ret)) = self.fns.get(name).cloned() {
                     self.must_fit(&ret, &found, body.span());
                 }
+                self.type_vars = outer;
                 self.leave(mark);
             }
             Member::Inject { ty, name, span } => {
@@ -1786,31 +2272,65 @@ impl Checker<'_> {
             } => {
                 // A list of records gives its loop variable the record's type,
                 // so a misspelt field inside the loop is told.
-                let item = match self.value(iter) {
-                    Ty::List(inner) => *inner,
-                    _ => Ty::Unknown,
+                let iterated = self.value(iter);
+                if is_not_a_list(&iterated) {
+                    self.errors.push(CompileError::TypeMismatch {
+                        span: iter.span(),
+                        op: "for".to_string(),
+                        lhs_ty: ty_name(&iterated),
+                        rhs_ty: ty_name(&iterated),
+                    });
+                }
+                // `for sku, qty in stock`: a map gives each key and its value.
+                if matches!(iterated, Ty::Map(..)) {
+                    self.map_loops.push(member_span(member));
+                }
+                let (item, key_ty) = match iterated {
+                    Ty::List(inner) | Ty::Set(inner) => (*inner, Ty::Int),
+                    Ty::Map(key, value) => (*value, *key),
+                    _ => (Ty::Unknown, Ty::Int),
                 };
                 let element = match &item {
                     Ty::Named(n) if self.records.contains_key(n) || n.as_str() == "Screen" => {
                         item.clone()
                     }
+                    Ty::Shape(_) => item.clone(),
                     _ => Ty::Unknown,
                 };
                 if let Some(key) = key {
                     self.check_for_key(var, &item, &element, key);
                 }
                 let mut shadow = vec![(var, element)];
-                shadow.extend(index.as_ref().map(|i| (i, Ty::Int)));
+                shadow.extend(index.as_ref().map(|i| (i, key_ty)));
                 self.check_scoped(body, &shadow);
             }
             Member::When {
                 cond, then, els, ..
             } => {
-                self.value(cond);
+                // The head of a chain is told first, and the links inside it are
+                // then part of what was told.
+                self.check_when_chain(member);
+                let found = self.value(cond);
+                self.must_be_bool(&found, cond.span());
                 let (when_true, when_false) = self.narrowing(cond);
                 self.narrowed_in(when_true, |s| s.check_scoped(then, &[]));
                 if let Some(els) = els {
                     self.narrowed_in(when_false, |s| s.check_scoped(els, &[]));
+                }
+            }
+            Member::Match {
+                scrutinee,
+                arms,
+                span,
+            } => {
+                let held = self.value(scrutinee);
+                let patterns: Vec<&Pattern> = arms.iter().map(|a| &a.pattern).collect();
+                self.check_patterns(&held, &patterns, *span);
+                for arm in arms {
+                    let binds = self.pattern_binds(&held, &arm.pattern);
+                    let shadow: Vec<(&Symbol, Ty)> =
+                        binds.iter().map(|(n, t)| (n, t.clone())).collect();
+                    self.check_scoped(&arm.body, &shadow);
                 }
             }
             // A lifecycle effect's body is an action, checked like any other
@@ -1853,15 +2373,26 @@ impl Checker<'_> {
             match (init, &expected) {
                 // A list is judged item by item, so the one that does not fit
                 // is the one the error points at.
-                (Expr::Array(elems, _), Ty::List(item)) if judged(&expected) => {
+                (Expr::Array(elems, _), Ty::List(item))
+                    if judged(&expected) || matches!(**item, Ty::Named(_)) =>
+                {
                     for elem in elems {
                         let found = self.value(elem);
-                        self.must_fit(item, &found, elem.span());
+                        self.must_fit_expr(item, elem, &found, elem.span());
+                    }
+                }
+                // A map is judged pair by pair, as a list is item by item.
+                (Expr::MapLit(pairs, _), Ty::Map(key, value)) => {
+                    for (k, v) in pairs {
+                        let found = self.value(k);
+                        self.must_fit(key, &found, k.span());
+                        let found = self.value(v);
+                        self.must_fit_expr(value, v, &found, v.span());
                     }
                 }
                 _ => {
                     let found = self.value(init);
-                    self.must_fit(&expected, &found, init.span());
+                    self.must_fit_expr(&expected, init, &found, init.span());
                 }
             }
             return expected;
@@ -1886,6 +2417,18 @@ impl Checker<'_> {
         }
     }
 
+    /// The condition of `when`, `if` and `? :` is a `Bool`.
+    fn must_be_bool(&mut self, found: &Ty, span: Span) {
+        if is_not_a_bool(found) {
+            self.errors.push(CompileError::TypeMismatch {
+                span,
+                op: "cond".to_string(),
+                lhs_ty: ty_name(found),
+                rhs_ty: ty_name(found),
+            });
+        }
+    }
+
     /// Reports a value `found` where the type `expected` was written for it:
     /// the first value of a `var` or `let`, one assigned to a `var`.
     fn must_fit(&mut self, expected: &Ty, found: &Ty, span: Span) {
@@ -1899,27 +2442,109 @@ impl Checker<'_> {
         }
     }
 
+    /// What an assignment writes is a `var`, a binding, or a field or an item
+    /// of one. A `let`, a parameter, a loop variable, a lambda's parameter or
+    /// a literal is [`CompileError::NotAssignable`].
+    /// Whether `expr` writes a field of a name the checker knows is a `var`, a
+    /// parameter or a `let`, which is what `field_write` can rebuild. (A
+    /// loop variable or an `inject`, `theme.dark = …`, is left as it was.)
+    fn writes_a_field(&self, expr: &Expr) -> bool {
+        let (Expr::Assign { target, .. } | Expr::Postfix { target, .. }) = expr else {
+            return false;
+        };
+        let mut at: &Expr = target;
+        while let Expr::Member { base, .. } | Expr::Index { base, .. } = at {
+            at = base;
+        }
+        matches!(
+            at,
+            Expr::Ident(name, _) if matches!(
+                self.origins.get(name),
+                Some(Origin::Var | Origin::Param | Origin::Let)
+            )
+        ) && matches!(
+            **match expr {
+                Expr::Assign { target, .. } | Expr::Postfix { target, .. } => target,
+                _ => return false,
+            },
+            Expr::Member { .. } | Expr::Index { .. }
+        )
+    }
+
+    fn check_write_target(&mut self, target: &Expr) {
+        let refused = match target {
+            Expr::Ident(name, _) => !matches!(self.origins.get(name), Some(Origin::Var) | None),
+            Expr::Member { .. } | Expr::Index { .. } => false,
+            _ => true,
+        };
+        if refused {
+            self.errors.push(CompileError::NotAssignable {
+                span: target.span(),
+            });
+        }
+    }
+
     /// The type of the `var` (or binding) an assignment writes, when the
     /// target is a name the checker knows the type of.
     fn written_ty(&self, target: &Expr) -> Option<Ty> {
+        // A field of a store holds what it was declared to.
+        if let Expr::Member { base, field, .. } = target {
+            let Expr::Ident(handle, _) = &**base else {
+                return None;
+            };
+            let Some(Ty::Named(store)) = self.env.get(handle) else {
+                return None;
+            };
+            if !self.stores.contains(store) {
+                return None;
+            }
+            let (_, ty) = self.records.get(store)?.iter().find(|(f, _)| f == field)?;
+            return Some(plain_ty(ty)).filter(|ty| judged(ty) || self.is_record(ty));
+        }
         let Expr::Ident(name, _) = target else {
             return None;
         };
         matches!(self.origins.get(name), Some(Origin::Var | Origin::Param))
             .then(|| self.env.get(name).cloned())
             .flatten()
-            .filter(judged)
+            .filter(|ty| judged(ty) || matches!(ty, Ty::Shape(_)) || self.is_record(ty))
+    }
+
+    /// Whether `ty` is a record the program declares.
+    fn is_record(&self, ty: &Ty) -> bool {
+        matches!(ty, Ty::Named(name) if self.records.contains_key(name))
     }
 
     /// `x = e`, `x += e`, `x -= e` against the type of `x`: what is written
     /// has to be a value `x` can hold. `+=` and `-=` are for numbers, and a
     /// `Float` is not kept in an `Int`.
-    fn check_assignment(&mut self, var: &Ty, op: AssignOp, found: &Ty, span: Span) {
+    fn check_assignment(&mut self, var: &Ty, op: AssignOp, value: &Expr, found: &Ty, span: Span) {
         if !is_concrete(found) {
             return;
         }
         match op {
-            AssignOp::Assign => self.must_fit(var, found, span),
+            AssignOp::Assign => match (var, found) {
+                // A record literal keeps the fields it began with.
+                (Ty::Shape(a), Ty::Shape(b)) => {
+                    let names = |fields: &[(Symbol, Ty)]| {
+                        fields.iter().map(|(n, _)| n.clone()).collect::<Vec<_>>()
+                    };
+                    // The same fields, each holding what it began with.
+                    let kinds_differ = a.len() == b.len()
+                        && a.iter()
+                            .zip(b.iter())
+                            .any(|((_, held), (_, written))| !fits(held, written));
+                    if names(a) != names(b) || kinds_differ {
+                        self.errors.push(CompileError::TypeMismatch {
+                            span,
+                            op: "=".to_string(),
+                            lhs_ty: ty_name(var),
+                            rhs_ty: ty_name(found),
+                        });
+                    }
+                }
+                _ => self.must_fit_expr(var, value, found, span),
+            },
             AssignOp::Add | AssignOp::Sub => {
                 let number = |t: &Ty| matches!(t, Ty::Int | Ty::Float);
                 if !(number(var) && number(found)) || (*var == Ty::Int && *found == Ty::Float) {
@@ -1946,7 +2571,15 @@ impl Checker<'_> {
             Expr::StrLit(parts, _) => {
                 for part in parts {
                     if let StrPart::Interp(e, _) = part {
-                        self.value(e);
+                        let shown = match self.value(e) {
+                            Ty::Color => Some(Shown::Color),
+                            Ty::Duration => Some(Shown::Duration),
+                            Ty::Angle => Some(Shown::Angle),
+                            _ => None,
+                        };
+                        if let Some(shown) = shown {
+                            self.shown.push((e.span(), shown));
+                        }
                     }
                 }
                 Ty::Str
@@ -2037,13 +2670,26 @@ impl Checker<'_> {
             Expr::Binary {
                 op, lhs, rhs, span, ..
             } => {
+                let zero = matches!(**rhs, Expr::IntLit(0, _))
+                    || matches!(**rhs, Expr::FloatLit(f, _) if f == 0.0);
+                if zero && matches!(op, BinOp::Div | BinOp::Rem) {
+                    self.errors.push(CompileError::DivisionByZero {
+                        span: *span,
+                        op: if *op == BinOp::Div { "/" } else { "%" }.to_string(),
+                    });
+                }
                 // `x ?? d` is the way to read an optional `x`; the right of
                 // `x != none && …` and of `x == none || …` may read it.
                 let (l, r) = match op {
                     BinOp::Otherwise => {
                         let safe: Vec<String> = self.optional_path(lhs).into_iter().collect();
+                        // What is written to the left of a default may not be
+                        // there: that is what the default is for, so a field a
+                        // record literal lacks is not told here.
+                        let was = std::mem::replace(&mut self.lenient_fields, true);
                         let l = self.narrowed_in(safe, |s| s.value(lhs));
-                        (l, self.value(rhs))
+                        self.lenient_fields = was;
+                        (l, self.narrowed_in(Vec::new(), |s| s.value(rhs)))
                     }
                     BinOp::And | BinOp::Or => {
                         let (when_true, when_false) = self.narrowing(lhs);
@@ -2087,22 +2733,82 @@ impl Checker<'_> {
                         op: "||".to_string(),
                     });
                 }
+                // `&&` and `||` take `Bool`s. `a || b ? x : y` is told once, by
+                // the warning about its precedence, and not again here.
+                let mixed = *op == BinOp::Or
+                    && matches!(rhs.as_ref(), Expr::Ternary { span: t, .. } if t.end == span.end);
+                if matches!(op, BinOp::And | BinOp::Or) && !mixed {
+                    if let Some(side) = [&l, &r].into_iter().find(|side| is_not_a_bool(side)) {
+                        self.errors.push(CompileError::TypeMismatch {
+                            span: *span,
+                            op: op_str(*op).to_string(),
+                            lhs_ty: ty_name(side),
+                            rhs_ty: ty_name(side),
+                        });
+                    }
+                }
                 self.check_binary(*op, &l, &r, *span)
             }
             Expr::Ternary {
                 cond, then, els, ..
             } => {
-                self.value(cond);
+                let found = self.value(cond);
+                self.must_be_bool(&found, cond.span());
                 let (when_true, when_false) = self.narrowing(cond);
                 let t = self.narrowed_in(when_true, |s| s.check_expr(then));
                 let e = self.narrowed_in(when_false, |s| s.check_expr(els));
-                if t == e { t } else { Ty::Unknown }
+                // The two arms are of one type, and an `Int` beside a `Float`
+                // is a `Float`.
+                if judged(&t) && judged(&e) && !(assignable(&t, &e) || assignable(&e, &t)) {
+                    self.errors.push(CompileError::TypeMismatch {
+                        span: expr.span(),
+                        op: "?:".to_string(),
+                        lhs_ty: ty_name(&t),
+                        rhs_ty: ty_name(&e),
+                    });
+                    Ty::Unknown
+                } else if t == e {
+                    t
+                } else if matches!((&t, &e), (Ty::Int | Ty::Float, Ty::Int | Ty::Float)) {
+                    Ty::Float
+                } else {
+                    Ty::Unknown
+                }
             }
             Expr::Index { base, index, span } => {
                 let b = self.value(base);
                 let at = self.value(index);
+                let len = match &**base {
+                    Expr::Array(items, _) => Some(items.len()),
+                    Expr::Ident(name, _) => self.list_lens.get(name).copied(),
+                    _ => None,
+                };
+                let written = match &**index {
+                    Expr::IntLit(n, _) => Some(*n),
+                    Expr::Unary {
+                        op: UnOp::Neg, rhs, ..
+                    } => match **rhs {
+                        Expr::IntLit(n, _) => n.checked_neg(),
+                        _ => None,
+                    },
+                    _ => None,
+                };
+                if let (Some(len), Some(index), false) = (len, written, self.guarded) {
+                    if usize::try_from(index).map_or(true, |i| i >= len) {
+                        self.errors.push(CompileError::IndexOutOfRange {
+                            span: *span,
+                            index,
+                            len,
+                        });
+                    }
+                }
+                // A value is found by a key of the map's type, and may not be
+                // there.
+                if let Ty::Map(key, _) = &b {
+                    self.must_fit(key, &at, index.span());
+                }
                 // An item is found by a whole number.
-                if matches!(b, Ty::List(_)) && is_concrete(&at) && at != Ty::Int {
+                if matches!(b, Ty::List(_) | Ty::Str) && is_concrete(&at) && at != Ty::Int {
                     self.errors.push(CompileError::TypeMismatch {
                         span: *span,
                         op: "[]".to_string(),
@@ -2112,25 +2818,24 @@ impl Checker<'_> {
                 }
                 match b {
                     Ty::List(elem) => *elem,
+                    Ty::Map(_, value) => Ty::Optional(value),
+                    // The character at `i`.
+                    Ty::Str => Ty::Str,
                     _ => Ty::Unknown,
                 }
             }
-            Expr::Record { fields, spread, .. } => {
-                if let Some(s) = spread {
-                    self.value(s);
-                }
-                for (_, v) in fields {
-                    self.value(v);
-                }
-                Ty::Unknown
-            }
+            Expr::Record { fields, spread, .. } => self.check_record(fields, spread.as_deref()),
             Expr::Member { base, field, span } => {
                 if let Some(ty) = self.enum_case(base, field, *span) {
                     return ty;
                 }
                 let b = self.value(base);
-                if field.as_str() == "len" && matches!(b, Ty::List(_) | Ty::Str) {
+                if field.as_str() == "len"
+                    && matches!(b, Ty::List(_) | Ty::Str | Ty::Map(..) | Ty::Set(_))
+                {
                     Ty::Int
+                } else if let Ty::Shape(known) = &b {
+                    self.shape_field(known, field, *span)
                 } else if let Ty::Named(record) = &b {
                     let ty = self.record_field(record, field, *span);
                     match (ty, self.optional_path(expr)) {
@@ -2142,6 +2847,81 @@ impl Checker<'_> {
                     }
                 } else {
                     Ty::Unknown
+                }
+            }
+            // `a?.b`: reading `a` here is the point, so a `a` that may be nothing
+            // is not told. The field is of what `a` holds, and may be nothing.
+            Expr::Match {
+                scrutinee,
+                arms,
+                span,
+            } => {
+                let held = self.value(scrutinee);
+                let patterns: Vec<&Pattern> = arms.iter().map(|a| &a.pattern).collect();
+                self.check_patterns(&held, &patterns, *span);
+                // The arms are of one type, and an `Int` beside a `Float` is a
+                // `Float`, as for `? :`.
+                let mut joined: Option<Ty> = None;
+                for arm in arms {
+                    let mark = self.undo.len();
+                    for (name, ty) in self.pattern_binds(&held, &arm.pattern) {
+                        self.bind(name, ty);
+                    }
+                    let ty = self.check_expr(&arm.body);
+                    self.leave(mark);
+                    joined = Some(match joined {
+                        None => ty,
+                        Some(so_far) => {
+                            if judged(&so_far)
+                                && judged(&ty)
+                                && !(assignable(&so_far, &ty) || assignable(&ty, &so_far))
+                            {
+                                self.errors.push(CompileError::TypeMismatch {
+                                    span: *span,
+                                    op: "match".to_string(),
+                                    lhs_ty: ty_name(&so_far),
+                                    rhs_ty: ty_name(&ty),
+                                });
+                                Ty::Unknown
+                            } else if so_far == ty {
+                                ty
+                            } else if matches!(
+                                (&so_far, &ty),
+                                (Ty::Int | Ty::Float, Ty::Int | Ty::Float)
+                            ) {
+                                Ty::Float
+                            } else {
+                                Ty::Unknown
+                            }
+                        }
+                    });
+                }
+                joined.unwrap_or(Ty::Unknown)
+            }
+            Expr::OptionalMember { base, field, span } => {
+                let path = self.optional_path(base);
+                if let Some(path) = &path {
+                    self.narrowed.push(path.clone());
+                }
+                let held = self.value(base);
+                if path.is_some() {
+                    self.narrowed.pop();
+                }
+                let held = match held {
+                    Ty::Optional(inner) => *inner,
+                    other => other,
+                };
+                let found = match &held {
+                    Ty::Shape(known) => self.shape_field(known, field, *span),
+                    Ty::Named(record) => match self.record_field(record, field, *span) {
+                        Ty::Optional(inner) => *inner,
+                        ty => ty,
+                    },
+                    _ => Ty::Unknown,
+                };
+                match found {
+                    Ty::Unknown => Ty::Unknown,
+                    ty => Ty::Optional(Box::new(ty)),
                 }
             }
             Expr::Call { callee, args, span } => self.check_call(callee, args, *span),
@@ -2186,9 +2966,11 @@ impl Checker<'_> {
             // what holds the block (a lambda, an `if` branch, an arm) ends
             // the scope.
             Expr::Block(stmts, _) => {
+                let mark = self.undo.len();
                 for stmt in stmts {
                     self.value(stmt);
                 }
+                self.leave(mark);
                 Ty::Unknown
             }
             // The elements a call hands to a `Slot`, checked in the caller's
@@ -2204,22 +2986,45 @@ impl Checker<'_> {
                 value,
                 span,
             } => {
-                let bound = self.infer_binding(ty.as_ref(), value, *span);
+                let bound = self
+                    .optional_passed_on(ty.as_ref(), value)
+                    .unwrap_or_else(|| self.infer_binding(ty.as_ref(), value, *span));
                 self.bind_from(name.clone(), bound, Origin::Let);
                 self.note_signature(name, value, true);
                 Ty::Unknown
             }
+            // `u.score = 10` is `u = { ..u, score: 10 }`, and is checked as that:
+            // `u` has to be a `var`, `score` a field it has, and 10 a value
+            // that field can hold.
+            Expr::Assign { .. } | Expr::Postfix { .. } if self.writes_a_field(expr) => {
+                match expr.field_write() {
+                    Some(whole) => self.value(&whole),
+                    None => Ty::Unknown,
+                }
+            }
             Expr::Assign {
                 target, op, value, ..
             } => {
+                self.check_write_target(target);
+                // Writing an optional is not reading it.
+                let path = (*op == AssignOp::Assign)
+                    .then(|| self.optional_path(target))
+                    .flatten();
+                if let Some(path) = &path {
+                    self.narrowed.push(path.clone());
+                }
                 self.value(target);
+                if path.is_some() {
+                    self.narrowed.pop();
+                }
                 let found = self.value(value);
                 if let Some(var) = self.written_ty(target) {
-                    self.check_assignment(&var, *op, &found, value.span());
+                    self.check_assignment(&var, *op, value, &found, value.span());
                 }
                 Ty::Unknown
             }
             Expr::Postfix { target, op, span } => {
+                self.check_write_target(target);
                 self.value(target);
                 if let Some(var) = self.written_ty(target) {
                     if !matches!(var, Ty::Int | Ty::Float) {
@@ -2244,7 +3049,8 @@ impl Checker<'_> {
             Expr::If {
                 cond, then, els, ..
             } => {
-                self.value(cond);
+                let found = self.value(cond);
+                self.must_be_bool(&found, cond.span());
                 let (when_true, when_false) = self.narrowing(cond);
                 for (i, branch) in std::iter::once(then).chain(els).enumerate() {
                     let mark = self.undo.len();
@@ -2256,6 +3062,71 @@ impl Checker<'_> {
                     self.narrowed_in(safe, |s| s.value(branch));
                     self.leave(mark);
                 }
+                Ty::Unknown
+            }
+            // `["ada": 36]`: the keys are of one type and so are the values.
+            Expr::MapLit(pairs, span) => {
+                if pairs.is_empty() {
+                    self.errors.push(CompileError::CannotInfer { span: *span });
+                    return Ty::Unknown;
+                }
+                let mut key: Option<Ty> = None;
+                let mut value: Option<Ty> = None;
+                let mut mixed = false;
+                for (k, v) in pairs {
+                    for (found, held) in [(self.value(k), &mut key), (self.value(v), &mut value)] {
+                        if !is_concrete(&found) {
+                            continue;
+                        }
+                        match held {
+                            None => *held = Some(found),
+                            Some(prev) if same_ty(prev, &found) => {}
+                            Some(_) => mixed = true,
+                        }
+                    }
+                }
+                if mixed {
+                    self.errors.push(CompileError::CannotInfer { span: *span });
+                    return Ty::Unknown;
+                }
+                Ty::Map(
+                    Box::new(key.unwrap_or(Ty::Unknown)),
+                    Box::new(value.unwrap_or(Ty::Unknown)),
+                )
+            }
+            // `for item in items { … }` as an action: the list is a list, and
+            // the body is checked with the item (and its position) bound.
+            Expr::ForEach {
+                var,
+                index,
+                iter,
+                body,
+                ..
+            } => {
+                let iterated = self.value(iter);
+                if is_not_a_list(&iterated) {
+                    self.errors.push(CompileError::TypeMismatch {
+                        span: iter.span(),
+                        op: "for".to_string(),
+                        lhs_ty: ty_name(&iterated),
+                        rhs_ty: ty_name(&iterated),
+                    });
+                }
+                if matches!(iterated, Ty::Map(..)) {
+                    self.map_loops.push(expr.span());
+                }
+                let (item, key_ty) = match iterated {
+                    Ty::List(inner) | Ty::Set(inner) if is_concrete(&inner) => (*inner, Ty::Int),
+                    Ty::Map(key, value) => (*value, *key),
+                    _ => (Ty::Unknown, Ty::Int),
+                };
+                let mark = self.undo.len();
+                self.bind(var.clone(), item);
+                if let Some(index) = index {
+                    self.bind(index.clone(), key_ty);
+                }
+                self.value(body);
+                self.leave(mark);
                 Ty::Unknown
             }
             Expr::Animated { value, anim, .. } => {
@@ -2275,7 +3146,18 @@ impl Checker<'_> {
                 self.value(right);
                 Ty::Unknown
             }
-            Expr::AngleLit(..) | Expr::ClassRef(..) | Expr::Error(_) => Ty::Unknown,
+            // `value as Type`: what arrived is checked against the type where
+            // it arrives, so from there on it is of that type, and a field it
+            // does not have is told.
+            Expr::Cast { value, ty, .. } => {
+                self.value(value);
+                self.resolve_written(ty)
+            }
+            Expr::DurationLit(..) => Ty::Duration,
+            Expr::AngleLit(..) if typed_units() => Ty::Angle,
+            Expr::AngleLit(..) | Expr::ClassRef(..) | Expr::Return(_) | Expr::Error(_) => {
+                Ty::Unknown
+            }
         }
     }
 
@@ -2302,6 +3184,14 @@ impl Checker<'_> {
                 hint,
             });
         }
+        if let Some(carried) = self.records.get(&case_record(name, field)) {
+            self.errors.push(CompileError::ArityMismatch {
+                span,
+                name: format!("{}.{}", name.as_str(), field.as_str()),
+                expected: carried.len(),
+                found: 0,
+            });
+        }
         Some(Ty::Named(name.clone()))
     }
 
@@ -2324,7 +3214,156 @@ impl Checker<'_> {
     /// The type of `record.field`, for a record type the program declares;
     /// an `UnknownField` for a field it does not have. Any other named type
     /// (a controller, a theme) is not modelled, so nothing is claimed.
+    /// The type a record literal has: the fields it writes, over the ones the
+    /// record it spreads has. A field written twice is told once. A spread of
+    /// something whose fields are not known makes the whole thing unknown.
+    fn check_record(&mut self, fields: &[(Symbol, Expr)], spread: Option<&Expr>) -> Ty {
+        let mut known = true;
+        let mut out: Vec<(Symbol, Ty)> = Vec::new();
+        if let Some(spread) = spread {
+            match self.value(spread) {
+                Ty::Shape(base) => out = base,
+                Ty::Named(name) if self.records.contains_key(&name) => {
+                    out = self.records[&name]
+                        .iter()
+                        .map(|(field, ty)| (field.clone(), plain_ty(ty)))
+                        .collect();
+                }
+                _ => known = false,
+            }
+        }
+        let mut written: Vec<&Symbol> = Vec::new();
+        for (name, value) in fields {
+            let ty = self.value(value);
+            if written.contains(&name) {
+                self.errors.push(CompileError::DuplicateField {
+                    span: value.span(),
+                    name: name.as_str().to_string(),
+                });
+                continue;
+            }
+            written.push(name);
+            match out.iter_mut().find(|(field, _)| field == name) {
+                Some(slot) => slot.1 = ty,
+                None => out.push((name.clone(), ty)),
+            }
+        }
+        if !known {
+            return Ty::Unknown;
+        }
+        out.sort_by(|a, b| a.0.as_str().cmp(b.0.as_str()));
+        Ty::Shape(out)
+    }
+
+    /// A field of a record literal's type.
+    fn shape_field(&mut self, known: &[(Symbol, Ty)], field: &Symbol, span: Span) -> Ty {
+        if let Some((_, ty)) = known.iter().find(|(name, _)| name == field) {
+            return ty.clone();
+        }
+        if self.lenient_fields {
+            return Ty::Unknown;
+        }
+        let hint =
+            crate::util::closest_match(field.as_str(), known.iter().map(|(name, _)| name.as_str()))
+                .map(str::to_string);
+        let len = u32::try_from(field.as_str().len()).unwrap_or(0);
+        self.errors.push(CompileError::UnknownField {
+            span: Span::new(span.end.saturating_sub(len).max(span.start), span.end),
+            record: ty_name(&Ty::Shape(known.to_vec())),
+            name: field.as_str().to_string(),
+            hint,
+        });
+        Ty::Unknown
+    }
+
+    /// A record literal where a declared record is wanted: each field it
+    /// writes is one the record has, of the type it has, and each field the
+    /// record needs is written, or comes from what the literal spreads.
+    fn check_record_literal(&mut self, record: &Symbol, literal: &Expr, found: &Ty) {
+        let Expr::Record { fields, spread, .. } = literal else {
+            return;
+        };
+        let Some(declared) = self.records.get(record).cloned() else {
+            return;
+        };
+        for (name, value) in fields {
+            let Some((_, ty)) = declared.iter().find(|(field, _)| field == name) else {
+                let hint = crate::util::closest_match(
+                    name.as_str(),
+                    declared.iter().map(|(field, _)| field.as_str()),
+                )
+                .map(str::to_string);
+                self.errors.push(CompileError::UnknownField {
+                    span: value.span(),
+                    record: record.as_str().to_string(),
+                    name: name.as_str().to_string(),
+                    hint,
+                });
+                continue;
+            };
+            let expected = plain_ty(ty);
+            let given = self.infer_expr(value);
+            self.must_fit(&expected, &given, value.span());
+        }
+        if spread.is_some() {
+            return;
+        }
+        let missing: Vec<&str> = declared
+            .iter()
+            .filter(|(field, _)| {
+                !fields.iter().any(|(name, _)| name == field)
+                    && !self
+                        .optional_fields
+                        .contains(&(record.clone(), field.clone()))
+            })
+            .map(|(field, _)| field.as_str())
+            .collect();
+        if !missing.is_empty() {
+            self.errors.push(CompileError::TypeMismatch {
+                span: literal.span(),
+                op: "=".to_string(),
+                lhs_ty: record.as_str().to_string(),
+                rhs_ty: format!(
+                    "{} without {}",
+                    ty_name(found),
+                    missing
+                        .iter()
+                        .map(|m| format!("`{m}`"))
+                        .collect::<Vec<_>>()
+                        .join(", ")
+                ),
+            });
+        }
+    }
+
+    /// [`Self::must_fit`] for the value an expression writes: a record literal
+    /// given where a declared record is wanted is judged field by field.
+    fn must_fit_expr(&mut self, expected: &Ty, init: &Expr, found: &Ty, span: Span) {
+        match (init, expected) {
+            (Expr::Record { .. }, Ty::Named(record)) if self.records.contains_key(record) => {
+                self.check_record_literal(record, init, found);
+            }
+            _ => self.must_fit(expected, found, span),
+        }
+    }
+
     fn record_field(&mut self, record: &Symbol, field: &Symbol, span: Span) -> Ty {
+        // What a case carries is read through `match`, which binds it: an enum
+        // that has such a case has no field of its own to read.
+        if self.enums.get(record).is_some_and(|cases| {
+            cases
+                .iter()
+                .any(|c| self.records.contains_key(&case_record(record, c)))
+        }) {
+            let len = u32::try_from(field.as_str().len()).unwrap_or(0);
+            self.errors.push(CompileError::UnknownField {
+                span: Span::new(span.end.saturating_sub(len).max(span.start), span.end),
+                record: record.as_str().to_string(),
+                name: field.as_str().to_string(),
+                hint: None,
+            });
+            return Ty::Unknown;
+        }
         // RFC-0063: the value of a pointer or drag handler, unless the
         // program declares a record of the same name.
         if !self.records.contains_key(record) {
@@ -2385,21 +3424,148 @@ impl Checker<'_> {
         Ty::Unknown
     }
 
+    /// `Load.failed(message: "offline")`: a value of the enum, built from the
+    /// fields its case declares, each written by name and of its type. `None`
+    /// when `callee` is not a case that carries values.
+    fn check_case_value(
+        &mut self,
+        callee: &Expr,
+        args: &[crate::parser::ast::Arg],
+        span: Span,
+    ) -> Option<Ty> {
+        let Expr::Member { base, field, .. } = callee else {
+            return None;
+        };
+        let Expr::Ident(name, _) = &**base else {
+            return None;
+        };
+        if self.env.contains_key(name) || self.declared.contains(name) {
+            return None;
+        }
+        let record = case_record(name, field);
+        if !self.records.contains_key(&record) {
+            return None;
+        }
+        let fields: Vec<(Symbol, Expr)> = args
+            .iter()
+            .filter_map(|a| a.name.clone().map(|n| (n, a.value.clone())))
+            .collect();
+        let literal = Expr::Record {
+            fields,
+            spread: None,
+            span,
+        };
+        // Written by name, like a record's: one that is not is not a field,
+        // and its field is then the one left out.
+        let found = Ty::Named(record.clone());
+        self.check_record_literal(&record, &literal, &found);
+        Some(Ty::Named(name.clone()))
+    }
+
+    /// Which argument is for which parameter of `name` (`sub(b: 1, a: 2)`):
+    /// the positional ones fill the first parameters, each named one is the
+    /// parameter of that name, and every parameter is given once. What is
+    /// wrong is told, once each, and `None` is returned.
+    fn bind_args(
+        &mut self,
+        name: &Symbol,
+        sig: &[(Symbol, Ty, bool)],
+        args: &[crate::parser::ast::Arg],
+        span: Span,
+    ) -> Option<Vec<Option<usize>>> {
+        let callee = name.as_str().to_string();
+        let named = args.iter().any(|a| a.name.is_some());
+        let required = sig.iter().filter(|p| !p.2).count();
+        if !named && (args.len() < required || args.len() > sig.len()) {
+            self.errors.push(CompileError::ArityMismatch {
+                span,
+                name: callee,
+                expected: sig.len(),
+                found: args.len(),
+            });
+            return None;
+        }
+        let mut given: Vec<Option<usize>> = vec![None; sig.len()];
+        let mut positional = 0;
+        let mut told = false;
+        for (i, arg) in args.iter().enumerate() {
+            let slot = match &arg.name {
+                None => {
+                    positional += 1;
+                    if positional > sig.len() {
+                        self.errors.push(CompileError::ArityMismatch {
+                            span,
+                            name: callee,
+                            expected: sig.len(),
+                            found: args.len(),
+                        });
+                        return None;
+                    }
+                    Some(positional - 1)
+                }
+                Some(written) => {
+                    let at = sig.iter().position(|(p, _, _)| p == written);
+                    if at.is_none() {
+                        let hint = crate::util::closest_match(
+                            written.as_str(),
+                            sig.iter().map(|(p, _, _)| p.as_str()),
+                        )
+                        .map(str::to_string);
+                        self.errors.push(CompileError::UnknownParam {
+                            function: true,
+                            span: arg.value.span(),
+                            name: written.as_str().to_string(),
+                            callee: callee.clone(),
+                            hint,
+                        });
+                        told = true;
+                    }
+                    at
+                }
+            };
+            let Some(slot) = slot else { continue };
+            if given[slot].is_some() {
+                self.errors.push(CompileError::DuplicateParam {
+                    function: true,
+                    span: arg.value.span(),
+                    name: sig[slot].0.as_str().to_string(),
+                    callee: callee.clone(),
+                    declared: false,
+                });
+                told = true;
+            } else {
+                given[slot] = Some(i);
+            }
+        }
+        if !told {
+            for ((param, _, has_default), at) in sig.iter().zip(&given) {
+                if at.is_none() && !has_default {
+                    self.errors.push(CompileError::MissingParam {
+                        function: true,
+                        span,
+                        name: param.as_str().to_string(),
+                        callee: callee.clone(),
+                    });
+                    told = true;
+                }
+            }
+        }
+        (!told).then_some(given)
+    }
+
     /// Checks a call to a name against what the name is: a `fn` or a named
-    /// action takes the number of arguments it declares, each of the type it
-    /// declares; a callback takes what its `Fn(…)` type says; a value that is
-    /// none of those cannot be called.
+    /// action takes the arguments it declares, each of the type it declares; a
+    /// callback takes what its `Fn(…)` type says; a value that is none of those
+    /// cannot be called. For a `fn` with type parameters, the type its call
+    /// has: the one it returns, with each parameter given the type of the
+    /// arguments passed for it.
     fn check_fn_call(
         &mut self,
         name: &Symbol,
         args: &[crate::parser::ast::Arg],
         found: &[Ty],
         span: Span,
-    ) {
-        // Arguments by name are step 16's.
-        if args.iter().any(|a| a.name.is_some()) {
-            return;
-        }
+    ) -> Option<Ty> {
         let sig = self.local_sigs.get(name).cloned().or_else(|| {
             if self.env.contains_key(name) {
                 None
@@ -2408,28 +3574,42 @@ impl Checker<'_> {
             }
         });
         if let Some(sig) = sig {
-            let required = sig.iter().filter(|p| !p.2).count();
-            if args.len() < required || args.len() > sig.len() {
-                self.errors.push(CompileError::ArityMismatch {
-                    span,
-                    name: name.as_str().to_string(),
-                    expected: sig.len(),
-                    found: args.len(),
-                });
-                return;
-            }
-            for ((arg, ty), (param, expected, _)) in args.iter().zip(found).zip(&sig) {
-                if !fits(expected, ty) {
+            let vars = if self.local_sigs.contains_key(name) || !self.env.contains_key(name) {
+                self.generics.get(name).cloned().unwrap_or_default()
+            } else {
+                Vec::new()
+            };
+            let Some(given) = self.bind_args(name, &sig, args, span) else {
+                return (!vars.is_empty()).then_some(Ty::Unknown);
+            };
+            let mut subst: HashMap<Symbol, Ty> = HashMap::new();
+            for ((param, expected, _), at) in sig.iter().zip(&given) {
+                let Some(i) = at else { continue };
+                if !unify(expected, &found[*i], &vars, &mut subst) {
                     self.errors.push(CompileError::ArgumentTypeMismatch {
-                        span: arg.value.span(),
+                        span: args[*i].value.span(),
                         callee: name.as_str().to_string(),
                         name: param.as_str().to_string(),
-                        expected: ty_name(expected),
-                        found: ty_name(ty),
+                        expected: ty_name(&substitute(expected, &subst)),
+                        found: ty_name(&found[*i]),
                     });
                 }
             }
-            return;
+            if vars.is_empty() {
+                return None;
+            }
+            let ret = self.fns.get(name).cloned().flatten().unwrap_or(Ty::Unknown);
+            let ret = substitute(&ret, &subst);
+            // A parameter nothing passed a known type for (an argument whose
+            // type is not known) leaves the result as unknown as it was.
+            return Some(if mentions(&ret, &vars) {
+                Ty::Unknown
+            } else {
+                ret
+            });
+        }
+        if args.iter().any(|a| a.name.is_some()) {
+            return None;
         }
         match self.env.get(name).cloned() {
             Some(Ty::Fn(params, _)) if self.origins.get(name) == Some(&Origin::Param) => {
@@ -2451,6 +3631,7 @@ impl Checker<'_> {
             }),
             _ => {}
         }
+        None
     }
 
     /// Checks a call: a method call (`recv.method(args)`, RFC-0027 §4) validates
@@ -2458,6 +3639,9 @@ impl Checker<'_> {
     /// declared return type.
     fn check_call(&mut self, callee: &Expr, args: &[crate::parser::ast::Arg], span: Span) -> Ty {
         self.reject_bind_args(args);
+        if let Some(ty) = self.check_case_value(callee, args, span) {
+            return ty;
+        }
         if let Expr::Member { base, field, span } = callee {
             let recv = self.value(base);
             // What a method of a value is called with is a value. An
@@ -2467,6 +3651,29 @@ impl Checker<'_> {
             let ty = self.check_method(&recv, field, *span, args);
             self.strict = was;
             return ty;
+        }
+        // `Set([1, 2])`: the items of a list, each once. `Set()` is empty.
+        if let Expr::Ident(name, _) = callee {
+            if name.as_str() == "Set" && !self.knows_own(name) {
+                let item = match args.first() {
+                    Some(arg) => match self.value(&arg.value) {
+                        Ty::List(item) => *item,
+                        found => {
+                            if is_concrete(&found) {
+                                self.errors.push(CompileError::TypeMismatch {
+                                    span: arg.value.span(),
+                                    op: "Set".to_string(),
+                                    lhs_ty: ty_name(&found),
+                                    rhs_ty: "List".to_string(),
+                                });
+                            }
+                            Ty::Unknown
+                        }
+                    },
+                    None => Ty::Unknown,
+                };
+                return Ty::Set(Box::new(item));
+            }
         }
         // `match(searchField)` names an element by its `as` tag, which is not
         // a value in scope.
@@ -2500,7 +3707,9 @@ impl Checker<'_> {
                 if self.strict && !self.knows(name) && !BUILT_IN_CALLS.contains(&name.as_str()) {
                     self.unknown_name(name, *span);
                 }
-                self.check_fn_call(name, args, &arg_tys, span_of_call);
+                if let Some(ty) = self.check_fn_call(name, args, &arg_tys, span_of_call) {
+                    return ty;
+                }
                 self.fns.get(name).cloned().flatten().unwrap_or_else(|| {
                     // The clock answers text (RFC-0049).
                     if matches!(name.as_str(), "now" | "nowUtc") && !self.knows(name) {
@@ -2527,6 +3736,9 @@ impl Checker<'_> {
     ) -> Ty {
         let known: Option<&[&str]> = match recv {
             Ty::List(_) => Some(&LIST_METHODS),
+            Ty::Map(..) => Some(&MAP_METHODS),
+            Ty::Color => Some(&COLOR_METHODS),
+            Ty::Set(_) => Some(&SET_METHODS),
             Ty::Str => Some(&STR_METHODS),
             Ty::Int => Some(&INT_METHODS),
             Ty::Float => Some(&FLOAT_METHODS),
@@ -2553,7 +3765,7 @@ impl Checker<'_> {
         // Lambda-bearing methods: purity + (for filter and find) a Bool
         // predicate. `reduce` takes its lambda second, after the initial value.
         let lambda_at = match name.as_str() {
-            "map" | "filter" | "sortBy" | "find" => Some(0),
+            "map" | "filter" | "sortBy" | "find" | "any" | "all" | "count" => Some(0),
             "reduce" => Some(1),
             _ => None,
         };
@@ -2590,7 +3802,10 @@ impl Checker<'_> {
                 // the next step's.
                 let item = match recv {
                     Ty::List(item)
-                        if matches!(**item, Ty::Int | Ty::Float | Ty::Str | Ty::Bool) =>
+                        if matches!(
+                            **item,
+                            Ty::Int | Ty::Float | Ty::Str | Ty::Bool | Ty::Shape(_) | Ty::Named(_)
+                        ) =>
                     {
                         (**item).clone()
                     }
@@ -2603,7 +3818,9 @@ impl Checker<'_> {
                 }
                 let bt = self.value(body);
                 self.leave(mark);
-                if matches!(name.as_str(), "filter" | "find") && is_concrete(&bt) && bt != Ty::Bool
+                if matches!(name.as_str(), "filter" | "find" | "any" | "all" | "count")
+                    && is_concrete(&bt)
+                    && bt != Ty::Bool
                 {
                     self.errors
                         .push(CompileError::PredicateNotBool { span: body.span() });
@@ -2623,15 +3840,67 @@ impl Checker<'_> {
                 if let (Ty::List(item), "push", 0) = (recv, name.as_str(), i) {
                     self.must_fit(item, &found, arg.value.span());
                 }
+                // A map is given keys and values of its types, a set items of
+                // its own.
+                match (recv, name.as_str(), i) {
+                    (Ty::Map(key, _), "set" | "remove", 0) => {
+                        self.must_fit(key, &found, arg.value.span());
+                    }
+                    (Ty::Map(_, value), "set", 1) => {
+                        self.must_fit(value, &found, arg.value.span());
+                    }
+                    (Ty::Set(item), "add" | "remove" | "contains", 0) => {
+                        self.must_fit(item, &found, arg.value.span());
+                    }
+                    _ => {}
+                }
+                // `insertAt` and `updateAt` put an item the list holds.
+                if let (Ty::List(item), "insertAt" | "updateAt", 1) = (recv, name.as_str(), i) {
+                    self.must_fit(item, &found, arg.value.span());
+                }
+                // An item is found by a whole number.
+                if let (Ty::List(_), "get" | "insertAt" | "updateAt", 0) = (recv, name.as_str(), i)
+                {
+                    if is_concrete(&found) && found != Ty::Int {
+                        self.errors.push(CompileError::TypeMismatch {
+                            span: arg.value.span(),
+                            op: "[]".to_string(),
+                            lhs_ty: ty_name(recv),
+                            rhs_ty: ty_name(&found),
+                        });
+                    }
+                }
             }
         }
         match (recv, name.as_str()) {
-            (
+            (Ty::Map(..), "set" | "remove")
+            | (Ty::Set(_), "add" | "remove")
+            | (Ty::Color, "alpha")
+            | (
                 Ty::List(_),
-                "push" | "removeAt" | "filter" | "slice" | "sort" | "sortBy" | "reverse",
+                "push" | "removeAt" | "filter" | "slice" | "sort" | "sortBy" | "reverse"
+                | "insertAt" | "updateAt",
             )
             | (Ty::Int | Ty::Float, "abs") => recv.clone(),
-            (Ty::List(_) | Ty::Str, "indexOf")
+            // `xs.get(i)` is the item, or nothing past the end: a `T?`, where
+            // `xs[i]` is a `T`.
+            (Ty::List(item), "get" | "first" | "last") => Ty::Optional(item.clone()),
+            // The items added up: a list of numbers has a sum.
+            (Ty::List(item), "sum") => {
+                if is_concrete(item) && !matches!(**item, Ty::Int | Ty::Float) {
+                    self.errors.push(CompileError::TypeMismatch {
+                        span,
+                        op: "sum".to_string(),
+                        lhs_ty: ty_name(recv),
+                        rhs_ty: "a list of numbers".to_string(),
+                    });
+                    Ty::Unknown
+                } else {
+                    (**item).clone()
+                }
+            }
+            (Ty::List(_), "count")
+            | (Ty::List(_) | Ty::Str, "indexOf")
             | (Ty::Int, "alpha")
             | (Ty::Str, "toInt")
             | (Ty::Float, "round" | "floor" | "ceil") => Ty::Int,
@@ -2656,7 +3925,9 @@ impl Checker<'_> {
             )
             | (Ty::List(_), "join") => Ty::Str,
             (Ty::Str, "split") => Ty::List(Box::new(Ty::Str)),
-            (Ty::List(_) | Ty::Str, "contains") | (Ty::Str, "startsWith" | "endsWith") => Ty::Bool,
+            (Ty::List(_), "any" | "all")
+            | (Ty::List(_) | Ty::Set(_) | Ty::Str, "contains")
+            | (Ty::Str, "startsWith" | "endsWith") => Ty::Bool,
             (Ty::List(_), "map") => Ty::List(Box::new(lambda_body_ty.unwrap_or(Ty::Unknown))),
             _ => Ty::Unknown,
         }
@@ -2677,6 +3948,53 @@ impl Checker<'_> {
                 rhs_ty: ty_name(r),
             });
         };
+        // A colour, a duration and an angle have their own arithmetic: a
+        // duration adds to a duration and is scaled by a number, and a colour
+        // has none.
+        let unit = |t: &Ty| matches!(t, Ty::Color | Ty::Duration | Ty::Angle);
+        if (unit(l) || unit(r))
+            && matches!(
+                op,
+                BinOp::Add
+                    | BinOp::Sub
+                    | BinOp::Mul
+                    | BinOp::Div
+                    | BinOp::Rem
+                    | BinOp::Lt
+                    | BinOp::Le
+                    | BinOp::Gt
+                    | BinOp::Ge
+            )
+        {
+            if !both_concrete {
+                return Ty::Unknown;
+            }
+            let number = |t: &Ty| matches!(t, Ty::Int | Ty::Float);
+            let result = match (op, l, r) {
+                (BinOp::Add | BinOp::Sub, Ty::Duration, Ty::Duration) => Some(Ty::Duration),
+                (BinOp::Add | BinOp::Sub, Ty::Angle, Ty::Angle) => Some(Ty::Angle),
+                (BinOp::Mul, Ty::Duration, n) | (BinOp::Mul, n, Ty::Duration) if number(n) => {
+                    Some(Ty::Duration)
+                }
+                (BinOp::Mul, Ty::Angle, n) | (BinOp::Mul, n, Ty::Angle) if number(n) => {
+                    Some(Ty::Angle)
+                }
+                (BinOp::Div, Ty::Duration, n) if number(n) => Some(Ty::Duration),
+                (BinOp::Div, Ty::Angle, n) if number(n) => Some(Ty::Angle),
+                (BinOp::Div, Ty::Duration, Ty::Duration) | (BinOp::Div, Ty::Angle, Ty::Angle) => {
+                    Some(Ty::Float)
+                }
+                (BinOp::Lt | BinOp::Le | BinOp::Gt | BinOp::Ge, Ty::Duration, Ty::Duration)
+                | (BinOp::Lt | BinOp::Le | BinOp::Gt | BinOp::Ge, Ty::Angle, Ty::Angle) => {
+                    Some(Ty::Bool)
+                }
+                _ => None,
+            };
+            return result.unwrap_or_else(|| {
+                mismatch(self);
+                Ty::Unknown
+            });
+        }
         match op {
             BinOp::And | BinOp::Or => Ty::Bool,
             // Whichever side is known; when both are, they must agree.
@@ -2724,6 +4042,13 @@ impl Checker<'_> {
                 }
                 join_numeric(l, r)
             }
+            // Whole numbers: `0..2.5` has no last one to stop at.
+            BinOp::Range => {
+                if both_concrete && !(*l == Ty::Int && *r == Ty::Int) {
+                    mismatch(self);
+                }
+                Ty::List(Box::new(Ty::Int))
+            }
         }
     }
 
@@ -2732,12 +4057,13 @@ impl Checker<'_> {
             self.errors.push(CompileError::CannotInfer { span });
             return Ty::Unknown;
         }
-        for e in elems {
-            self.check_expr(e);
-        }
+        let checked: Vec<Ty> = elems.iter().map(|e| self.check_expr(e)).collect();
         let mut element_ty: Option<Ty> = None;
-        for e in elems {
-            let t = self.infer_expr(e);
+        for (e, checked) in elems.iter().zip(checked) {
+            let t = match (self.infer_expr(e), checked) {
+                (Ty::Unknown, shape @ Ty::Shape(_)) => shape,
+                (t, _) => t,
+            };
             if t == Ty::Unknown {
                 // Can't confirm homogeneity from an unknown element; stay lenient.
                 continue;
@@ -2816,13 +4142,17 @@ impl Checker<'_> {
                         | "Bool"
                         | "Color"
                         | "List"
+                        | "Map"
+                        | "Set"
                         | "Slot"
                         | "Fn"
                         | "Text"
                         | "Screen"
                         | "Window"
-                ) || text.contains('.')
-                    || self.type_names.contains(name);
+                ) || (typed_units() && matches!(text, "Duration" | "Angle"))
+                    || text.contains('.')
+                    || self.type_names.contains(name)
+                    || self.type_vars.contains(name);
                 if !known {
                     let hint = crate::util::closest_match(
                         text,
@@ -2841,6 +4171,7 @@ impl Checker<'_> {
                     self.check_type_names(arg);
                 }
             }
+            Type::Optional { inner, .. } => self.check_type_names(inner),
             Type::Function { params, ret, .. } => {
                 for param in params {
                     self.check_type_names(param);
@@ -2861,6 +4192,9 @@ impl Checker<'_> {
                     return Ty::Unknown;
                 }
                 match name.as_str() {
+                    "Color" if typed_units() => Ty::Color,
+                    "Duration" if typed_units() => Ty::Duration,
+                    "Angle" if typed_units() => Ty::Angle,
                     // A colour is an integer (RFC-0065 writes `Color?`).
                     "Int" | "Color" => Ty::Int,
                     "Float" => Ty::Float,
@@ -2869,6 +4203,15 @@ impl Checker<'_> {
                     "List" => {
                         let inner = args.first().map_or(Ty::Unknown, |a| self.resolve_type(a));
                         Ty::List(Box::new(inner))
+                    }
+                    "Map" => {
+                        let key = args.first().map_or(Ty::Unknown, |a| self.resolve_type(a));
+                        let value = args.get(1).map_or(Ty::Unknown, |a| self.resolve_type(a));
+                        Ty::Map(Box::new(key), Box::new(value))
+                    }
+                    "Set" => {
+                        let inner = args.first().map_or(Ty::Unknown, |a| self.resolve_type(a));
+                        Ty::Set(Box::new(inner))
                     }
                     _ => {
                         // Still recurse into args to catch a nested `Text`.
@@ -2879,6 +4222,7 @@ impl Checker<'_> {
                     }
                 }
             }
+            Type::Optional { inner, .. } => Ty::Optional(Box::new(self.resolve_type(inner))),
             Type::Function { params, ret, .. } => {
                 let params = params.iter().map(|p| self.resolve_type(p)).collect();
                 let ret = ret.as_ref().map(|r| Box::new(self.resolve_type(r)));
@@ -2903,14 +4247,23 @@ fn is_slot_param(p: &Param) -> bool {
 fn plain_ty(ty: &Type) -> Ty {
     match ty {
         Type::Named { name, args, .. } => match name.as_str() {
+            "Color" if typed_units() => Ty::Color,
+            "Duration" if typed_units() => Ty::Duration,
+            "Angle" if typed_units() => Ty::Angle,
             "Int" | "Color" => Ty::Int,
             "Float" => Ty::Float,
             "Str" => Ty::Str,
             "Bool" => Ty::Bool,
             "Text" => Ty::Unknown,
             "List" => Ty::List(Box::new(args.first().map_or(Ty::Unknown, plain_ty))),
+            "Map" => Ty::Map(
+                Box::new(args.first().map_or(Ty::Unknown, plain_ty)),
+                Box::new(args.get(1).map_or(Ty::Unknown, plain_ty)),
+            ),
+            "Set" => Ty::Set(Box::new(args.first().map_or(Ty::Unknown, plain_ty))),
             _ => Ty::Named(name.clone()),
         },
+        Type::Optional { inner, .. } => Ty::Optional(Box::new(plain_ty(inner))),
         Type::Function { params, ret, .. } => Ty::Fn(
             params.iter().map(plain_ty).collect(),
             ret.as_deref().map(|r| Box::new(plain_ty(r))),
@@ -2926,7 +4279,8 @@ fn plain_ty(ty: &Type) -> Ty {
 fn same_ty(a: &Ty, b: &Ty) -> bool {
     match (a, b) {
         (Ty::Unknown, _) | (_, Ty::Unknown) => true,
-        (Ty::List(x), Ty::List(y)) => same_ty(x, y),
+        (Ty::List(x), Ty::List(y)) | (Ty::Set(x), Ty::Set(y)) => same_ty(x, y),
+        (Ty::Map(kx, vx), Ty::Map(ky, vy)) => same_ty(kx, ky) && same_ty(vx, vy),
         _ => a == b,
     }
 }
@@ -2936,26 +4290,87 @@ fn same_ty(a: &Ty, b: &Ty) -> bool {
 /// the step of the roadmap that checks it, and is let through until then.
 fn judged(t: &Ty) -> bool {
     match t {
-        Ty::Int | Ty::Float | Ty::Str | Ty::Bool => true,
-        Ty::List(item) => judged(item) || **item == Ty::Unknown,
+        Ty::Int | Ty::Float | Ty::Str | Ty::Bool | Ty::Color | Ty::Duration | Ty::Angle => true,
+        Ty::List(item) | Ty::Set(item) => judged(item) || **item == Ty::Unknown,
+        Ty::Map(key, value) => {
+            (judged(key) || **key == Ty::Unknown) && (judged(value) || **value == Ty::Unknown)
+        }
         _ => false,
     }
 }
 
 /// Whether a value of type `found` may be where `expected` was written, as far
 /// as the checker can tell.
+/// Whether `found` fits `pattern`, a parameter's type that may name type
+/// parameters (`vars`): the first time one is met it is given the type of what
+/// was passed, and after that what is passed must be that type.
+fn unify(pattern: &Ty, found: &Ty, vars: &[Symbol], subst: &mut HashMap<Symbol, Ty>) -> bool {
+    match (pattern, found) {
+        (Ty::Named(var), found) if vars.contains(var) => {
+            if !is_concrete(found) {
+                return true;
+            }
+            if let Some(held) = subst.get(var) {
+                return fits(held, found) || fits(found, held);
+            }
+            subst.insert(var.clone(), found.clone());
+            true
+        }
+        (Ty::List(p), Ty::List(f)) | (Ty::Optional(p), Ty::Optional(f)) => unify(p, f, vars, subst),
+        (Ty::Optional(p), found) => unify(p, found, vars, subst),
+        _ => fits(pattern, found),
+    }
+}
+
+/// `ty` with each type parameter in `subst` replaced by the type it was given.
+fn substitute(ty: &Ty, subst: &HashMap<Symbol, Ty>) -> Ty {
+    match ty {
+        Ty::Named(var) => subst.get(var).cloned().unwrap_or_else(|| ty.clone()),
+        Ty::List(inner) => Ty::List(Box::new(substitute(inner, subst))),
+        Ty::Optional(inner) => Ty::Optional(Box::new(substitute(inner, subst))),
+        other => other.clone(),
+    }
+}
+
+/// Whether `ty` still names one of the type parameters `vars`.
+fn mentions(ty: &Ty, vars: &[Symbol]) -> bool {
+    match ty {
+        Ty::Named(var) => vars.contains(var),
+        Ty::List(inner) | Ty::Optional(inner) => mentions(inner, vars),
+        _ => false,
+    }
+}
+
 fn fits(expected: &Ty, found: &Ty) -> bool {
     !judged(expected) || !is_concrete(found) || assignable(expected, found)
 }
 
 fn assignable(expected: &Ty, found: &Ty) -> bool {
     match (expected, found) {
-        (Ty::Unknown | Ty::Fn(..), _) | (_, Ty::Unknown | Ty::Fn(..)) | (Ty::Float, Ty::Int) => {
-            true
-        }
-        (Ty::List(e), Ty::List(f)) => assignable(e, f),
+        (Ty::Unknown | Ty::Fn(..), _)
+        | (_, Ty::Unknown | Ty::Fn(..))
+        // A colour is a number written as one, and an angle a decimal.
+        | (Ty::Float, Ty::Int | Ty::Angle)
+        | (Ty::Color, Ty::Int)
+        | (Ty::Int, Ty::Color)
+        | (Ty::Angle, Ty::Float | Ty::Int) => true,
+        (Ty::List(e), Ty::List(f)) | (Ty::Set(e), Ty::Set(f)) => assignable(e, f),
+        (Ty::Map(ke, ve), Ty::Map(kf, vf)) => assignable(ke, kf) && assignable(ve, vf),
         _ => expected == found,
     }
+}
+
+/// Whether `t` is surely not a `Bool`: a number, a text, a list or a record.
+fn is_not_a_bool(t: &Ty) -> bool {
+    matches!(
+        t,
+        Ty::Int | Ty::Float | Ty::Str | Ty::List(_) | Ty::Shape(_)
+    )
+}
+
+/// Whether `t` is surely not a list.
+fn is_not_a_list(t: &Ty) -> bool {
+    matches!(t, Ty::Int | Ty::Float | Ty::Str | Ty::Bool | Ty::Shape(_))
 }
 
 /// Whether a type is concrete enough to trigger a diagnostic (i.e. not
@@ -2972,9 +4387,21 @@ fn ty_name(t: &Ty) -> String {
         Ty::Str => "Str".to_string(),
         Ty::Bool => "Bool".to_string(),
         Ty::List(e) => format!("List<{}>", ty_name(e)),
+        Ty::Map(k, v) => format!("Map<{}, {}>", ty_name(k), ty_name(v)),
+        Ty::Set(e) => format!("Set<{}>", ty_name(e)),
+        Ty::Color => "Color".to_string(),
+        Ty::Duration => "Duration".to_string(),
+        Ty::Angle => "Angle".to_string(),
         Ty::Fn(..) => "Fn".to_string(),
         Ty::Optional(t) => format!("{}?", ty_name(t)),
         Ty::Named(n) => n.as_str().to_string(),
+        Ty::Shape(fields) => {
+            let inner: Vec<String> = fields
+                .iter()
+                .map(|(name, ty)| format!("{}: {}", name.as_str(), ty_name(ty)))
+                .collect();
+            format!("{{ {} }}", inner.join(", "))
+        }
         Ty::Unknown => "?".to_string(),
     }
 }
@@ -2996,6 +4423,7 @@ fn op_str(op: BinOp) -> &'static str {
         BinOp::And => "&&",
         BinOp::Or => "||",
         BinOp::Otherwise => "??",
+        BinOp::Range => "..",
     }
 }
 
@@ -3008,11 +4436,24 @@ fn eq_compatible(l: &Ty, r: &Ty) -> bool {
         return true;
     }
     match (l, r) {
-        (Ty::Str, Ty::Str) | (Ty::Bool, Ty::Bool) => true,
-        (Ty::List(a), Ty::List(b)) => {
+        // A record literal is compared with a record, a literal or a declared one.
+        (Ty::Str, Ty::Str)
+        | (Ty::Bool, Ty::Bool)
+        | (Ty::Shape(_), Ty::Shape(_) | Ty::Named(_))
+        | (Ty::Named(_), Ty::Shape(_))
+        | (Ty::Color, Ty::Color | Ty::Int)
+        | (Ty::Int, Ty::Color)
+        | (Ty::Duration, Ty::Duration)
+        | (Ty::Angle, Ty::Angle | Ty::Float)
+        | (Ty::Float, Ty::Angle) => true,
+        (Ty::List(a), Ty::List(b)) | (Ty::Set(a), Ty::Set(b)) => {
             a == b || matches!(**a, Ty::Unknown) || matches!(**b, Ty::Unknown)
         }
         (Ty::Named(a), Ty::Named(b)) => a == b,
+        (Ty::Map(ka, va), Ty::Map(kb, vb)) => {
+            (ka == kb || matches!(**ka, Ty::Unknown) || matches!(**kb, Ty::Unknown))
+                && (va == vb || matches!(**va, Ty::Unknown) || matches!(**vb, Ty::Unknown))
+        }
         _ => false,
     }
 }
@@ -3069,6 +4510,7 @@ fn member_span(member: &Member) -> Span {
         | Member::Provide { span, .. }
         | Member::For { span, .. }
         | Member::When { span, .. }
+        | Member::Match { span, .. }
         | Member::Route { span, .. }
         | Member::Lifecycle { span, .. }
         | Member::Timer { span, .. }

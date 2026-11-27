@@ -255,11 +255,11 @@ fn list_ops_are_pure_and_value_returning() {
         ""
     );
     assert_eq!(
-        index_value(&Value::List(vec![Value::Int(7)]), &Value::Int(0)),
+        index_value(&Value::List(vec![Value::Int(7)]), &Value::Int(0), false),
         Value::Int(7)
     );
     assert_eq!(
-        index_value(&Value::List(vec![Value::Int(7)]), &Value::Int(5)),
+        index_value(&Value::List(vec![Value::Int(7)]), &Value::Int(5), false),
         Value::Unit
     );
 }
@@ -409,7 +409,8 @@ fn shown(expr: &str) -> String {
     let parsed = parse(&src);
     assert!(parsed.errors.is_empty(), "{expr}: {:?}", parsed.errors);
     let checked = crate::infer::check_views(&parsed.views);
-    assert!(checked.errors.is_empty(), "{expr}: {:?}", checked.errors);
+    let wrong: Vec<_> = checked.errors.iter().filter(|e| !e.is_warning()).collect();
+    assert!(wrong.is_empty(), "{expr}: {wrong:?}");
     let (mut interp, tree) = lower_named(&src, "App");
     interp.tick();
     let mut frame = byard_core::frame::RenderFrame::new();

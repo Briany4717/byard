@@ -1,5 +1,7 @@
 // Logic, comparison, `??`, `?:` and how the operators group.
 
+//# covers: operators, expressions, truth, a-value-or-a-default-, colours-durations-and-angles
+
 //# case: and-or-not
 //# fragment
 //# text: true false true false true
@@ -33,7 +35,6 @@ let xs: List<Int> = []
 Text("{xs.len == 0 || xs[0] > 5}")
 
 //# case: logic-on-a-number-is-an-error
-//# gap: `1 && true` is accepted, though `!5` is not
 //# fragment
 //# error: TypeMismatch
 Text("{1 && true}")
@@ -67,8 +68,33 @@ var a = false
 var b = true
 Text(a || b ? "on" : "off")
 
+//# case: ternary-is-looser-than-or-in-2027-and-says-nothing
+//# edition: 2027
+//# fragment
+//# text: on | off
+var a = false
+var b = true
+Text(a || b ? "on" : "off")
+Text(a && b ? "on" : "off")
+
+//# case: ternary-in-2027-keeps-right-association-and-the-else-arm
+//# edition: 2027
+//# fragment
+//# text: B | x
+var n = 5
+Text(n > 9 ? "A" : n > 3 ? "B" : "C")
+Text(n > 9 || n < 0 ? "y" : n == 5 || n == 6 ? "x" : "z")
+
+//# case: ternary-in-2027-takes-a-whole-or-as-its-else
+//# edition: 2027
+//# fragment
+//# text: true
+var a = false
+var b = true
+Text("{a ? false : a || b}")
+
 //# case: ternary-after-or-means-or-of-a-ternary
-//# gap: `a || b ? x : y` is `a || (b ? x : y)`; every other language reads `(a || b) ? x : y`
+//# edition: 2027
 //# fragment
 //# text: on
 var a = true
@@ -83,13 +109,11 @@ var b = true
 Text((a || b) ? "on" : "off")
 
 //# case: ternary-condition-must-be-bool
-//# gap: a condition that is text or a number is accepted
 //# fragment
 //# error: TypeMismatch
 Text("{"a" ? 1 : 2}")
 
 //# case: ternary-arms-of-different-types
-//# gap: arms of two types are accepted, and the value has no one type
 //# fragment
 //# error: TypeMismatch
 let x: Int = true ? 1 : "a"
@@ -141,11 +165,40 @@ View Main() {
 }
 
 //# case: optional-chaining
-//# gap: `a?.b` does not parse; the `?` is read as a ternary
 //# fragment
 //# text: none
 let u = { a: 1 }
 Text("{u.x?.y ?? "none"}")
+
+//# case: optional-chaining-follows-a-chain-and-stops-at-the-first-nothing
+//# text: Lima | unknown
+type Place = { city: Str }
+type User = { name: Str, home: Place? }
+View Main() {
+    var a: User = { name: "Ada", home: { city: "Lima" } }
+    var b: User = { name: "Bo" }
+    Text("{a.home?.city ?? "unknown"}")
+    Text("{b.home?.city ?? "unknown"}")
+}
+
+//# case: optional-chaining-on-an-optional-var
+//# text: 2 | 0
+type Box = { a: Int }
+View Main() {
+    var u: Box? = { a: 2 }
+    var v: Box? = none
+    Text("{u?.a ?? 0}")
+    Text("{v?.a ?? 0}")
+}
+
+//# case: optional-chaining-does-not-make-a-plain-read-safe
+//# error: NoneNotHandled
+//# diagnostics: 1
+type Box = { a: Int }
+View Main() {
+    var u: Box? = none
+    Text("{u.a}")
+}
 
 //# case: equality-across-types-is-an-error
 //# fragment
@@ -168,14 +221,12 @@ Text("{((1 + 2)) * 3} {(1 < 2)}")
 Text("{(1 + 2}")
 
 //# case: assignment-is-not-an-expression-in-a-text
-//# gap: an assignment inside a text is accepted
 //# fragment
 //# error: EffectInPureContext
 var n = 0
 Text("{n = 1}")
 
 //# case: increment-in-a-let-is-an-error
-//# gap: `n++` in a `let` is accepted
 //# fragment
 //# error: EffectInPureContext
 var n = 0
@@ -183,7 +234,6 @@ let m = n++
 Text("{m}")
 
 //# case: assign-to-a-let
-//# gap: writing a `let` in an action is accepted
 //# fragment
 //# error: NotAssignable
 let n = 0
@@ -191,7 +241,6 @@ on mount => { n = 1 }
 Text("{n}")
 
 //# case: assign-to-a-parameter
-//# gap: writing a parameter that is not a binding is accepted
 //# error: NotAssignable
 View Card(n: Int) {
     on mount => { n = 1 }
@@ -200,14 +249,12 @@ View Card(n: Int) {
 View Main() { Card(0) }
 
 //# case: assign-to-a-literal
-//# gap: `5 = 1` is accepted
 //# fragment
 //# error: NotAssignable
 on mount => { 5 = 1 }
 Text("x")
 
 //# case: assign-to-a-loop-variable
-//# gap: writing a `for` variable is accepted
 //# fragment
 //# error: NotAssignable
 for x in [1, 2] {
@@ -229,3 +276,217 @@ Text("{((((((((((((((((((((((((((((((((1))))))))))))))))))))))))))))))))+(((((((
 //# fragment
 //# text: 64
 Text("{1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1}")
+
+//# case: ternary-int-and-float-arms-are-a-float
+//# fragment
+//# text: 0.5
+Text("{(false ? 1 : 0.5)}")
+
+//# case: or-of-a-text-is-an-error
+//# fragment
+//# error: TypeMismatch
+//# diagnostics: 1
+Text("{"a" || true}")
+
+//# case: not-a-bool-condition-in-a-comparison-is-fine
+//# fragment
+//# text: yes
+var n = 1
+Text(n != 0 && n > 0 ? "yes" : "no")
+
+//# case: increment-a-loop-variable
+//# fragment
+//# error: NotAssignable
+//# diagnostics: 1
+for x in [1, 2] {
+    Button("a") => x++
+}
+
+//# case: assign-to-the-result-of-a-call
+//# fragment
+//# error: NotAssignable
+//# diagnostics: 1
+fn one() -> Int => 1
+on mount => { one() = 2 }
+Text("x")
+
+//# case: plus-equals-in-a-text-is-an-effect
+//# fragment
+//# error: EffectInPureContext
+//# diagnostics: 1
+var n = 0
+Text("{n += 1}")
+
+//# case: a-binding-parameter-is-written-like-a-var
+//# text: 1
+View Inner(bind n: Int) { on mount => { n = 1 } }
+View Main() {
+    var n = 0
+    Inner(bind: n)
+    Text("{n}")
+}
+
+//# case: colour-is-still-a-number-before-2027
+//# fragment
+//# text: 16711680 | 16711880
+let c: Color = 0xFF0000
+Text("{c}")
+Text("{200ms + 0xFF0000}")
+
+//# case: duration-is-not-a-type-before-2027
+//# fragment
+//# error: UnknownType
+let d: Duration = 1
+Text("x")
+
+//# case: duration-shows-its-unit
+//# edition: 2027
+//# fragment
+//# text: 200ms | 600ms | 1000ms
+Text("{200ms}")
+Text("{300ms * 2}")
+Text("{1s}")
+
+//# case: durations-add-and-subtract
+//# edition: 2027
+//# fragment
+//# text: 500ms | 100ms
+Text("{200ms + 300ms}")
+Text("{300ms - 200ms}")
+
+//# case: a-duration-is-scaled-by-a-number-either-way
+//# edition: 2027
+//# fragment
+//# text: 400ms | 400ms | 100ms
+let n = 2
+Text("{200ms * n}")
+Text("{n * 200ms}")
+Text("{200ms / n}")
+
+//# case: durations-are-compared-and-divided
+//# edition: 2027
+//# fragment
+//# text: true | 5
+Text("{200ms < 1s}")
+Text("{1000ms / 200ms}")
+
+//# case: a-duration-and-a-plain-number-do-not-add
+//# edition: 2027
+//# fragment
+//# error: TypeMismatch
+//# diagnostics: 1
+Text("{300ms + 1}")
+
+//# case: a-duration-is-not-a-colour
+//# edition: 2027
+//# fragment
+//# error: TypeMismatch
+//# diagnostics: 1
+let c: Color = 0xFF0000
+Text("{c + 200ms}")
+
+//# case: a-colour-has-no-arithmetic
+//# edition: 2027
+//# fragment
+//# error: TypeMismatch
+//# diagnostics: 1
+let c: Color = 0xFF0000
+Text("{c + 1}")
+
+//# case: a-colour-is-compared-with-a-colour-or-its-number
+//# edition: 2027
+//# fragment
+//# text: true | true | false
+let c: Color = 0xFF0000
+Text("{c == 0xFF0000}")
+Text("{c == c}")
+Text("{c == 0x00FF00}")
+
+//# case: a-colour-with-alpha-shows-it
+//# edition: 2027
+//# fragment
+//# text: #FF000080 | #3B82F6
+let c: Color = 0xFF0000
+let blue: Color = 0x3B82F6
+Text("{c.alpha(0.5)}")
+Text("{blue}")
+
+//# case: a-colour-goes-where-a-number-goes
+//# edition: 2027
+//# fragment
+//# text: 16711680
+fn plain(n: Int) -> Int => n
+let c: Color = 0xFF0000
+Text("{plain(c)}")
+
+//# case: a-duration-does-not-go-where-a-number-goes
+//# edition: 2027
+//# error: ArgumentTypeMismatch
+//# diagnostics: 1
+fn plain(n: Int) -> Int => n
+View Main() { Text("{plain(200ms)}") }
+
+//# case: a-duration-written-as-a-type
+//# edition: 2027
+//# fragment
+//# text: 300ms
+let wait: Duration = 300ms
+Text("{wait}")
+
+//# case: a-number-is-not-a-duration
+//# edition: 2027
+//# fragment
+//# error: TypeMismatch
+//# diagnostics: 1
+let wait: Duration = 300
+Text("x")
+
+//# case: an-angle-shows-in-degrees
+//# edition: 2027
+//# fragment
+//# text: 90deg | 180deg | 45deg
+let a: Angle = 90deg
+Text("{a}")
+Text("{a * 2}")
+Text("{a / 2}")
+
+//# case: an-angle-and-a-number-do-not-add
+//# edition: 2027
+//# fragment
+//# error: TypeMismatch
+//# diagnostics: 1
+let a: Angle = 90deg
+Text("{a + 1}")
+
+//# case: timers-with-durations-in-2027
+//# edition: 2027
+//# fragment
+//# text: a
+var n = 0
+every 1s => { n++ }
+after 300ms => { n++ }
+var wait = 5
+after wait * 1ms => { n++ }
+Text("a")
+
+//# case: a-timer-of-zero-in-2027
+//# edition: 2027
+//# fragment
+//# error: InvalidAnimation
+var n = 0
+every 0ms => { n++ }
+Text("a")
+
+//# case: a-curve-with-a-duration-in-2027
+//# edition: 2027
+//# fragment
+//# text: a
+var on = false
+Box #[width: 40, height: 40, bg: on ? 0xEF5350 : 0x3B82F6 with anim.easeInOut(300ms)] {}
+Text("a")
+
+//# case: a-duration-in-a-view-parameter-in-2027
+//# edition: 2027
+//# text: 600ms
+View Pause(len: Duration) { Text("{len * 2}") }
+View Main() { Pause(len: 300ms) }

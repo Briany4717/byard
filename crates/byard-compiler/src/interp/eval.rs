@@ -95,6 +95,7 @@ fn members_span(members: &[Member]) -> Span {
             | Member::Provide { span, .. }
             | Member::For { span, .. }
             | Member::When { span, .. }
+            | Member::Match { span, .. }
             | Member::Route { span, .. }
             | Member::Lifecycle { span, .. }
             | Member::Timer { span, .. }
@@ -557,6 +558,19 @@ thread_local! {
     /// with more than one parameter (`reduce`'s `(acc, x) => …`). The single
     /// parameter of `map`/`filter` still goes through [`CURRENT_PAYLOAD`].
     static LAMBDA_ARGS: std::cell::RefCell<Vec<(Symbol, Value)>> = const { std::cell::RefCell::new(Vec::new()) };
+
+    /// Set by `return` and read by the statements around it: while it is set
+    /// the rest of the action does not run. The action that was started clears
+    /// it when it ends, so it never reaches the next one.
+    static RETURNING: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+
+    /// How many `ok` arms are running. A `value as Type` inside one that finds
+    /// the value of another shape does not carry on: the arm's call is told.
+    static IN_ARM: std::cell::Cell<u32> = const { std::cell::Cell::new(0) };
+
+    /// Where, and how, the `value as Type` of the arm that just ran did not
+    /// fit: the path of the first field, and what is wrong with it.
+    static SHAPE_FAILURE: std::cell::RefCell<Option<(String, String)>> = const { std::cell::RefCell::new(None) };
 }
 
 /// The Dev-mode interpreter for one `View` instance: a reactive context plus
@@ -683,6 +697,12 @@ pub struct Interpreter {
     ctx_chain: Option<std::rc::Rc<CtxNode>>,
     /// The program's contexts: name → fields, with their defaults.
     contexts: std::collections::HashMap<Symbol, std::rc::Rc<Vec<crate::parser::ast::RecordField>>>,
+    /// The program's stores: the contexts with one instance for the whole
+    /// program, by name.
+    store_names: std::collections::HashSet<Symbol>,
+    /// The signal of each field of each store, made the first time it is
+    /// injected.
+    stores: std::collections::HashMap<Symbol, Vec<(Symbol, SignalId)>>,
     /// Reactive `for` body pools (RFC-0018), indexed by [`RenderNode::For::pool`].
     /// Grows as `for` loops are lowered; each pool holds that loop's reusable
     /// per-slot bodies and element signals. Reconciled once per frame before the
@@ -885,6 +905,8 @@ pub struct Interpreter {
     /// The program's top-level functions (RFC-0002), by canonical name, as
     /// entries of `fn_table`. Rebuilt by [`Self::load_views`].
     top_fns: std::collections::HashMap<Symbol, super::env::AstId>,
+    /// The edition the loaded program is written in (from its first view).
+    edition: crate::edition::Edition,
     /// The program's top-level constants (RFC-0055), by canonical name, each
     /// evaluated once by [`Self::load_views`]. A read is a clone of the value.
     consts: std::collections::HashMap<Symbol, Value>,
@@ -1343,6 +1365,18 @@ impl Interpreter {
         self.expanded_calls = on.then(Default::default);
     }
 
+    /// Whether `len`, `slice`, `indexOf` and `s[i]` count what a reader sees as
+    /// a character (a grapheme cluster, from edition 2027) and not a code point.
+    pub(super) fn counts_graphemes(&self) -> bool {
+        self.edition >= crate::edition::Edition::E2027
+    }
+
+    /// Whether an `Int` that overflows stops at the end of its range, as the
+    /// edition the program is written in says (2027), and not wraps.
+    pub(super) fn saturates(&self) -> bool {
+        self.edition >= crate::edition::Edition::E2027
+    }
+
     /// Builds the user-`View` registry (RFC-0007 §1) from a whole file's
     /// views and stores it on the interpreter, so subsequent `lower_view`/
     /// `lower_element` calls can recognize and expand user-view calls.
@@ -1353,6 +1387,9 @@ impl Interpreter {
         // Every view carries the same program-wide function table; register
         // it once, fresh, so a reload replaces rather than accumulates names.
         self.top_fns.clear();
+        self.edition = views
+            .first()
+            .map_or(crate::edition::Edition::BASELINE, |v| v.edition);
         self.window_sites = surfaces::index_windows(views);
         if let Some(first) = views.first() {
             self.records = std::rc::Rc::new(
@@ -1388,10 +1425,15 @@ impl Interpreter {
         self.consts.clear();
         self.enums.clear();
         self.contexts.clear();
+        self.store_names.clear();
+        self.stores.clear();
         if let Some(first) = views.first() {
             for decl in first.records.iter().filter(|r| r.context) {
                 self.contexts
                     .insert(decl.name.clone(), std::rc::Rc::new(decl.fields.clone()));
+                if decl.store {
+                    self.store_names.insert(decl.name.clone());
+                }
             }
             for decl in first.enums.iter() {
                 let cases = decl.cases.iter().map(|(c, _)| c.clone()).collect();
@@ -1632,6 +1674,7 @@ impl Interpreter {
                 // A bare statement member is an action, so a call written
                 // there is in effect position like any other (RFC-0028 §4).
                 let result = self.in_action_position(|s| s.eval_action(e));
+                RETURNING.with(|r| r.set(false));
                 if let Err(err) = result {
                     self.errors.push(err);
                 }
@@ -1640,7 +1683,8 @@ impl Interpreter {
                 // Resolve `inject T as name` from the ambient environment chain.
                 let ty_name = match ty {
                     crate::parser::ast::Type::Named { name: n, .. } => n.clone(),
-                    crate::parser::ast::Type::Function { .. } => Symbol::intern("?"),
+                    crate::parser::ast::Type::Function { .. }
+                    | crate::parser::ast::Type::Optional { .. } => Symbol::intern("?"),
                 };
                 // A context of the program (RFC-0065): the nearest provider
                 // among the views being drawn, or its defaults.
@@ -1688,7 +1732,11 @@ impl Interpreter {
     /// where a `Float` was written is a `Float`: `var w: Float = 3` holds `3.0`,
     /// so `w / 2` is `1.5`.
     fn define_typed_var(&mut self, name: Symbol, init: &Expr, ty: Option<&Type>) -> SignalId {
-        let mut initial = self.eval_pure(init);
+        let mut initial = if self.is_none_word(init) {
+            Value::Unit
+        } else {
+            self.eval_pure(init)
+        };
         if let Some(ty) = ty {
             initial = coerce_to(initial, ty);
         }
@@ -1876,7 +1924,7 @@ impl Interpreter {
 
     /// `let y = init` (and a `fn` with no parameters), open a computed memo.
     pub fn define_let(&mut self, name: Symbol, init: &Expr) -> ScopeId {
-        let compute = self.lower_expr(init, None);
+        let compute = self.lower_value(init, None);
         let scope = self.ctx.open_memo(compute);
         self.env.push(name, Value::Memo(scope));
         scope
@@ -1914,6 +1962,9 @@ impl Interpreter {
         self.ctx.push_scope_tracker();
         self.render_frame(tree, frame, width, height, None);
         self.frame_scopes = self.ctx.pop_scope_tracker();
+        // What a value raised while it was being read (a `value as Type` that
+        // did not fit) is told with this frame, not the next tick's.
+        self.drain_closure_diagnostics();
     }
 
     /// Hands back the scopes the previous frame's painting opened. Called once
@@ -2541,7 +2592,15 @@ impl Interpreter {
         // should be; a type with no obvious zero stays `Unit`.
         for param in &view.params {
             if another_view || self.env.lookup(&param.name).is_none() {
-                self.env.push(param.name.clone(), unset_param(param));
+                let unset = unset_param(param);
+                // A binding is the caller's `var`, which the view writes:
+                // standalone it is a cell of its own, so a write to it is one.
+                let value = if param.bind {
+                    Value::Signal(self.ctx.create_signal(unset))
+                } else {
+                    unset
+                };
+                self.env.push(param.name.clone(), value);
             }
         }
         self.eval_view_decls(view);
@@ -2628,6 +2687,9 @@ pub(super) fn coerced_arg(
 /// `value` as the type written for it: an `Int` is a `Float` where a `Float` is
 /// wanted, and so is each item of a `List<Float>`. Anything else is as it was.
 fn coerce_to(value: Value, ty: &Type) -> Value {
+    if let Type::Optional { inner, .. } = ty {
+        return coerce_to(value, inner);
+    }
     let Type::Named { name, args, .. } = ty else {
         return value;
     };

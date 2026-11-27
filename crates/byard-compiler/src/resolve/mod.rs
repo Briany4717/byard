@@ -39,11 +39,12 @@ use std::collections::HashMap;
 use std::collections::hash_map::Entry;
 
 use crate::diagnostics::{CompileError, Span};
+use crate::edition::Edition;
 use crate::interp::intrinsics;
 use crate::parser::ast::{
     ConstDecl, ElementNode, EnumDecl, Expr, FnDecl, Member, Type, UseDecl, ViewDecl,
 };
-use crate::parser::parse;
+use crate::parser::parse_in;
 use crate::symbol::Symbol;
 use crate::util::closest_match;
 
@@ -247,6 +248,18 @@ pub struct ResolvedProgram {
     pub packages: Vec<String>,
 }
 
+impl ResolvedProgram {
+    /// This program as written in `edition`: every view carries it, so the
+    /// interpreter that loads them behaves as that edition says.
+    #[must_use]
+    pub fn with_edition(mut self, edition: crate::edition::Edition) -> Self {
+        for view in &mut self.views {
+            view.edition = edition;
+        }
+        self
+    }
+}
+
 /// The names a view binds itself (its parameters and its top-level `var`,
 /// `let` and `fn` members), which shadow a package function of the same name.
 fn view_bindings(view: &ViewDecl) -> std::collections::HashSet<Symbol> {
@@ -405,6 +418,10 @@ struct Resolver<'p> {
     /// settled here, so that only the reading that was meant is resolved and
     /// reported on.
     callee_kinds: std::cell::RefCell<CalleeKinds>,
+    /// The edition the root project is written in. A package is parsed in the
+    /// baseline: it names an edition of its own, which a provider does not
+    /// tell yet.
+    edition: crate::edition::Edition,
 }
 
 impl Resolver<'_> {
@@ -426,7 +443,18 @@ pub fn resolve_program(
     root_files: Vec<SourceFile>,
     provider: &mut dyn PackageProvider,
 ) -> ResolvedProgram {
-    resolve_root(root_files, provider, None)
+    resolve_root(root_files, provider, None, Edition::BASELINE)
+}
+
+/// [`resolve_program`] for a project written in `edition`: the root files are
+/// parsed as that edition says, and every view carries it.
+#[must_use]
+pub fn resolve_program_in(
+    root_files: Vec<SourceFile>,
+    provider: &mut dyn PackageProvider,
+    edition: Edition,
+) -> ResolvedProgram {
+    resolve_root(root_files, provider, None, edition).with_edition(edition)
 }
 
 /// Resolves the files of library package `name` on their own, as `byard check`
@@ -439,15 +467,33 @@ pub fn resolve_library(
     root_files: Vec<SourceFile>,
     provider: &mut dyn PackageProvider,
 ) -> ResolvedProgram {
-    resolve_root(root_files, provider, Some(name.to_string()))
+    resolve_root(
+        root_files,
+        provider,
+        Some(name.to_string()),
+        Edition::BASELINE,
+    )
+}
+
+/// [`resolve_library`] for a package written in `edition`.
+#[must_use]
+pub fn resolve_library_in(
+    name: &str,
+    root_files: Vec<SourceFile>,
+    provider: &mut dyn PackageProvider,
+    edition: Edition,
+) -> ResolvedProgram {
+    resolve_root(root_files, provider, Some(name.to_string()), edition).with_edition(edition)
 }
 
 fn resolve_root(
     root_files: Vec<SourceFile>,
     provider: &mut dyn PackageProvider,
     root_library: Option<String>,
+    edition: Edition,
 ) -> ResolvedProgram {
     let mut r = Resolver {
+        edition,
         provider,
         map: SourceMap::default(),
         errors: Vec::new(),
@@ -507,9 +553,27 @@ fn resolve_root(
     // The type checks run over the merged, rebased views, so their spans are
     // already program-wide. Held back while the program has parse or resolve
     // errors: a broken tree would only add follow-on noise to the real one.
-    if r.errors.is_empty() {
-        r.errors.extend(crate::infer::check_views(&views).errors);
+    // A program, as against a package, with no `View` in it draws nothing.
+    if r.root_library.is_none() && views.is_empty() && r.errors.is_empty() {
+        r.errors.push(crate::diagnostics::CompileError::Project {
+            span: crate::diagnostics::Span::new(0, 0),
+            message: "the program declares no `View`".to_string(),
+        });
     }
+    // The checks read the edition off the views, as the interpreter will.
+    for view in &mut views {
+        view.edition = edition;
+    }
+    let mut map_loops = Vec::new();
+    let mut shown = Vec::new();
+    if r.errors.is_empty() {
+        let checked = crate::infer::check_views(&views);
+        r.errors.extend(checked.errors);
+        map_loops = checked.map_loops;
+        shown = checked.shown;
+    }
+    // What was written has been checked; what runs is the chain it means.
+    crate::desugar::matches(&mut views, &map_loops, &shown);
 
     ResolvedProgram {
         views,
@@ -536,7 +600,12 @@ impl Resolver<'_> {
         let mut dep_requests: Vec<(String, Span)> = Vec::new();
 
         for file in files {
-            let parsed = parse(&file.source);
+            let in_edition = if name == ROOT_PACKAGE {
+                self.edition
+            } else {
+                Edition::BASELINE
+            };
+            let parsed = parse_in(&file.source, in_edition);
             let base = self.map.add(file.name, file.source);
 
             for mut err in parsed.errors {
@@ -733,6 +802,7 @@ impl Resolver<'_> {
                         v.insert(target);
                     }
                     Entry::Occupied(o) => self.errors.push(CompileError::NameCollision {
+                        local: false,
                         span: import.span,
                         name: alias.as_str().to_string(),
                         first: pkg_display(o.get()),
@@ -1285,6 +1355,7 @@ impl Resolver<'_> {
         }
         if local_exports.iter().any(|(name, _)| name == sym) {
             self.errors.push(CompileError::NameCollision {
+                local: false,
                 span,
                 name: sym.as_str().to_string(),
                 first: pkg_display(target),
@@ -1299,6 +1370,7 @@ impl Resolver<'_> {
             Entry::Occupied(o) => {
                 if o.get() != target {
                     self.errors.push(CompileError::NameCollision {
+                        local: false,
                         span,
                         name: sym.as_str().to_string(),
                         first: pkg_display(o.get()),
@@ -1459,6 +1531,7 @@ impl Resolver<'_> {
 mod tests {
     use super::*;
     use crate::interp::eval::Interpreter;
+    use crate::parser::parse;
     use std::collections::BTreeMap;
 
     /// An in-memory provider: package name → files.

@@ -1,5 +1,7 @@
 // Lexical structure: comments, literals, strings and their escapes.
 
+//# covers: source-text, words, literals, text
+
 //# case: line-comment-is-ignored
 //# text: a
 View Main() {
@@ -8,7 +10,6 @@ View Main() {
 }
 
 //# case: block-comment
-//# gap: `/* */` is not a comment
 //# text: a
 View Main() {
     /* a block comment */
@@ -36,16 +37,62 @@ Text("{9223372036854775807}")
 Text("{9223372036854775808}")
 
 //# case: int-literal-with-separators
-//# gap: `1_000` lexes as `1` and a name
 //# fragment
 //# text: 1000
 Text("{1_000}")
 
 //# case: int-literal-binary
-//# gap: no binary literals
 //# fragment
 //# text: 5
 Text("{0b101}")
+
+//# case: number-with-separators-and-exponent-forms
+//# fragment
+//# text: 1000000 0.0015 2000 255 5 1500
+Text("{1_000_000} {1.5e-3} {2E+3} {0xFF} {0b101} {1_5e2}")
+
+//# case: number-running-into-letters-is-one-error
+//# fragment
+//# error: UnexpectedChar
+//# diagnostics: 1
+Text("{12abc}")
+
+//# case: separator-at-the-end-of-a-number-is-one-error
+//# fragment
+//# error: UnexpectedChar
+//# diagnostics: 1
+Text("{1_}")
+
+//# case: binary-literal-with-a-wrong-digit-is-one-error
+//# fragment
+//# error: UnexpectedChar
+//# diagnostics: 1
+Text("{0b102}")
+
+//# case: block-comments-nest
+//# text: a
+View Main() {
+    /* one /* two */ still a comment */
+    Text("a") /* after */
+}
+
+//# case: block-comment-never-closed
+//# error: UnterminatedComment
+//# diagnostics: 1
+View Main() {
+    Text("a")
+    /* never closed
+}
+
+//# case: block-comment-is-not-inside-a-string
+//# fragment
+//# text: a /* b */ c
+Text("a /* b */ c")
+
+//# case: duration-and-percent-are-not-eaten-by-the-number-error
+//# fragment
+//# text: ok
+Box #[width: 10, height: 10, opacity: 1.0 with anim.linear(200ms)] { Text("ok") }
 
 //# case: float-literal
 //# fragment
@@ -58,7 +105,6 @@ Text("{0.5} {12.25} {3.0}")
 Text("{.5}")
 
 //# case: float-literal-exponent
-//# gap: `1e3` reads as `1` and the rest is dropped
 //# fragment
 //# text: 1000
 Text("{1e3}")
@@ -135,10 +181,21 @@ Text("a-{"b-{"c"}"}")
 Text("a {} b")
 
 //# case: string-interpolation-trailing-junk
-//# gap: what follows the expression inside `{ }` is dropped without a word
 //# fragment
 //# error: UnexpectedToken
 Text("{1 2 3}")
+
+//# case: string-interpolation-trailing-junk-is-one-error
+//# fragment
+//# error: UnexpectedToken
+//# diagnostics: 1
+Text("a {1 2} b")
+
+//# case: string-interpolation-with-a-format-and-a-ternary-still-parses
+//# fragment
+//# text: 1.50 yes
+var on = true
+Text("{1.5:.2} {on ? "yes" : "no"}")
 
 //# case: string-interpolation-unclosed
 //# fragment
@@ -171,10 +228,14 @@ Text("{1234567.891:,} {1234567.891:,.2}")
 Text("{0.125:.2} {2.675:.2}")
 
 //# case: format-too-many-decimals
-//# gap: more than nine decimals is accepted without a word
 //# fragment
 //# error: UnexpectedToken
 Text("{1.0:.10}")
+
+//# case: format-with-nine-decimals-is-fine
+//# fragment
+//# text: 0.500000000
+Text("{0.5:.9}")
 
 //# case: format-on-text-is-ignored
 //# fragment

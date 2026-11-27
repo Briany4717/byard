@@ -6,7 +6,7 @@
 //! compile, so a call written inside it can never be skipped in silence.
 
 use crate::parser::ast::{
-    Arg, Attr, AttrKind, ElementNode, Expr, Member, Param, StrPart, Type, ViewDecl,
+    Arg, Attr, AttrKind, ElementNode, Expr, Member, Param, Pattern, StrPart, Type, ViewDecl,
 };
 
 /// Calls `f` on every expression of `member`, children before parents (a
@@ -38,6 +38,19 @@ pub(crate) fn member_exprs(member: &mut Member, f: &mut dyn FnMut(&mut Expr)) {
             }
             for m in body {
                 member_exprs(m, f);
+            }
+        }
+        Member::Match {
+            scrutinee, arms, ..
+        } => {
+            expr(scrutinee, f);
+            for arm in arms {
+                if let Pattern::Literal(e) = &mut arm.pattern {
+                    expr(e, f);
+                }
+                for m in &mut arm.body {
+                    member_exprs(m, f);
+                }
             }
         }
         Member::When {
@@ -114,8 +127,10 @@ pub(crate) fn expr(e: &mut Expr, f: &mut dyn FnMut(&mut Expr)) {
         Expr::IntLit(..)
         | Expr::FloatLit(..)
         | Expr::AngleLit(..)
+        | Expr::DurationLit(..)
         | Expr::Ident(..)
         | Expr::ClassRef(..)
+        | Expr::Return(_)
         | Expr::Error(_) => {}
         Expr::StrLit(parts, _) => {
             for part in parts {
@@ -139,7 +154,7 @@ pub(crate) fn expr(e: &mut Expr, f: &mut dyn FnMut(&mut Expr)) {
                 member_exprs(m, f);
             }
         }
-        Expr::Member { base, .. } => expr(base, f),
+        Expr::Member { base, .. } | Expr::OptionalMember { base, .. } => expr(base, f),
         Expr::Call { callee, args, .. } => {
             expr(callee, f);
             for a in args {
@@ -173,6 +188,27 @@ pub(crate) fn expr(e: &mut Expr, f: &mut dyn FnMut(&mut Expr)) {
             if let Some(spread) = spread {
                 expr(spread, f);
             }
+        }
+        Expr::Match {
+            scrutinee, arms, ..
+        } => {
+            expr(scrutinee, f);
+            for arm in arms {
+                if let Pattern::Literal(e) = &mut arm.pattern {
+                    expr(e, f);
+                }
+                expr(&mut arm.body, f);
+            }
+        }
+        Expr::MapLit(pairs, _) => {
+            for (k, v) in pairs {
+                expr(k, f);
+                expr(v, f);
+            }
+        }
+        Expr::ForEach { iter, body, .. } => {
+            expr(iter, f);
+            expr(body, f);
         }
         Expr::If {
             cond, then, els, ..
@@ -208,7 +244,9 @@ pub(crate) fn expr(e: &mut Expr, f: &mut dyn FnMut(&mut Expr)) {
             expr(left, f);
             expr(right, f);
         }
-        Expr::KeyframeStep { value, .. } | Expr::Let { value, .. } => expr(value, f),
+        Expr::KeyframeStep { value, .. } | Expr::Let { value, .. } | Expr::Cast { value, .. } => {
+            expr(value, f);
+        }
         Expr::ControllerCall { call, ok, err, .. } => {
             expr(call, f);
             for a in [ok, err].into_iter().flatten() {
@@ -250,7 +288,7 @@ pub(crate) fn expr_types(e: &mut Expr, f: &mut dyn FnMut(&mut Type)) {
                 ty(t, f);
             }
         }
-        Expr::Let { ty: Some(t), .. } => ty(t, f),
+        Expr::Let { ty: Some(t), .. } | Expr::Cast { ty: t, .. } => ty(t, f),
         _ => {}
     }
 }
@@ -264,6 +302,7 @@ pub(crate) fn ty(t: &mut Type, f: &mut dyn FnMut(&mut Type)) {
                 ty(a, f);
             }
         }
+        Type::Optional { inner, .. } => ty(inner, f),
         Type::Function { params, ret, .. } => {
             for p in params {
                 ty(p, f);
@@ -304,6 +343,13 @@ fn declared_types(m: &mut Member, f: &mut dyn FnMut(&mut Type)) {
         Member::For { body, .. } | Member::Route { body, .. } => {
             for c in body {
                 declared_types(c, f);
+            }
+        }
+        Member::Match { arms, .. } => {
+            for arm in arms {
+                for c in &mut arm.body {
+                    declared_types(c, f);
+                }
             }
         }
         Member::When { then, els, .. } => {

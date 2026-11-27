@@ -1,3 +1,7 @@
+// What the air host sends back: the numbers under `current`.
+type AirNow = { us_aqi: Int, pm2_5: Float, pm10: Float, ozone: Float, nitrogen_dioxide: Float }
+type AirReply = { current: AirNow }
+
 // The air: the US AQI on a gauge, what that number means, and the four
 // pollutants behind it. Air quality comes from open-meteo's second host,
 // named `air` under `[http.hosts]` in byard.toml.
@@ -42,11 +46,12 @@ View AirScreen(place: Str, lat: Float, lon: Float) {
         state = "loading"
         http.get("air:/v1/air-quality?latitude={lat}&longitude={lon}&current=us_aqi,pm2_5,pm10,ozone,nitrogen_dioxide&timezone=auto")
             ok res => {
-                aqi = res.json.current.us_aqi
-                pm25 = res.json.current.pm2_5
-                pm10 = res.json.current.pm10
-                ozone = res.json.current.ozone
-                no2 = res.json.current.nitrogen_dioxide
+                let air = res.json as AirReply
+                aqi = air.current.us_aqi
+                pm25 = air.current.pm2_5
+                pm10 = air.current.pm10
+                ozone = air.current.ozone
+                no2 = air.current.nitrogen_dioxide
                 state = "ok"
             }
             err e => {

@@ -45,6 +45,10 @@ pub enum Value {
     Str(String),
     /// `List<T>`.
     List(Vec<Value>),
+    /// `Map<K, V>`: each key with its value, in the order they were added.
+    Map(Vec<(Value, Value)>),
+    /// `Set<T>`: each item once, in the order they were added.
+    Set(Vec<Value>),
     /// A tuple of (optionally named) values, e.g. `(left: 5, bottom: 3)`.
     Tuple(Vec<(Option<Symbol>, Value)>),
     /// A name-keyed, ordered, immutable data record (RFC-0027 §6): the element
@@ -86,6 +90,29 @@ impl Value {
             Self::Bool(b) => b.to_string(),
             Self::Str(s) => s.clone(),
             _ => String::new(),
+        }
+    }
+
+    /// [`Self::to_text`], except that a list shows its items as it is written,
+    /// `[1, 2, 3]`, and a record its fields, `{ name: Ada }`: text inside is
+    /// shown bare and not quoted. What an interpolation writes from edition
+    /// 2027; before that a list or a record wrote nothing.
+    #[must_use]
+    pub fn shown(&self) -> String {
+        match self {
+            Self::List(items) => {
+                let shown: Vec<String> = items.iter().map(Self::shown).collect();
+                format!("[{}]", shown.join(", "))
+            }
+            Self::Record(fields) if fields.is_empty() => "{}".to_string(),
+            Self::Record(fields) => {
+                let shown: Vec<String> = fields
+                    .iter()
+                    .map(|(k, v)| format!("{}: {}", k.as_str(), v.shown()))
+                    .collect();
+                format!("{{ {} }}", shown.join(", "))
+            }
+            other => other.to_text(),
         }
     }
 

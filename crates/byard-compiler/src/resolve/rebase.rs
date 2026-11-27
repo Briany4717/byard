@@ -70,6 +70,11 @@ pub(super) fn shift_enum(decl: &mut EnumDecl, delta: u32) {
     for (_, span) in &mut decl.cases {
         shift(span, delta);
     }
+    for (_, fields) in &mut decl.fields {
+        for (_, ty) in fields {
+            shift_type(ty, delta);
+        }
+    }
 }
 
 /// Rebases a `use` declaration by `delta` bytes.
@@ -92,6 +97,14 @@ fn shift_param(param: &mut Param, delta: u32) {
     }
 }
 
+fn shift_pattern(pattern: &mut crate::parser::ast::Pattern, delta: u32) {
+    use crate::parser::ast::Pattern;
+    match pattern {
+        Pattern::Case { span, .. } | Pattern::Else(span) => shift(span, delta),
+        Pattern::Literal(e) => shift_expr(e, delta),
+    }
+}
+
 pub(super) fn shift_type(ty: &mut Type, delta: u32) {
     match ty {
         Type::Named { args, span, .. } => {
@@ -99,6 +112,10 @@ pub(super) fn shift_type(ty: &mut Type, delta: u32) {
             for arg in args {
                 shift_type(arg, delta);
             }
+        }
+        Type::Optional { inner, span } => {
+            shift(span, delta);
+            shift_type(inner, delta);
         }
         Type::Function { params, ret, span } => {
             shift(span, delta);
@@ -163,6 +180,21 @@ fn shift_member(member: &mut Member, delta: u32) {
             }
             for m in body {
                 shift_member(m, delta);
+            }
+        }
+        Member::Match {
+            scrutinee,
+            arms,
+            span,
+        } => {
+            shift(span, delta);
+            shift_expr(scrutinee, delta);
+            for arm in arms {
+                shift(&mut arm.span, delta);
+                shift_pattern(&mut arm.pattern, delta);
+                for m in &mut arm.body {
+                    shift_member(m, delta);
+                }
             }
         }
         Member::When {
@@ -273,8 +305,10 @@ fn shift_expr(expr: &mut Expr, delta: u32) {
         Expr::IntLit(_, span)
         | Expr::FloatLit(_, span)
         | Expr::AngleLit(_, span)
+        | Expr::DurationLit(_, span)
         | Expr::Ident(_, span)
         | Expr::ClassRef(_, span)
+        | Expr::Return(span)
         | Expr::Error(span) => shift(span, delta),
         Expr::StrLit(parts, span) => {
             shift(span, delta);
@@ -296,7 +330,7 @@ fn shift_expr(expr: &mut Expr, delta: u32) {
                 shift_arg(arg, delta);
             }
         }
-        Expr::Member { base, span, .. } => {
+        Expr::Member { base, span, .. } | Expr::OptionalMember { base, span, .. } => {
             shift(span, delta);
             shift_expr(base, delta);
         }
@@ -368,6 +402,38 @@ fn shift_expr(expr: &mut Expr, delta: u32) {
             if let Some(spread) = spread {
                 shift_expr(spread, delta);
             }
+        }
+        Expr::Match {
+            scrutinee,
+            arms,
+            span,
+        } => {
+            shift(span, delta);
+            shift_expr(scrutinee, delta);
+            for arm in arms {
+                shift(&mut arm.span, delta);
+                shift_pattern(&mut arm.pattern, delta);
+                shift_expr(&mut arm.body, delta);
+            }
+        }
+        Expr::Cast { value, ty, span } => {
+            shift(span, delta);
+            shift_expr(value, delta);
+            shift_type(ty, delta);
+        }
+        Expr::MapLit(pairs, span) => {
+            shift(span, delta);
+            for (k, v) in pairs {
+                shift_expr(k, delta);
+                shift_expr(v, delta);
+            }
+        }
+        Expr::ForEach {
+            iter, body, span, ..
+        } => {
+            shift(span, delta);
+            shift_expr(iter, delta);
+            shift_expr(body, delta);
         }
         Expr::If {
             cond,

@@ -245,9 +245,11 @@ pub(super) fn children(expr: &Expr) -> Vec<&Expr> {
         Expr::IntLit(..)
         | Expr::FloatLit(..)
         | Expr::AngleLit(..)
+        | Expr::DurationLit(..)
         | Expr::Ident(..)
         | Expr::ClassRef(..)
         | Expr::SlotBlock { .. }
+        | Expr::Return(_)
         | Expr::Error(_) => Vec::new(),
         Expr::StrLit(parts, _) => parts
             .iter()
@@ -259,6 +261,7 @@ pub(super) fn children(expr: &Expr) -> Vec<&Expr> {
         Expr::Array(items, _) | Expr::Block(items, _) => items.iter().collect(),
         Expr::Tuple(args, _) => args.iter().map(|a| &a.value).collect(),
         Expr::Member { base, .. }
+        | Expr::OptionalMember { base, .. }
         | Expr::Postfix { target: base, .. }
         | Expr::Unary { rhs: base, .. }
         | Expr::Lambda { body: base, .. }
@@ -286,6 +289,14 @@ pub(super) fn children(expr: &Expr) -> Vec<&Expr> {
         Expr::Ternary {
             cond, then, els, ..
         } => vec![cond.as_ref(), then.as_ref(), els.as_ref()],
+        Expr::Match {
+            scrutinee, arms, ..
+        } => std::iter::once(scrutinee.as_ref())
+            .chain(arms.iter().map(|a| &a.body))
+            .collect(),
+        Expr::ForEach { iter, body, .. } => vec![iter.as_ref(), body.as_ref()],
+        Expr::MapLit(pairs, _) => pairs.iter().flat_map(|(k, v)| [k, v]).collect(),
+        Expr::Cast { value, .. } => vec![value.as_ref()],
         Expr::If {
             cond, then, els, ..
         } => [cond.as_ref(), then.as_ref()]

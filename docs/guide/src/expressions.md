@@ -294,7 +294,7 @@ View Main() {
 ```
 
 ```diagnostic
-error[ConstantCycle]: constants cannot read each other in a circle: gap → pad → gap
+error[ConstantCycle]: constants and `let`s cannot read each other in a circle: gap → pad → gap
 ```
 
 A function may read a constant too, `private` or not (`fn bump(x: Int) -> Int => x + gap`), as it may call

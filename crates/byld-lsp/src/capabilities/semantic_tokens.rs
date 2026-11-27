@@ -269,6 +269,14 @@ fn collect_member_tokens(members: &[Member], out: &mut Vec<RawToken>) {
                 }
                 collect_member_tokens(body, out);
             }
+            Member::Match {
+                scrutinee, arms, ..
+            } => {
+                collect_expr_tokens(scrutinee, out);
+                for arm in arms {
+                    collect_member_tokens(&arm.body, out);
+                }
+            }
             Member::When {
                 cond,
                 then,
@@ -475,7 +483,10 @@ fn collect_expr_tokens(expr: &Expr, out: &mut Vec<RawToken>) {
                 modifiers: 0,
             });
         }
-        Expr::IntLit(_, span) | Expr::FloatLit(_, span) | Expr::AngleLit(_, span) => {
+        Expr::IntLit(_, span)
+        | Expr::FloatLit(_, span)
+        | Expr::AngleLit(_, span)
+        | Expr::DurationLit(_, span) => {
             out.push(RawToken {
                 span: *span,
                 token_type: 6, // NUMBER
@@ -505,7 +516,7 @@ fn collect_expr_tokens(expr: &Expr, out: &mut Vec<RawToken>) {
                 collect_expr_tokens(&arg.value, out);
             }
         }
-        Expr::Member { base, field, span } => {
+        Expr::Member { base, field, span } | Expr::OptionalMember { base, field, span } => {
             collect_expr_tokens(base, out);
             let field_start = span.end as usize - field.as_str().len();
             out.push(RawToken {
@@ -541,6 +552,25 @@ fn collect_expr_tokens(expr: &Expr, out: &mut Vec<RawToken>) {
             collect_expr_tokens(cond, out);
             collect_expr_tokens(then, out);
             collect_expr_tokens(els, out);
+        }
+        Expr::Match {
+            scrutinee, arms, ..
+        } => {
+            collect_expr_tokens(scrutinee, out);
+            for arm in arms {
+                collect_expr_tokens(&arm.body, out);
+            }
+        }
+        Expr::Cast { value, .. } => collect_expr_tokens(value, out),
+        Expr::MapLit(pairs, _) => {
+            for (k, v) in pairs {
+                collect_expr_tokens(k, out);
+                collect_expr_tokens(v, out);
+            }
+        }
+        Expr::ForEach { iter, body, .. } => {
+            collect_expr_tokens(iter, out);
+            collect_expr_tokens(body, out);
         }
         Expr::If {
             cond, then, els, ..
@@ -595,6 +625,6 @@ fn collect_expr_tokens(expr: &Expr, out: &mut Vec<RawToken>) {
             }
         }
         // Nothing was parsed here, so there is nothing to colour.
-        Expr::Error(_) => {}
+        Expr::Return(_) | Expr::Error(_) => {}
     }
 }

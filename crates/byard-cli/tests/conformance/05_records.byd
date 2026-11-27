@@ -1,5 +1,7 @@
 // Records and record types: fields, spread, optional fields, equality.
 
+//# covers: records, record-types, tuples
+
 //# case: literal-and-field
 //# fragment
 //# text: Ada 3
@@ -16,6 +18,7 @@ Text("{v.name} {v.score} {v.on}")
 //# case: spread-does-not-change-the-source
 //# fragment
 //# text: 3
+//# warning: UnusedVariable
 let u = { name: "Ada", score: 3 }
 let v = { ..u, score: 10 }
 Text("{u.score}")
@@ -26,24 +29,31 @@ Text("{u.score}")
 let u = { a: { b: { c: 1 } } }
 Text("{u.a.b.c}")
 
-//# case: missing-field-on-an-untyped-record-is-nothing-today
+//# case: missing-field-on-a-literal-is-an-error-unless-it-has-a-default
 //# fragment
-//# text: [] none
+//# error: UnknownField
+//# diagnostics: 1
 let u = { name: "Ada" }
 Text("[{u.email}] {u.email ?? "none"}")
 
 //# case: missing-field-on-a-literal-is-an-error
-//# gap: a field the literal plainly does not have reads as nothing
 //# fragment
 //# error: UnknownField
 let u = { name: "Ada" }
 Text("{u.nmae}")
 
-//# case: field-of-nothing-is-nothing-today
+//# case: field-of-a-field-the-literal-lacks-is-an-error
 //# fragment
-//# text: []
+//# error: UnknownField
+//# diagnostics: 1
 let u = { a: 1 }
 Text("[{u.x.y.z}]")
+
+//# case: field-of-nothing-with-a-default-is-nothing
+//# fragment
+//# text: 0
+let u = { a: 1 }
+Text("{u.x.y.z ?? 0}")
 
 //# case: declared-type-checks-fields
 //# error: UnknownField
@@ -62,7 +72,6 @@ View Main() {
 }
 
 //# case: declared-type-literal-with-a-wrong-field-type
-//# gap: a literal is not checked against its declared type
 //# error: TypeMismatch
 type P = { name: Str, age: Int }
 View Main() {
@@ -71,7 +80,6 @@ View Main() {
 }
 
 //# case: declared-type-literal-with-an-extra-field
-//# gap: a literal is not checked against its declared type
 //# error: UnknownField
 type P = { name: Str }
 View Main() {
@@ -80,7 +88,6 @@ View Main() {
 }
 
 //# case: declared-type-literal-missing-a-required-field
-//# gap: a literal is not checked against its declared type
 //# error: TypeMismatch
 type P = { name: Str, age: Int }
 View Main() {
@@ -105,13 +112,11 @@ View Main() { Text("x") }
 Text("{ { a: 1, b: 2 } == { a: 1, b: 2 } } { { a: 1 } == { a: 2 } }")
 
 //# case: equality-ignores-field-order
-//# gap: two records with the same fields in another order are not equal
 //# fragment
 //# text: true
 Text("{ { a: 1, b: 2 } == { b: 2, a: 1 } }")
 
 //# case: duplicate-field-in-a-literal
-//# gap: the same field twice is accepted; the last wins silently
 //# fragment
 //# error: DuplicateField
 let u = { a: 1, a: 2 }
@@ -125,7 +130,6 @@ on mount => { u = { ..u, score: 10 } }
 Text("{u.score}")
 
 //# case: field-assignment
-//# gap: `u.score = 10` checks clean and changes nothing
 //# fragment
 //# text: 10
 var u = { name: "Ada", score: 3 }
@@ -133,12 +137,80 @@ on mount => { u.score = 10 }
 Text("{u.score}")
 
 //# case: nested-field-assignment
-//# gap: `u.a.b = 2` checks clean and changes nothing
 //# fragment
 //# text: 2
 var u = { a: { b: 1 } }
 on mount => { u.a.b = 2 }
 Text("{u.a.b}")
+
+//# case: field-assignment-keeps-the-other-fields
+//# fragment
+//# text: Ada 10
+var u = { name: "Ada", score: 3 }
+on mount => { u.score = 10 }
+Text("{u.name} {u.score}")
+
+//# case: field-compound-assignment
+//# fragment
+//# text: 5 | 2
+var u = { score: 3, lives: 3 }
+on mount => { u.score += 2 u.lives-- }
+Text("{u.score}")
+Text("{u.lives}")
+
+//# case: field-increment
+//# fragment
+//# text: 4
+var u = { score: 3 }
+on mount => { u.score++ }
+Text("{u.score}")
+
+//# case: nested-field-assignment-keeps-its-siblings
+//# fragment
+//# text: 2 7
+var u = { a: { b: 1, c: 7 } }
+on mount => { u.a.b = 2 }
+Text("{u.a.b} {u.a.c}")
+
+//# case: field-assignment-of-a-field-that-is-not-there
+//# fragment
+//# error: TypeMismatch
+//# diagnostics: 1
+var u = { name: "Ada" }
+on mount => { u.score = 10 }
+Text("{u.name}")
+
+//# case: field-assignment-of-the-wrong-type
+//# fragment
+//# error: TypeMismatch
+//# diagnostics: 1
+var u = { score: 3 }
+on mount => { u.score = "ten" }
+Text("{u.score}")
+
+//# case: field-assignment-to-a-let
+//# fragment
+//# error: NotAssignable
+//# diagnostics: 1
+let u = { score: 3 }
+on mount => { u.score = 10 }
+Text("{u.score}")
+
+//# case: field-assignment-reaches-a-declared-record
+//# text: 7
+type Player = { name: Str, score: Int }
+View Main() {
+    var p: Player = { name: "Ada", score: 1 }
+    on mount => { p.score = 7 }
+    Text("{p.score}")
+}
+
+//# case: index-assignment
+//# fragment
+//# text: 9
+var xs = [1, 2]
+on mount => { xs[0] = 9 }
+Text("{xs[0]}")
 
 //# case: tuple-named-and-positional
 //# fragment
@@ -154,5 +226,75 @@ Text("{r.xs.len} {r.names[1]}")
 //# case: empty-braces-are-an-action-not-a-record
 //# fragment
 //# text: ok
+//# warning: UnusedVariable
 let nothing = {}
 Text("ok")
+
+//# case: spread-keeps-the-fields-of-what-it-spreads
+//# fragment
+//# text: Ada 2
+let a = { name: "Ada", score: 1 }
+let b = { ..a, score: 2 }
+Text("{b.name} {b.score}")
+
+//# case: spread-record-misspelt-field
+//# fragment
+//# error: UnknownField
+//# diagnostics: 1
+let a = { name: "Ada", score: 1 }
+let b = { ..a, score: 2 }
+Text("{b.nmae}")
+
+//# case: declared-type-literal-may-leave-an-optional-field-out
+//# text: a
+type P = { name: Str, note: Str? }
+View Main() {
+    var p: P = { name: "a" }
+    Text(p.name)
+}
+
+//# case: declared-type-literal-with-a-spread-needs-no-other-fields
+//# text: b
+type P = { name: Str, age: Int }
+View Main() {
+    var p: P = { name: "a", age: 1 }
+    on mount => { p = { ..p, name: "b" } }
+    Text(p.name)
+}
+
+//# case: declared-type-list-item-of-the-wrong-type
+//# error: TypeMismatch
+//# diagnostics: 1
+type P = { name: Str }
+View Main() {
+    var ps: List<P> = [{ name: "a" }, { name: 2 }]
+    Text("{ps.len}")
+}
+
+//# case: literal-assigned-another-set-of-fields-is-an-error
+//# fragment
+//# error: TypeMismatch
+//# diagnostics: 1
+var u = { name: "a" }
+on mount => { u = { name: "a", extra: 1 } }
+Text(u.name)
+
+//# case: records-with-other-fields-are-not-equal
+//# fragment
+//# text: false false
+Text("{ { a: 1 } == { a: 2 } } { { a: 1, b: 2 } == { a: 1, c: 2 } }")
+
+//# case: loop-variable-over-a-list-of-literals-has-its-fields
+//# fragment
+//# error: UnknownField
+//# diagnostics: 1
+let ps = [{ name: "a" }, { name: "b" }]
+for p in ps {
+    Text(p.nmae)
+}
+
+//# case: lambda-over-a-list-of-literals-reads-its-fields
+//# fragment
+//# text: a,b
+let ps = [{ name: "a" }, { name: "b" }]
+Text("{ps.map(p => p.name).join(",")}")

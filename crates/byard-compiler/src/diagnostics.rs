@@ -71,6 +71,11 @@ pub enum CompileError {
         /// Source range at the point the limit was exceeded.
         span: Span,
     },
+    /// A `/*` comment was opened but never closed before end of input.
+    UnterminatedComment {
+        /// Source range of the `/*` and everything after it.
+        span: Span,
+    },
     /// A string literal was opened but never closed before end of input.
     UnterminatedString {
         /// Source range of the offending string literal.
@@ -579,6 +584,8 @@ pub enum CompileError {
     /// A named argument at a user-`View` call site does not match any declared
     /// parameter (RFC-0007 §6); `hint` carries a Levenshtein "did you mean …?".
     UnknownParam {
+        /// Whether the callee is a `fn` rather than a view.
+        function: bool,
         /// Source range of the argument.
         span: Span,
         /// The unknown parameter name.
@@ -591,6 +598,8 @@ pub enum CompileError {
     /// A required callee parameter (no default) received no argument at the call
     /// site (RFC-0007 §6, interacts with D-B defaults).
     MissingParam {
+        /// Whether the callee is a `fn` rather than a view.
+        function: bool,
         /// Source range of the call site.
         span: Span,
         /// The missing parameter name.
@@ -601,12 +610,18 @@ pub enum CompileError {
     /// The same callee parameter was bound twice, positional + named, or named
     /// twice (RFC-0007 §6).
     DuplicateParam {
-        /// Source range of the offending argument.
+        /// Whether the callee is a `fn` rather than a view.
+        function: bool,
+        /// Source range of the offending argument, or of the second
+        /// parameter when `declared`.
         span: Span,
         /// The doubly-bound parameter name.
         name: String,
         /// The callee view name.
         callee: String,
+        /// Whether the view declares the parameter twice, rather than a call
+        /// binding it twice.
+        declared: bool,
     },
     /// A user-view call carries an action the view cannot receive: a trailing
     /// `=> action`, or an event handler in its `#[...]`. A view's behaviour
@@ -753,6 +768,9 @@ pub enum CompileError {
         first: String,
         /// The second origin.
         second: String,
+        /// Whether both bindings are in one view (a `var`, a `let`, a
+        /// parameter), rather than two imports.
+        local: bool,
     },
     /// The package dependency graph contains a cycle (RFC-0008 Pillar A,
     /// module-graph cycle detection, one level above RFC-0007 §4's intra-file
@@ -1025,6 +1043,90 @@ pub enum CompileError {
         /// The closest field the type has, if any.
         hint: Option<String>,
     },
+    /// A record literal writes one field twice: `{ a: 1, a: 2 }`.
+    DuplicateField {
+        /// Source range of the second value.
+        span: Span,
+        /// The field.
+        name: String,
+    },
+    /// `x / 0` or `x % 0`, with the zero written: the answer is 0, which is
+    /// almost never what was meant. A warning: a divisor that is only zero while
+    /// the program runs stays 0, as it was.
+    DivisionByZero {
+        /// Source range of the operation.
+        span: Span,
+        /// `/` or `%`.
+        op: String,
+    },
+    /// An index written as a number that no item of the list written beside it
+    /// has: `xs[5]` where `xs` is a `let` of one item. Reads as nothing. A
+    /// warning.
+    IndexOutOfRange {
+        /// Source range of the index expression.
+        span: Span,
+        /// The index.
+        index: i64,
+        /// How many items the list has.
+        len: usize,
+    },
+    /// A `match` that leaves a case out, or a chain of `when`s over an enum that
+    /// does (a warning there). Naming the cases it forgets is the reason to
+    /// have `match`.
+    NonExhaustive {
+        /// Source range of the `match`, or of the first `when` of the chain.
+        span: Span,
+        /// What no arm is for: the cases, or `else` for a value that is not an enum.
+        missing: Vec<String>,
+        /// Whether it is a chain of `when`s (a warning) and not a `match`.
+        chain: bool,
+    },
+    /// An element's `#[ … ]` writes one attribute twice: `#[size: 12, size: 14]`.
+    DuplicateAttribute {
+        /// Source range of the second one.
+        span: Span,
+        /// The attribute, with its axis when it has one (`translate.y`).
+        name: String,
+    },
+    /// A `var` or `let` that nothing reads. A warning, `unused-variable` in
+    /// `[lints]`.
+    UnusedVariable {
+        /// Source range of the declaration.
+        span: Span,
+        /// The name.
+        name: String,
+        /// `var` or `let`.
+        keyword: String,
+    },
+    /// A parameter that its view never reads. A warning, `unused-parameter` in
+    /// `[lints]`.
+    UnusedParam {
+        /// Source range of the parameter.
+        span: Span,
+        /// The name.
+        name: String,
+        /// The view it belongs to.
+        view: String,
+    },
+    /// A field read of what a controller replied, whose shape nothing has
+    /// checked: `res.json.nmae`. A warning, `untyped-reply` in `[lints]`; the
+    /// fix is `res.json as Forecast`, after which a misspelt field is an error.
+    UntypedReply {
+        /// Source range of the read.
+        span: Span,
+        /// The name the reply is bound to.
+        reply: String,
+        /// The field read.
+        field: String,
+    },
+    /// A `private View` that nothing in its package draws. A warning,
+    /// `unused-view` in `[lints]`.
+    UnusedView {
+        /// Source range of the view's name.
+        span: Span,
+        /// The view.
+        name: String,
+    },
     /// An expression read a name nothing declares: a misspelt `var`, a
     /// parameter that was renamed. At runtime such a name is its own text,
     /// which is how an enum word like `center` works and why a typo in a
@@ -1290,8 +1392,10 @@ pub enum CompileError {
     /// A `let` written inside an element's braces. A `let` goes at the top of the
     /// view, or inside a `when` or `for` body.
     LetInElementBody {
-        /// Source range of the `let`.
+        /// Source range of the `let` or `var`.
         span: Span,
+        /// `let` or `var`.
+        keyword: String,
         /// The name it declares.
         name: String,
         /// The element it is in.
@@ -1486,6 +1590,13 @@ pub enum CompileError {
         /// The closest context the program declares, if any.
         hint: Option<String>,
     },
+    /// `provide` of a `store`, which has the one instance the program has.
+    StoreProvided {
+        /// Source range of the `provide`.
+        span: Span,
+        /// The store.
+        name: String,
+    },
     /// A type was written that is not built in and that nothing in the
     /// program declares: `Qux`, or `Map<Str, Int>`.
     UnknownType {
@@ -1574,6 +1685,7 @@ impl CompileError {
             | Self::UnexpectedToken { span, .. }
             | Self::StringNestingTooDeep { span }
             | Self::UnterminatedString { span }
+            | Self::UnterminatedComment { span }
             | Self::MissingAnnotation { span, .. }
             | Self::CannotInfer { span }
             | Self::TextUsedAsType { span }
@@ -1685,6 +1797,7 @@ impl CompileError {
             | Self::NoneNotHandled { span, .. }
             | Self::DuplicateProvide { span, .. }
             | Self::UnknownContext { span, .. }
+            | Self::StoreProvided { span, .. }
             | Self::UnknownType { span, .. }
             | Self::ContextFieldNeedsDefault { span, .. }
             | Self::MisplacedProvide { span, .. }
@@ -1714,6 +1827,15 @@ impl CompileError {
             | Self::UnknownEnumCase { span, .. }
             | Self::EnumShorthand { span, .. }
             | Self::UnknownField { span, .. }
+            | Self::DuplicateField { span, .. }
+            | Self::DuplicateAttribute { span, .. }
+            | Self::NonExhaustive { span, .. }
+            | Self::DivisionByZero { span, .. }
+            | Self::IndexOutOfRange { span, .. }
+            | Self::UnusedVariable { span, .. }
+            | Self::UnusedParam { span, .. }
+            | Self::UnusedView { span, .. }
+            | Self::UntypedReply { span, .. }
             | Self::ShapeMismatch { span, .. } => *span,
         }
     }
@@ -1728,6 +1850,7 @@ impl CompileError {
             | Self::UnexpectedToken { span, .. }
             | Self::StringNestingTooDeep { span }
             | Self::UnterminatedString { span }
+            | Self::UnterminatedComment { span }
             | Self::MissingAnnotation { span, .. }
             | Self::CannotInfer { span }
             | Self::TextUsedAsType { span }
@@ -1839,6 +1962,7 @@ impl CompileError {
             | Self::NoneNotHandled { span, .. }
             | Self::DuplicateProvide { span, .. }
             | Self::UnknownContext { span, .. }
+            | Self::StoreProvided { span, .. }
             | Self::UnknownType { span, .. }
             | Self::ContextFieldNeedsDefault { span, .. }
             | Self::MisplacedProvide { span, .. }
@@ -1868,6 +1992,15 @@ impl CompileError {
             | Self::UnknownEnumCase { span, .. }
             | Self::EnumShorthand { span, .. }
             | Self::UnknownField { span, .. }
+            | Self::DuplicateField { span, .. }
+            | Self::DuplicateAttribute { span, .. }
+            | Self::NonExhaustive { span, .. }
+            | Self::DivisionByZero { span, .. }
+            | Self::IndexOutOfRange { span, .. }
+            | Self::UnusedVariable { span, .. }
+            | Self::UnusedParam { span, .. }
+            | Self::UnusedView { span, .. }
+            | Self::UntypedReply { span, .. }
             | Self::ShapeMismatch { span, .. } => {
                 span.start = (i64::from(span.start) + delta).max(0) as u32;
                 span.end = (i64::from(span.end) + delta).max(0) as u32;
@@ -1884,6 +2017,7 @@ impl CompileError {
             Self::UnexpectedToken { .. } => "UnexpectedToken",
             Self::StringNestingTooDeep { .. } => "StringNestingTooDeep",
             Self::UnterminatedString { .. } => "UnterminatedString",
+            Self::UnterminatedComment { .. } => "UnterminatedComment",
             Self::MissingAnnotation { .. } => "MissingAnnotation",
             Self::CannotInfer { .. } => "CannotInfer",
             Self::TextUsedAsType { .. } => "TextUsedAsType",
@@ -1995,6 +2129,8 @@ impl CompileError {
             Self::NoneNotHandled { .. } => "NoneNotHandled",
             Self::DuplicateProvide { .. } => "DuplicateProvide",
             Self::UnknownContext { .. } => "UnknownContext",
+            Self::StoreProvided { .. } => "StoreProvided",
+            Self::DuplicateField { .. } => "DuplicateField",
             Self::UnknownType { .. } => "UnknownType",
             Self::ContextFieldNeedsDefault { .. } => "ContextFieldNeedsDefault",
             Self::MisplacedProvide { .. } => "MisplacedProvide",
@@ -2025,6 +2161,14 @@ impl CompileError {
             Self::EnumShorthand { .. } => "EnumShorthand",
             Self::ShapeMismatch { .. } => "ShapeMismatch",
             Self::UnknownField { .. } => "UnknownField",
+            Self::DuplicateAttribute { .. } => "DuplicateAttribute",
+            Self::NonExhaustive { .. } => "NonExhaustive",
+            Self::DivisionByZero { .. } => "DivisionByZero",
+            Self::IndexOutOfRange { .. } => "IndexOutOfRange",
+            Self::UnusedVariable { .. } => "UnusedVariable",
+            Self::UnusedParam { .. } => "UnusedParam",
+            Self::UnusedView { .. } => "UnusedView",
+            Self::UntypedReply { .. } => "UntypedReply",
         }
     }
 
@@ -2053,6 +2197,13 @@ impl CompileError {
                 | Self::PanelTakesNoKeys { .. }
                 | Self::SizeOnStretchedAxis { .. }
                 | Self::RecreatesSurface { .. }
+                | Self::NonExhaustive { chain: true, .. }
+                | Self::DivisionByZero { .. }
+                | Self::IndexOutOfRange { .. }
+                | Self::UnusedVariable { .. }
+                | Self::UnusedParam { .. }
+                | Self::UnusedView { .. }
+                | Self::UntypedReply { .. }
         )
     }
 
@@ -2068,6 +2219,9 @@ impl CompileError {
                 "string interpolation nested deeper than 3 levels".to_string()
             }
             Self::UnterminatedString { .. } => "unterminated string literal".to_string(),
+            Self::UnterminatedComment { .. } => {
+                "this `/*` comment is never closed: end it with `*/`".to_string()
+            }
             Self::MissingAnnotation { what, .. } => {
                 format!("missing type annotation on {what}")
             }
@@ -2101,8 +2255,8 @@ impl CompileError {
                  rather than the signal holding it"
             ),
             Self::EffectInPureContext { context, .. } => format!(
-                "a controller call is an effect and cannot appear in {context}; \
-                 call it from an action and write the result to a `var`"
+                "an effect (a controller call, an assignment, `++`) cannot appear in {context}; \
+                 do it from an action, and write what it gives to a `var`"
             ),
             Self::ClockOutsideAction { name, .. } => format!(
                 "`{name}()` reads the clock once, when an action runs; to show the time, \
@@ -2118,7 +2272,10 @@ impl CompileError {
             Self::ReservedControllerName { name, .. } => {
                 format!("`{name}` is a built-in capability and cannot be provided by an app")
             }
-            Self::NotAssignable { .. } => "this is not an assignable `var`".to_string(),
+            Self::NotAssignable { .. } => "this cannot be written to: only a `var`, or a `bind` \
+                 parameter, can be assigned, not a `let`, a parameter, a loop variable or a \
+                 literal"
+                .to_string(),
             Self::UnknownThemeToken {
                 field,
                 declared_by: Some(package),
@@ -2405,6 +2562,12 @@ impl CompileError {
             }
             Self::NotAnimatable {
                 prop, use_instead, ..
+            } if use_instead.is_empty() => format!(
+                "a `with` curve only moves an attribute's value, so on `{prop}` it does nothing: \
+                 write it on the attribute that shows it, as in `#[opacity: {prop} with anim.spring()]`"
+            ),
+            Self::NotAnimatable {
+                prop, use_instead, ..
             } => {
                 format!(
                     "`{prop}` has no value between one step and the next, so it                      cannot be animated; use `{use_instead}` to change shape over time"
@@ -2448,6 +2611,25 @@ impl CompileError {
                 "view `{name}` declares {expected} parameter(s), found {found} positional argument(s)"
             ),
             Self::UnknownParam {
+                name,
+                callee,
+                hint,
+                function: true,
+                ..
+            } => with_hint(
+                format!("function `{callee}` has no parameter `{name}`"),
+                hint.as_deref(),
+            ),
+            Self::UnknownParam {
+                name, callee, hint, ..
+            } if crate::interp::intrinsics::lookup(callee).is_some() => with_hint(
+                format!(
+                    "`{callee}` has no argument `{name}`: its attributes go in `#[ … ]`, as in \
+                     `{callee}(…) #[{name}: …]`"
+                ),
+                hint.as_deref(),
+            ),
+            Self::UnknownParam {
                 name, callee, hint, ..
             } => format!(
                 "{}; a view call also takes the layout attributes {}",
@@ -2457,9 +2639,32 @@ impl CompileError {
                 ),
                 crate::interp::intrinsics::VIEW_CALL_LAYOUT.join(", ")
             ),
+            Self::MissingParam {
+                name,
+                callee,
+                function: true,
+                ..
+            } => format!("missing argument `{name}` for function `{callee}`"),
             Self::MissingParam { name, callee, .. } => {
                 format!("missing required argument `{name}` for view `{callee}`")
             }
+            Self::DuplicateParam {
+                name,
+                callee,
+                declared: true,
+                ..
+            } => {
+                format!(
+                    "view `{callee}` declares the parameter `{name}` more than once: rename or \
+                     remove one of them"
+                )
+            }
+            Self::DuplicateParam {
+                name,
+                callee,
+                function: true,
+                ..
+            } => format!("parameter `{name}` of function `{callee}` is given more than once"),
             Self::DuplicateParam { name, callee, .. } => {
                 format!("parameter `{name}` of view `{callee}` is bound more than once")
             }
@@ -2473,6 +2678,12 @@ impl CompileError {
                     Some(e) => format!("takes no `{e}` handler"),
                     None => "takes no trailing action".to_string(),
                 };
+                if crate::interp::intrinsics::lookup(callee).is_some() {
+                    return format!(
+                        "`{callee}` cannot be pressed, so `=> action` after it would never run: \
+                         use a `Button`, or put the action on a `Box` or `Row` as `#[tap => …]`"
+                    );
+                }
                 match callback {
                     Some(cb) => format!("`{callee}` {what}; pass it as `{cb}: {{ … }}`"),
                     None => format!(
@@ -2533,6 +2744,16 @@ impl CompileError {
             } => with_hint(
                 format!("package `{package}` does not export a view `{name}`"),
                 hint.as_deref(),
+            ),
+            Self::NameCollision {
+                name,
+                first,
+                second,
+                local: true,
+                ..
+            } => format!(
+                "`{name}` is declared twice in this view, as {first} and as {second}: the \
+                 second would hide the first, so give one of them another name"
             ),
             Self::NameCollision {
                 name,
@@ -2737,10 +2958,24 @@ impl CompileError {
                 ),
                 hint.as_deref(),
             ),
-            Self::LetInElementBody { name, element, .. } => format!(
-                "`let {name}` is written inside `{element}`, where it would be ignored: put it \
-                 at the top of the view, or inside a `when` or `for` body"
-            ),
+            Self::LetInElementBody {
+                keyword,
+                name,
+                element,
+                ..
+            } => {
+                if keyword == "var" {
+                    format!(
+                        "`var {name}` is written inside `{element}`, where it would not be a \
+                         variable: put it at the top of the view"
+                    )
+                } else {
+                    format!(
+                        "`let {name}` is written inside `{element}`, where it would be ignored: \
+                         put it at the top of the view, or inside a `when` or `for` body"
+                    )
+                }
+            }
             Self::UnknownStateTarget { name, hint, .. } => with_hint(
                 format!(
                     "no element in this view is tagged `as {name}`: tag the element \
@@ -2756,6 +2991,10 @@ impl CompileError {
             Self::DuplicateProvide { name, .. } => format!(
                 "this view already provides `{name}`: write one `provide {name}(…)` with every \
                  field you set"
+            ),
+            Self::StoreProvided { name, .. } => format!(
+                "`{name}` is a `store`: the program has one of it, which a view reads and writes \
+                 with `inject {name} as …`, so there is nothing to provide: delete the `provide`"
             ),
             Self::UnknownContext { name, hint, .. } => with_hint(
                 format!(
@@ -2846,6 +3085,18 @@ impl CompileError {
                     "`{op}` takes a number and keeps it in a number, and a `{rhs_ty}` does not fit a `{lhs_ty}`"
                 ),
                 "++" | "--" => format!("`{op}` needs a number, and this is a `{lhs_ty}`"),
+                "cond" => format!(
+                    "a condition is a `Bool`, and this is a `{lhs_ty}`: compare it, as in `x != 0`"
+                ),
+                "for" => format!(
+                    "`for` goes over a list, and this is a `{lhs_ty}`: write a list, or `List<…>` of what it holds"
+                ),
+                "?:" => format!(
+                    "the two arms of `? :` are of one type, and these are a `{lhs_ty}` and a `{rhs_ty}`"
+                ),
+                "&&" | "||" | "!" if lhs_ty == rhs_ty => format!(
+                    "`{op}` takes `Bool`s, and this is a `{lhs_ty}`: compare it, as in `x != 0`"
+                ),
                 "()" => format!(
                     "this is a `{lhs_ty}`, not a function: only a `fn`, a named action or a callback can be called"
                 ),
@@ -2893,7 +3144,7 @@ impl CompileError {
                 format!("enum `{enum_name}` lists the case `{name}` more than once")
             }
             Self::ConstantCycle { path, .. } => {
-                format!("constants cannot read each other in a circle: {path}")
+                format!("constants and `let`s cannot read each other in a circle: {path}")
             }
             Self::ImpureConstant { name, .. } => format!(
                 "constant `{name}` must be pure: it may read only other constants and call \
@@ -2932,6 +3183,62 @@ impl CompileError {
             } => with_hint(
                 format!("a `{record}` has no field `{name}`"),
                 hint.as_deref(),
+            ),
+            Self::DuplicateField { name, .. } => format!(
+                "this record writes `{name}` twice: the last one wins, so remove the one that does not count"
+            ),
+            Self::NonExhaustive { missing, chain, .. } => {
+                let names = missing
+                    .iter()
+                    .map(|m| {
+                        if m == "else" {
+                            "`else =>`".to_string()
+                        } else {
+                            format!("`.{m}`")
+                        }
+                    })
+                    .collect::<Vec<_>>()
+                    .join(", ");
+                if *chain {
+                    format!(
+                        "this chain of `when`s leaves out {names}, and so draws nothing for \
+                         them: write them, end with `else {{ … }}`, or use `match`, which names \
+                         what is missing"
+                    )
+                } else {
+                    format!(
+                        "this `match` leaves out {names}: write an arm for each, or end with \
+                         `else => …` for the rest"
+                    )
+                }
+            }
+            Self::DuplicateAttribute { name, .. } => format!(
+                "`{name}` is written twice in this `#[ … ]`: the last one wins, so remove the one \
+                 that does not count"
+            ),
+            Self::DivisionByZero { op, .. } => format!(
+                "`{op} 0` answers 0, since a number cannot be divided by nothing: check the divisor \
+                 before dividing, as in `d != 0 ? n / d : 0`"
+            ),
+            Self::IndexOutOfRange { index, len, .. } => format!(
+                "index {index} is not in a list of {len} item(s), so this reads as nothing: use \
+                 `xs[i] ?? fallback`, or check `xs.len` first"
+            ),
+            Self::UnusedVariable { name, keyword, .. } => format!(
+                "`{keyword} {name}` is never read: use it, delete it, or start its name with `_` \
+                 to say it is meant to be unused"
+            ),
+            Self::UnusedParam { name, view, .. } => format!(
+                "parameter `{name}` of view `{view}` is never read: use it, delete it, or start \
+                 its name with `_` to say it is meant to be unused"
+            ),
+            Self::UnusedView { name, .. } => {
+                format!("`private View {name}` is never drawn: use it, or delete it")
+            }
+            Self::UntypedReply { reply, field, .. } => format!(
+                "`{field}` is read from `{reply}`, whose shape nothing checks: write \
+                 `{reply} as Type` with the `type` the reply should have, and a field it lacks \
+                 is an error here and not a nothing later"
             ),
             Self::UnknownName { name, hint, .. } => {
                 with_hint(format!("nothing here is named `{name}`"), hint.as_deref())

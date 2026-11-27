@@ -15,7 +15,7 @@ So every step below ends the same way: **its cases lose their `gap:` line, the r
 loses its note, and this file loses the step.** When this file is empty and the suite has no
 gap, the language is where this document wanted it.
 
-As written, the suite has 793 cases: 786 hold and 7 are gaps.
+As written, the suite has 814 cases: 809 hold and 5 are gaps.
 
 ```sh
 cargo test -p byard-cli --test it conformance -- --nocapture
@@ -230,10 +230,17 @@ so do the twenty-two cases added with them. What stays open:
 
 ### 18. Types for what is an `Int` today
 
-*Cases:* `colour-type-shows-as-a-colour`, `duration-type-keeps-its-unit` **(edition)**.
+*Done, in edition 2027.* `colour-type-shows-as-a-colour` and `duration-type-keeps-its-unit` hold
+with `//# edition: 2027`, and so do the twenty-one cases added with them; the baseline edition
+is as it was (`colour-is-still-a-number-before-2027`). What stays open:
 
-`Color`, `Duration` and `Angle` as types of their own. `0xFF0000 + 200ms` stops meaning
-something.
+- `Color.mix`, `Color.lighten` and `Color.rgb(r, g, b)` from the proposal, and a colour
+  written as `#3B82F6`. `alpha` is the one method a `Color` has.
+- A colour is still told apart from an `Int` only by the type written for it: `0xFF0000` is
+  a number until it is given to a `Color`. A text shows it as a colour only where the checker
+  knows the type, so a colour that went through a function or a list of `Unknown` shows as a
+  number.
+- `byard fix` writes nothing for this change: no rewrite can tell which `Int` was a colour.
 
 ### 19. Data from outside, with a type
 

@@ -245,6 +245,7 @@ pub(super) fn children(expr: &Expr) -> Vec<&Expr> {
         Expr::IntLit(..)
         | Expr::FloatLit(..)
         | Expr::AngleLit(..)
+        | Expr::DurationLit(..)
         | Expr::Ident(..)
         | Expr::ClassRef(..)
         | Expr::SlotBlock { .. }

@@ -483,7 +483,10 @@ fn collect_expr_tokens(expr: &Expr, out: &mut Vec<RawToken>) {
                 modifiers: 0,
             });
         }
-        Expr::IntLit(_, span) | Expr::FloatLit(_, span) | Expr::AngleLit(_, span) => {
+        Expr::IntLit(_, span)
+        | Expr::FloatLit(_, span)
+        | Expr::AngleLit(_, span)
+        | Expr::DurationLit(_, span) => {
             out.push(RawToken {
                 span: *span,
                 token_type: 6, // NUMBER

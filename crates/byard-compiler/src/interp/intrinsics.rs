@@ -1986,6 +1986,7 @@ fn animated_anywhere(value: &Expr) -> bool {
         Expr::IntLit(..)
         | Expr::FloatLit(..)
         | Expr::AngleLit(..)
+        | Expr::DurationLit(..)
         | Expr::StrLit(..)
         | Expr::Ident(..)
         | Expr::ClassRef(..)

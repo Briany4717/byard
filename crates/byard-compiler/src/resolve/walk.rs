@@ -127,6 +127,7 @@ pub(crate) fn expr(e: &mut Expr, f: &mut dyn FnMut(&mut Expr)) {
         Expr::IntLit(..)
         | Expr::FloatLit(..)
         | Expr::AngleLit(..)
+        | Expr::DurationLit(..)
         | Expr::Ident(..)
         | Expr::ClassRef(..)
         | Expr::Return(_)

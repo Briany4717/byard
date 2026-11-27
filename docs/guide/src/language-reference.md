@@ -69,8 +69,8 @@ Text("{on} {key} {type}")
 | Fraction | `0.5`, `12.25`, `1e3`, `1.5e-3` | A `Float`. Digits on both sides of the point: `.5` and `5.` are errors. With an exponent it is a `Float` even when it is whole. |
 | Truth | `true`, `false` | A `Bool`. |
 | Text | `"hello"` | A `Str`. |
-| Angle | `90deg`, `1.5rad` | A `Float`, in radians. |
-| Duration | `200ms`, `1.4s`, `5min` | An `Int`, in milliseconds: `1.4s` is `1400`. |
+| Angle | `90deg`, `1.5rad` | A `Float`, in radians. From edition 2027 an `Angle`. |
+| Duration | `200ms`, `1.4s`, `5min` | An `Int`, in milliseconds: `1.4s` is `1400`. From edition 2027 a `Duration`. |
 | Percentage | `50%` | Only as a step of `anim.keyframes`. |
 | Nothing | `none` | Only for an optional parameter. See [optional values](#optional-values). |
 
@@ -138,7 +138,7 @@ What follows the expression inside the braces is `UnexpectedToken`: `"{1 2 3}"` 
 
 | Type | Holds |
 |------|-------|
-| `Int` | A whole number. A colour is an `Int`, and `Color` is another name for it. |
+| `Int` | A whole number. A colour is an `Int`, and `Color` is another name for it. From edition 2027 `Color`, `Duration` and `Angle` are types of their own: see [colours, durations and angles](#colours-durations-and-angles). |
 | `Float` | A number with a fraction |
 | `Str` | Text |
 | `Bool` | `true` or `false` |
@@ -235,7 +235,9 @@ What a value looks like in a text, `"{x}"`, and joined to one with `+`:
 
 A list is also shown with `join`. See [lists](#lists).
 
-> **Not yet.** A colour is shown as its number. (`15_wanted_for_1_0.byd`)
+From edition 2027 a `Color` is shown as `#RRGGBB` (`#RRGGBBAA` with an alpha), a `Duration`
+as its milliseconds, `200ms`, and an `Angle` in degrees, `90deg`. Before, each is the number it
+is.
 
 ## Expressions
 
@@ -472,6 +474,31 @@ To a controller a set is the list of its items and a map the list of its `{ key,
 
 > **Not yet.** A lookup in a map or a set is a search through what was added, not a hash, so
 > it is as slow as `find`. (`04_lists.byd`)
+
+### Colours, durations and angles
+
+From edition 2027 a colour, a length of time and an angle are not numbers. The literals read
+the same, `0xFF0000`, `200ms` and `90deg`, and a number written for a `Color` is a colour, but
+the arithmetic that never meant anything is an error (`TypeMismatch`):
+
+```byld,fragment,edition2027
+let brand: Color = 0x3B82F6
+let wait: Duration = 300ms
+let turn: Angle = 90deg
+Text("{brand} {brand.alpha(0.5)} {wait * 2} {wait + 1s} {turn * 2}")
+```
+
+That draws `#3B82F6 #3B82F680 600ms 1300ms 180deg`. A `Duration` adds to and subtracts from a
+`Duration` and is multiplied and divided by a number (`200ms * n`, `n * 200ms`, `200ms / 2`),
+and a `Duration` divided by a `Duration` is a `Float`; it compares with a `Duration`. An
+`Angle` does the same. A `Color` has no arithmetic and is compared with `==` and `!=`, to a
+`Color` or to its number. `300ms + 1` and `0xFF0000 + 200ms` are errors, and a `Duration`
+does not go where an `Int` is wanted (`ArgumentTypeMismatch`). A `Color` does go where an
+`Int` does, as a number written for one does. A duration still means milliseconds everywhere
+that reads one (`every 1s`, `after 300ms`, `anim.easeInOut(300ms)`).
+
+Before edition 2027, `Color` is another name for `Int` and `Duration` and `Angle` are not
+types (`UnknownType`).
 
 ### A value or a default: `??`
 
@@ -1163,12 +1190,12 @@ error that lists the ones it does. A library package names its edition under `[p
 sources so they mean what they meant, through the formatter, and then writes the new edition
 into the manifest.
 
-Today `2027` differs from `2026` in four things: `? :` is looser than `||`, an `Int` that
+Today `2027` differs from `2026` in five things: `? :` is looser than `||`, an `Int` that
 overflows stops at the largest or the smallest instead of wrapping, a character of a text is a
-grapheme cluster and not a code point, and a list or a record in a text shows its contents
-instead of nothing. `byard fix` writes the parentheses that keep the first one's meaning. For
-the other three no rewrite can tell which programs relied on the old behaviour, so it changes
-no source. The other changes marked *(edition)* in
+grapheme cluster and not a code point, a list or a record in a text shows its contents
+instead of nothing, and `Color`, `Duration` and `Angle` are types of their own. `byard fix`
+writes the parentheses that keep the first one's meaning. For the other four no rewrite can tell
+which programs relied on the old behaviour, so it changes no source. The other changes marked *(edition)* in
 [the roadmap](https://github.com/Briany4717/byard/blob/main/docs/language/roadmap.md) will land
 in `2027` too.
 

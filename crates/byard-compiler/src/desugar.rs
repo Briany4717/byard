@@ -18,6 +18,7 @@ use std::collections::HashMap;
 use std::sync::Arc;
 
 use crate::diagnostics::Span;
+use crate::infer::Shown;
 use crate::parser::ast::{
     Arm, BinOp, ConstDecl, EnumDecl, Expr, FnDecl, Member, Pattern, StrPart, ViewDecl,
 };
@@ -26,9 +27,10 @@ use crate::symbol::Symbol;
 
 /// Rewrites every `match` of `views`, and of the functions and constants they
 /// share, as the chain it means.
-pub(crate) fn matches(views: &mut [ViewDecl], map_loops: &[Span]) {
+pub(crate) fn matches(views: &mut [ViewDecl], map_loops: &[Span], shown: &[(Span, Shown)]) {
     let mut enums = Enums::of(views.first().map(|v| &v.enums[..]).unwrap_or_default());
     enums.map_loops = map_loops.iter().map(|s| (s.start, s.end)).collect();
+    enums.shown = shown.iter().map(|(s, k)| ((s.start, s.end), *k)).collect();
     let (mut helpers, mut consts): (Vec<FnDecl>, Vec<ConstDecl>) = views
         .first()
         .map(|v| ((*v.helpers).clone(), (*v.consts).clone()))
@@ -65,6 +67,40 @@ fn in_expr(expr: &mut Expr, enums: &Enums) {
 }
 
 fn rewrite(e: &mut Expr, enums: &Enums) {
+    // `200ms` is its count of milliseconds from here on.
+    if let Expr::DurationLit(ms, span) = e {
+        *e = Expr::IntLit(*ms, *span);
+        return;
+    }
+    // What a text shows of a colour, a length of time or an angle is made by
+    // the conversion that knows what it is.
+    if let Expr::StrLit(parts, _) = e {
+        for part in parts.iter_mut() {
+            let StrPart::Interp(inner, _) = part else {
+                continue;
+            };
+            let at = inner.span();
+            let Some(kind) = enums.shown.get(&(at.start, at.end)) else {
+                continue;
+            };
+            let name = match kind {
+                Shown::Color => "__color",
+                Shown::Duration => "__duration",
+                Shown::Angle => "__angle",
+            };
+            let value = std::mem::replace(&mut **inner, Expr::Error(at));
+            **inner = Expr::Call {
+                callee: Box::new(Expr::Ident(Symbol::intern(name), at)),
+                args: vec![crate::parser::ast::Arg {
+                    name: None,
+                    value,
+                    bind: false,
+                }],
+                span: at,
+            };
+        }
+        return;
+    }
     if let Some(record) = enums.built(e) {
         *e = record;
         return;
@@ -187,6 +223,9 @@ pub(crate) struct Enums {
     by_enum: HashMap<Symbol, HashMap<Symbol, Vec<Symbol>>>,
     /// The spans of the `for` loops that go over a map.
     map_loops: std::collections::HashSet<(u32, u32)>,
+    /// The expressions in a text's `{ }` that are a `Color`, a `Duration` or an
+    /// `Angle`, by span.
+    shown: HashMap<(u32, u32), Shown>,
 }
 
 impl Enums {
@@ -213,6 +252,7 @@ impl Enums {
         Self {
             by_enum,
             map_loops: std::collections::HashSet::new(),
+            shown: HashMap::new(),
         }
     }
 

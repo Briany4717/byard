@@ -59,7 +59,11 @@ impl Parser<'_> {
             // (RFC-0010), only read inside an `anim.*` curve call, as ms.
             Some(Token::DurationLit(ms)) => {
                 self.advance();
-                Expr::IntLit(i64::from(ms), span)
+                if self.typed_units {
+                    Expr::DurationLit(i64::from(ms), span)
+                } else {
+                    Expr::IntLit(i64::from(ms), span)
+                }
             }
             Some(Token::StrLit) => {
                 self.advance();
@@ -1539,6 +1543,7 @@ impl Parser<'_> {
     fn parse_fragment_expr(&mut self, frag: &str, offsets: Vec<u32>) -> Expr {
         let mut sub = Parser::new_fragment(frag, offsets);
         sub.loose_ternary = self.loose_ternary;
+        sub.typed_units = self.typed_units;
         let expr = sub.parse_expr(0);
         // `{ }` holds one expression; what follows it would be dropped.
         if sub.cur().is_some() && sub.errors.is_empty() {

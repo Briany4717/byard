@@ -1220,6 +1220,10 @@ pub enum Expr {
         /// Source span.
         span: Span,
     },
+    /// `200ms`, from edition 2027: a length of time, in milliseconds, which is
+    /// not a whole number. Before it, and once the checks are done, it is the
+    /// [`Expr::IntLit`] of its milliseconds.
+    DurationLit(i64, Span),
     /// `["ada": 36, "bo": 1]`, a map: each key with its value, in the order
     /// written. `[:]` is the one with none.
     MapLit(Vec<(Expr, Expr)>, Span),
@@ -1472,6 +1476,7 @@ impl Expr {
             | Self::Merge { span, .. }
             | Self::ForEach { span, .. }
             | Self::MapLit(_, span)
+            | Self::DurationLit(_, span)
             | Self::Return(span)
             | Self::Error(span) => *span,
         }

@@ -386,6 +386,7 @@ fn collect_name_spans_in_expr(expr: &Expr, target_name: &str, out: &mut Vec<Span
         Expr::IntLit(..)
         | Expr::FloatLit(..)
         | Expr::AngleLit(..)
+        | Expr::DurationLit(..)
         | Expr::ClassRef(..)
         | Expr::Return(..)
         | Expr::Error(..) => {}

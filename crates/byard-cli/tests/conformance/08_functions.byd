@@ -42,25 +42,21 @@ fn id(x: Int) -> Int => x
 Text("{id(7)} {x}")
 
 //# case: function-too-few-arguments
-//# gap: a missing argument reads as its own name
 //# error: ArityMismatch
 fn add(a: Int, b: Int) -> Int => a + b
 View Main() { Text("{add(1)}") }
 
 //# case: function-too-many-arguments
-//# gap: extra arguments are dropped without a word
 //# error: ArityMismatch
 fn add(a: Int, b: Int) -> Int => a + b
 View Main() { Text("{add(1, 2, 3)}") }
 
 //# case: function-argument-of-the-wrong-type
-//# gap: an argument is not checked against its parameter
 //# error: ArgumentTypeMismatch
 fn add(a: Int, b: Int) -> Int => a + b
 View Main() { Text("{add(1, "x")}") }
 
 //# case: function-body-of-the-wrong-type
-//# gap: a body is not checked against the return type
 //# error: TypeMismatch
 fn name(a: Int) -> Str => a + 1
 View Main() { Text(name(1)) }
@@ -77,7 +73,6 @@ View Main() { Text("{sub(b: 1, a: 2)}") }
 Text("{dobule(1)}")
 
 //# case: function-int-where-float-is-wanted
-//# gap: an `Int` given to a `Float` parameter stays an `Int`, so `x / 2` truncates
 //# text: 1.5
 fn half(x: Float) -> Float => x / 2
 View Main() { Text("{half(3)}") }
@@ -127,7 +122,6 @@ on mount => two()
 Text("{n}")
 
 //# case: named-action-wrong-arity
-//# gap: an action called with too few arguments is accepted
 //# fragment
 //# error: ArityMismatch
 var n = 0
@@ -136,7 +130,6 @@ on mount => add()
 Text("{n}")
 
 //# case: named-action-wrong-type
-//# gap: an action's argument is not checked against its declared type
 //# fragment
 //# error: ArgumentTypeMismatch
 var n = 0
@@ -193,7 +186,6 @@ let b = untrack(a)
 Text("{b}")
 
 //# case: calling-a-number
-//# gap: calling something that is not a function is accepted
 //# fragment
 //# error: TypeMismatch
 let n = 5
@@ -210,3 +202,60 @@ View Main() { Text("{double(1)}") }
 //# diagnostics: 1
 fn double(n: Int) -> Nmber => n * 2
 View Main() { Text("x") }
+
+//# case: function-called-right-is-fine
+//# text: 3
+fn add(a: Int, b: Int) -> Int => a + b
+View Main() { Text("{add(1, 2)}") }
+
+//# case: function-in-a-view-called-with-too-few-arguments
+//# fragment
+//# error: ArityMismatch
+//# diagnostics: 1
+fn add(a: Int, b: Int) -> Int => a + b
+Text("{add(1)}")
+
+//# case: function-calling-another-with-the-wrong-count
+//# error: ArityMismatch
+//# diagnostics: 1
+fn one(a: Int) -> Int => a
+fn two(a: Int) -> Int => one(a, a)
+View Main() { Text("{two(1)}") }
+
+//# case: function-result-int-for-float-is-a-float
+//# text: 1.5
+fn three() -> Float => 3
+View Main() { Text("{three() / 2}") }
+
+//# case: view-function-int-for-float-parameter-is-a-float
+//# fragment
+//# text: 1.5
+fn half(x: Float) -> Float => x / 2
+Text("{half(3)}")
+
+//# case: named-action-called-right-is-fine
+//# fragment
+//# text: 2
+var n = 0
+let add = (by: Int) => { n += by }
+on mount => add(2)
+Text("{n}")
+
+//# case: calling-a-text
+//# fragment
+//# error: TypeMismatch
+//# diagnostics: 1
+var s = "a"
+Text("{s(1)}")
+
+//# case: callback-called-with-the-right-type-is-fine
+//# text: go | ready
+View Go(on_done: Fn(Str) = {|_| }) {
+    on mount => on_done("ready")
+    Text("go")
+}
+View Main() {
+    var state = "waiting"
+    Go(on_done: {|s| state = s })
+    Text(state)
+}

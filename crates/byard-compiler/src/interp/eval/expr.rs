@@ -1463,9 +1463,19 @@ impl Interpreter {
             // sees (`on_x(items[0])` then `items = ...`). The argument
             // is lowered here, in the caller's names, whatever the
             // body is lowered among.
+            if !is_callback && params.len() != args.len() {
+                self.errors.push(CompileError::ArityMismatch {
+                    span: callee_span,
+                    name: name.as_str().to_string(),
+                    expected: params.len(),
+                    found: args.len(),
+                });
+            }
             let mut arg_cs: Vec<(Symbol, Lowered)> = Vec::with_capacity(params.len());
-            for (param, arg) in params.iter().zip(args.iter()) {
-                arg_cs.push((param.clone(), self.lower_expr(&arg.value, payload_name)));
+            for (i, (param, arg)) in params.iter().zip(args.iter()).enumerate() {
+                let lowered = self.lower_expr(&arg.value, payload_name);
+                let lowered = super::coerced_arg(self.fn_types.get(&id.0), i, lowered);
+                arg_cs.push((param.clone(), lowered));
             }
             // A callback's body is lowered where it was written, among
             // the names visible there: its own parameters, the
@@ -1475,7 +1485,7 @@ impl Interpreter {
             // A `fn`'s body is pure whatever calls it (RFC-0049 §3).
             let pure = self.pure_fns.contains(&id.0);
             self.pure_depth += u32::from(pure);
-            let mut body_lowered = if let Some(captured) = captured {
+            let body_lowered = if let Some(captured) = captured {
                 let frame = self.env.enter_closure(captured);
                 let outer_params = std::mem::take(&mut self.lambda_params);
                 let outer_inlined = std::mem::take(&mut self.inlined_params);
@@ -1494,6 +1504,7 @@ impl Interpreter {
                 lowered
             };
             self.pure_depth -= u32::from(pure);
+            let mut body_lowered = super::coerced_value(body_lowered, self.fn_rets.get(&id.0));
             return Some(Box::new(move |ctx| {
                 let values: Vec<(Symbol, Value)> = arg_cs
                     .iter_mut()
@@ -1629,13 +1640,29 @@ impl Interpreter {
             return Box::new(|_| Value::Unit);
         }
         let (params, body, _, _) = self.fn_table[id.0 as usize].clone();
+        // A call with the wrong number of arguments is refused by the checker;
+        // were one to get here, a parameter it did not give must not be read as
+        // its own name.
+        if params.len() != args.len() {
+            self.errors.push(CompileError::ArityMismatch {
+                span,
+                name: name.as_str().to_string(),
+                expected: params.len(),
+                found: args.len(),
+            });
+            return Box::new(|_| Value::Unit);
+        }
         if !params.is_empty() && self.per_call(payload_name) {
             // Called inside a lambda or an event handler: the arguments depend
             // on the item, so they are evaluated at each call, not memoised.
             let n = params.len().min(args.len());
             let arg_cs: Vec<Lowered> = args[..n]
                 .iter()
-                .map(|a| self.lower_expr(&a.value, payload_name))
+                .enumerate()
+                .map(|(i, a)| {
+                    let lowered = self.lower_expr(&a.value, payload_name);
+                    super::coerced_arg(self.fn_types.get(&id.0), i, lowered)
+                })
                 .collect();
             let names: Vec<Symbol> = params[..n].to_vec();
             let caller = std::mem::replace(&mut self.env, Env::new());
@@ -1647,11 +1674,13 @@ impl Interpreter {
             self.inlining.pop();
             self.lambda_params = outer;
             self.env = caller;
+            let body_lowered = super::coerced_value(body_lowered, self.fn_rets.get(&id.0));
             return Self::call_with_args(arg_cs, names, body_lowered);
         }
         let mut bound = Vec::with_capacity(params.len());
-        for (param, arg) in params.iter().zip(args.iter()) {
+        for (i, (param, arg)) in params.iter().zip(args.iter()).enumerate() {
             let arg_lowered = self.lower_expr(&arg.value, payload_name);
+            let arg_lowered = super::coerced_arg(self.fn_types.get(&id.0), i, arg_lowered);
             bound.push((param.clone(), self.ctx.open_memo(arg_lowered)));
         }
         let caller = std::mem::replace(&mut self.env, Env::new());
@@ -1664,7 +1693,7 @@ impl Interpreter {
         self.pure_depth -= 1;
         self.inlining.pop();
         self.env = caller;
-        body_lowered
+        super::coerced_value(body_lowered, self.fn_rets.get(&id.0))
     }
 
     /// Lowers a collection method call (RFC-0027 §4). Returns `None` for a
@@ -1685,6 +1714,16 @@ impl Interpreter {
                     let v = arg(ctx);
                     match base_c(ctx) {
                         Value::List(mut xs) => {
+                            // An `Int` added to a list of `Float`s is one.
+                            let v = match v {
+                                #[allow(clippy::cast_precision_loss)]
+                                Value::Int(i)
+                                    if xs.iter().any(|x| matches!(x, Value::Float(_))) =>
+                                {
+                                    Value::Float(i as f64)
+                                }
+                                v => v,
+                            };
                             xs.push(v);
                             Value::List(xs)
                         }

@@ -245,7 +245,10 @@ impl Interpreter {
             let nothing: super::Lowered = Box::new(|_| Value::Unit);
             return self.ctx.open_memo(nothing);
         }
-        self.project_arg(value)
+        let compute = self.lower_expr(value, None);
+        // An `Int` given where a `Float` is wanted is one.
+        let compute = super::coerced_value(compute, param.ty.as_ref());
+        self.ctx.open_memo(compute)
     }
 
     /// Binds a single named argument (`name: value`, from `(...)` or `#[...]`) to

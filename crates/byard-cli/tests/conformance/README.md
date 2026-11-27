@@ -31,6 +31,14 @@ is in `uncovered.txt`, a list that can only get shorter: the test
 `every_section_of_the_reference_has_cases` fails when a section has no cases and is not on it,
 and when one on it has cases.
 
+Past the parser: the same test file formats every program of the suite to a fixed point
+(`fmt(fmt(x)) == fmt(x)`, and `byard fmt` already refuses a result whose tree differs), damages each
+a few ways (a line gone, two swapped, a token put where it does not go, the end cut off) and runs the
+result through `byard check` and a frame, and writes a few thousand programs from the grammar in both
+editions: none may panic. The generator writes an expression for the type that is wanted, so most of
+what it makes checks, and now and then one of any shape, so the refusals are reached too. Its seeds are
+fixed, so a failure is the same failure next time and prints the program.
+
 These files are not programs to run: several declare `Main`, and many are wrong on
 purpose. `byard fmt` and `byard check` are not meant for them.
 

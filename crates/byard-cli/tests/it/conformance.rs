@@ -565,3 +565,350 @@ fn every_section_of_the_reference_has_cases() {
         sections.len()
     );
 }
+// ---- past the parser ----------------------------------------------------
+//
+// The fuzzing in `byard-compiler` feeds random text to the lexer and the
+// parser. These go further: the programs of the suite, formatted, mutated and
+// written afresh, go through the checker and the interpreter, which must tell
+// a person what is wrong and never panic.
+
+/// A small deterministic generator, so a failure is the same failure next time.
+struct Rng(u64);
+
+impl Rng {
+    fn next(&mut self) -> u64 {
+        // xorshift64*
+        self.0 ^= self.0 >> 12;
+        self.0 ^= self.0 << 25;
+        self.0 ^= self.0 >> 27;
+        self.0.wrapping_mul(0x2545_F491_4F6C_DD1D)
+    }
+
+    fn below(&mut self, n: usize) -> usize {
+        usize::try_from(self.next() % n.max(1) as u64).unwrap_or(0)
+    }
+
+    fn pick<'a, T>(&mut self, items: &'a [T]) -> &'a T {
+        &items[self.below(items.len())]
+    }
+}
+
+/// Runs a program through everything `byard check` does and draws it,
+/// returning whether it was drawn (it had no error), or the panic message if
+/// it panicked.
+fn survives(source: &str, edition: byard_compiler::edition::Edition) -> Result<bool, String> {
+    let source = source.to_string();
+    std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        run(&source, 0, edition).text.is_some()
+    }))
+    .map_err(|payload| {
+        payload
+            .downcast_ref::<String>()
+            .cloned()
+            .or_else(|| payload.downcast_ref::<&str>().map(|s| (*s).to_string()))
+            .unwrap_or_else(|| "a panic".to_string())
+    })
+}
+
+/// Every program of the suite formats to the same program, and formatting what
+/// it gave changes nothing. A case that does not parse has nothing to format.
+#[test]
+fn every_case_formats_to_a_fixed_point_with_the_same_tree() {
+    let mut formatted = 0;
+    let mut problems = Vec::new();
+    for case in all_cases() {
+        let source = case.program();
+        match byard_compiler::fmt::format(&source) {
+            Ok(once) => {
+                formatted += 1;
+                match byard_compiler::fmt::format(&once) {
+                    Ok(twice) if twice == once => {}
+                    Ok(_) => problems.push(format!("{}: formatting twice changes it", case.at())),
+                    Err(e) => {
+                        problems.push(format!("{}: formatted text is refused: {e}", case.at()));
+                    }
+                }
+            }
+            Err(byard_compiler::fmt::FmtError::Syntax { .. }) => {}
+            Err(e) => problems.push(format!("{}: {e}", case.at())),
+        }
+    }
+    assert!(problems.is_empty(), "{}", problems.join("\n"));
+    println!("conformance: {formatted} programs formatted to a fixed point");
+}
+
+/// The programs of the suite, damaged a few hundred ways each: a line gone,
+/// two swapped, a token put where it does not go, the end cut off. Each is
+/// told or runs; none panics.
+#[test]
+fn damaged_cases_are_told_and_never_panic() {
+    const TOKENS: [&str; 24] = [
+        "{", "}", "(", ")", "[", "]", "=>", ":", ",", "..", "as", "?.", "??", "\"\"\"", "match",
+        "for", "store", "fn", "return", "none", "0..3", "<T>", ".", "|",
+    ];
+    let mut rng = Rng(0x9E37_79B9_7F4A_7C15);
+    let mut runs = 0;
+    let mut failures = Vec::new();
+    for case in all_cases() {
+        let program = case.program();
+        let lines: Vec<&str> = program.lines().collect();
+        for _ in 0..6 {
+            let mut damaged: Vec<String> = lines.iter().map(ToString::to_string).collect();
+            match rng.below(6) {
+                0 if !damaged.is_empty() => {
+                    let at = rng.below(damaged.len());
+                    damaged.remove(at);
+                }
+                1 if damaged.len() > 1 => {
+                    let (a, b) = (rng.below(damaged.len()), rng.below(damaged.len()));
+                    damaged.swap(a, b);
+                }
+                2 if !damaged.is_empty() => {
+                    let at = rng.below(damaged.len());
+                    let line = damaged[at].clone();
+                    damaged.insert(at, line);
+                }
+                3 if !damaged.is_empty() => {
+                    let at = rng.below(damaged.len());
+                    let line = &mut damaged[at];
+                    let mut cut = rng.below(line.len() + 1);
+                    while !line.is_char_boundary(cut) {
+                        cut -= 1;
+                    }
+                    line.insert_str(cut, rng.pick(&TOKENS));
+                }
+                4 if !damaged.is_empty() => {
+                    let at = rng.below(damaged.len());
+                    let line = &mut damaged[at];
+                    let mut cut = rng.below(line.len() + 1);
+                    while !line.is_char_boundary(cut) {
+                        cut -= 1;
+                    }
+                    line.truncate(cut);
+                }
+                _ => {
+                    let keep = rng.below(damaged.len() + 1);
+                    damaged.truncate(keep);
+                }
+            }
+            let source = damaged.join("\n");
+            runs += 1;
+            if let Err(message) = survives(&source, case.edition) {
+                failures.push(format!(
+                    "{} damaged panics: {message}\n--- program ---\n{source}",
+                    case.at()
+                ));
+                if failures.len() >= 5 {
+                    break;
+                }
+            }
+        }
+        if failures.len() >= 5 {
+            break;
+        }
+    }
+    assert!(failures.is_empty(), "{}", failures.join("\n\n"));
+    println!("conformance: {runs} damaged programs told or run, none panicked");
+}
+
+/// Programs written afresh from the grammar. An expression is written for the
+/// type that is wanted, so most of what comes out checks and runs, and now and
+/// then one of any shape is put in its place, so the checker's refusals are
+/// reached too.
+fn gen_wild(rng: &mut Rng, depth: u32) -> String {
+    const ATOMS: [&str; 12] = [
+        "1", "0", "-3", "2.5", "\"hi\"", "true", "none", "n", "xs", "m", "s", "u",
+    ];
+    const BINARY: [&str; 12] = [
+        "+", "-", "*", "/", "%", "==", "<", "&&", "||", "??", "..", "!=",
+    ];
+    if depth == 0 || rng.below(3) == 0 {
+        return (*rng.pick(&ATOMS)).to_string();
+    }
+    let a = gen_wild(rng, depth - 1);
+    let b = gen_wild(rng, depth - 1);
+    match rng.below(6) {
+        0 | 1 => format!("({a} {} {b})", rng.pick(&BINARY)),
+        2 => format!("({a} ? {b} : {a})"),
+        3 => format!("{a}[{b}]"),
+        4 => format!("({a} as P)"),
+        _ => format!("{a}.len"),
+    }
+}
+
+fn gen_int(rng: &mut Rng, depth: u32) -> String {
+    if depth == 0 {
+        return (*rng.pick(&["0", "1", "7", "-2", "n", "xs.len", "m.len", "s.len"])).to_string();
+    }
+    let a = gen_int(rng, depth - 1);
+    let b = gen_int(rng, depth - 1);
+    match rng.below(14) {
+        0 => format!("({a} + {b})"),
+        1 => format!("({a} - {b})"),
+        2 => format!("({a} * {b})"),
+        3 => format!("({a} / {b})"),
+        4 => format!("({a} % {b})"),
+        5 => format!("({} ? {a} : {b})", gen_bool(rng, depth - 1)),
+        6 => format!("{}.sum()", gen_list(rng, depth - 1)),
+        7 => format!("({}.first() ?? {a})", gen_list(rng, depth - 1)),
+        8 => format!("({}.get({a}) ?? {b})", gen_list(rng, depth - 1)),
+        9 => format!("({}[\"k\"] ?? {a})", "m"),
+        10 => format!("{}.count(x => x > {a})", gen_list(rng, depth - 1)),
+        11 => format!("f({a})"),
+        12 => format!("first({})", gen_list(rng, depth - 1)),
+        _ => format!("(p.x + {a})"),
+    }
+}
+
+fn gen_bool(rng: &mut Rng, depth: u32) -> String {
+    if depth == 0 {
+        return (*rng.pick(&["true", "false", "(n > 0)", "(u == none)"])).to_string();
+    }
+    let a = gen_int(rng, depth - 1);
+    let b = gen_int(rng, depth - 1);
+    match rng.below(7) {
+        0 => format!("({a} < {b})"),
+        1 => format!("({a} == {b})"),
+        2 => format!(
+            "({} && {})",
+            gen_bool(rng, depth - 1),
+            gen_bool(rng, depth - 1)
+        ),
+        3 => format!(
+            "({} || {})",
+            gen_bool(rng, depth - 1),
+            gen_bool(rng, depth - 1)
+        ),
+        4 => format!("{}.any(x => x > {a})", gen_list(rng, depth - 1)),
+        5 => format!("{}.contains({a})", gen_list(rng, depth - 1)),
+        _ => format!("(!{})", gen_bool(rng, depth - 1)),
+    }
+}
+
+fn gen_str(rng: &mut Rng, depth: u32) -> String {
+    if depth == 0 {
+        return (*rng.pick(&["\"a\"", "s", "p.y", "(u ?? \"-\")"])).to_string();
+    }
+    match rng.below(6) {
+        0 => format!("(\"{{{}}}\")", gen_int(rng, depth - 1)),
+        1 => format!(
+            "({} + {})",
+            gen_str(rng, depth - 1),
+            gen_str(rng, depth - 1)
+        ),
+        2 => format!("{}.join(\",\")", gen_list(rng, depth - 1)),
+        3 => format!("{}.toUpper()", gen_str(rng, depth - 1)),
+        4 => format!("\"{{{}:>5}}\"", gen_int(rng, depth - 1)),
+        _ => format!(
+            "{}.slice({}, {})",
+            gen_str(rng, depth - 1),
+            gen_int(rng, 0),
+            gen_int(rng, 0)
+        ),
+    }
+}
+
+fn gen_list(rng: &mut Rng, depth: u32) -> String {
+    if depth == 0 {
+        return (*rng.pick(&["xs", "[1, 2]", "[]", "(0..3)"])).replace("[]", "xs");
+    }
+    let l = gen_list(rng, depth - 1);
+    match rng.below(9) {
+        0 => format!("{l}.push({})", gen_int(rng, depth - 1)),
+        1 => format!("{l}.map(x => x + {})", gen_int(rng, 0)),
+        2 => format!("{l}.filter(x => x > {})", gen_int(rng, 0)),
+        3 => format!("{l}.insertAt({}, {})", gen_int(rng, 0), gen_int(rng, 0)),
+        4 => format!("{l}.updateAt({}, {})", gen_int(rng, 0), gen_int(rng, 0)),
+        5 => format!("{l}.reverse()"),
+        6 => format!("({} .. {})", gen_int(rng, 0), gen_int(rng, 0)),
+        7 => format!("{l}.slice({}, {})", gen_int(rng, 0), gen_int(rng, 0)),
+        _ => format!("({l} + {})", gen_list(rng, depth - 1)),
+    }
+}
+
+fn generated_program(rng: &mut Rng) -> String {
+    let mut out = String::from(
+        "type P = { x: Int, y: Str }\nenum E { a, b(n: Int) }\n\
+         fn f(a: Int) -> Int => a\nfn first<T>(xs: List<T>) -> T => xs[0]\n\
+         View Main() {\n    var n = 1\n    var xs = [1, 2, 3]\n    var m: Map<Str, Int> = [\"k\": 1]\n    \
+         var s = \"hi\"\n    var u: Str? = none\n    var p: P = { x: 1, y: \"a\" }\n    var e = E.b(n: 2)\n",
+    );
+    for _ in 0..(2 + rng.below(5)) {
+        let wild = rng.below(8) == 0;
+        let int = if wild {
+            gen_wild(rng, 3)
+        } else {
+            gen_int(rng, 3)
+        };
+        let line = match rng.below(12) {
+            0 => format!("    Text(\"{{{int}}}\")\n"),
+            1 => format!("    Text({})\n", gen_str(rng, 3)),
+            2 => format!("    on mount => {{ n = {int} }}\n"),
+            3 => format!(
+                "    on mount => {{ for i in {} {{ n += i }} }}\n",
+                gen_list(rng, 2)
+            ),
+            4 => format!("    for i in {} {{ Text(\"{{i}}\") }}\n", gen_list(rng, 2)),
+            5 => format!(
+                "    when {} {{ Text(\"a\") }} else {{ Text(\"b\") }}\n",
+                gen_bool(rng, 3)
+            ),
+            6 => format!("    on mount => {{ xs = {} }}\n", gen_list(rng, 3)),
+            7 => format!(
+                "    on mount => {{ xs[{}] = {int}\n if {} {{ return }} }}\n",
+                gen_int(rng, 1),
+                gen_bool(rng, 2)
+            ),
+            8 => format!(
+                "    on mount => {{ m = m.set({}, {int}) }}\n",
+                gen_str(rng, 1)
+            ),
+            9 => {
+                format!("    match e {{ .a => Text(\"a\")\n .b(k) => Text(\"{{k + {int}}}\") }}\n")
+            }
+            10 => format!("    Text(\"{{{}}}\")\n", gen_bool(rng, 3)),
+            _ => format!("    Text(\"{{p.x + {int}}} {{(p as P).y}}\")\n"),
+        };
+        out.push_str(&line);
+    }
+    out.push_str("}\n");
+    out
+}
+
+/// Programs written from the grammar, many of them wrong in what they mean,
+/// in both editions: the checker says so or the interpreter runs them, and
+/// neither panics.
+#[test]
+fn generated_programs_are_told_or_run_and_never_panic() {
+    let mut rng = Rng(0xD1B5_4A32_D192_ED03);
+    let mut failures = Vec::new();
+    let mut runs = 0;
+    let mut drawn = 0;
+    for _ in 0..1200 {
+        let source = generated_program(&mut rng);
+        for edition in [
+            byard_compiler::edition::Edition::BASELINE,
+            byard_compiler::edition::Edition::E2027,
+        ] {
+            runs += 1;
+            match survives(&source, edition) {
+                Ok(true) => drawn += 1,
+                Ok(false) => {}
+                Err(message) => {
+                    failures.push(format!("panics: {message}\n--- program ---\n{source}"));
+                }
+            }
+        }
+        if failures.len() >= 3 {
+            break;
+        }
+    }
+    assert!(failures.is_empty(), "{}", failures.join("\n\n"));
+    // A generator whose programs are all refused tests the checker's first
+    // error and nothing past it.
+    assert!(
+        drawn * 20 >= runs,
+        "only {drawn} of {runs} generated programs got as far as being drawn"
+    );
+    println!("conformance: {runs} generated programs told or run ({drawn} drawn), none panicked");
+}

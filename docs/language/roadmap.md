@@ -263,10 +263,10 @@ suite cannot run (`typed_reply.rs`: a call that waits for its reply). What stays
 A `store` is a context with one instance for the program, whose fields are signals; a write through
 an `inject` is a write of that field. What stays open:
 
-- `store Name persist "key" { … }`, kept between runs over the `Store` capability. It is a syntax
-  error that says so, and not read as something else. It needs the interpreter to load the fields
-  from the host's `Store` when the program starts and write them when they change.
-- A store is made again by a hot reload: the state of the program is not held across one.
+- ~~`store Name persist "key" { … }`, kept between runs over the `Store` capability.~~ Done after
+  1.0's plan: the resolver writes the load and the save into the view the program runs.
+- ~~A store is made again by a hot reload.~~ Done after 1.0's plan: a reload keeps a store whose
+  fields did not change.
 
 ### 21. The rest of text
 

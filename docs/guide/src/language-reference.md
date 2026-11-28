@@ -760,7 +760,7 @@ A context is a set of values with defaults that a view gives to everything it dr
 ### Stores
 
 ```text
-store := "store" NAME "{" (NAME ":" type "?"? "=" expr ","?)* "}"
+store := "store" NAME ("persist" STRING)? "{" (NAME ":" type "?"? "=" expr ","?)* "}"
 ```
 
 A `store` is state above the views: a context with **one instance for the whole program**,
@@ -787,11 +787,27 @@ View Main() {
 Each field has a type and a default, as a context's does (`ContextFieldNeedsDefault`), and a
 write is a value of that type (`TypeMismatch`) to a field the store has (`UnknownField`). `=`, `+=`,
 `-=`, `++` and `--` work on a field. A store is never provided: `provide` of one is
-`StoreProvided`. It starts again when the program does; keeping it between runs, `store Name
-persist "key" { … }`, is not available yet, and is a syntax error that says so. A program with no
-`store` is as it was.
+`StoreProvided`. A program with no `store` is as it was.
 
-> **Not yet.** A store is not kept between runs. (`12_state.byd`)
+A store starts again when the program does, and keeps what it holds when `byard dev` reloads
+a changed file, as a `var` does; a reload that changes the store's fields starts it again.
+`persist` keeps it between runs too, under a key of the app's `Store`:
+
+```byld
+store Settings persist "settings" { dark: Bool = false, size: Int = 14 }
+
+View Main() {
+    inject Settings as settings
+    Text("{settings.size}")
+    Button("Dark") => settings.dark = !settings.dark
+}
+```
+
+When the program starts, each field is read from what was saved, checked as `as` checks it
+against the field's type; a field nothing was saved for, or saved as something else (an older
+version of the app had no such field, or another type), keeps its default, and the others are
+read. Every change of a field saves the whole store. The key is a literal that is not empty
+(a syntax error otherwise), and the first frame shows the defaults until what was saved is read.
 
 ### `use`
 

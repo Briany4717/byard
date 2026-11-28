@@ -30,6 +30,7 @@
 //! parse-time or lower-time, can be located back to `file:line:col`.
 
 mod generics;
+mod persist;
 mod rebase;
 mod shorthand;
 pub(crate) mod walk;
@@ -545,6 +546,9 @@ fn resolve_root(
         &mut records,
         &mut r.errors,
     );
+    // A store with a `persist` key is read when the program starts and
+    // written when it changes, by code written into the view it runs.
+    persist::keep(&mut views, &records, edition);
     // One table of every function, canonically named, and one of every
     // record type, shared by every view.
     let helpers = std::sync::Arc::new(fns);

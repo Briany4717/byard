@@ -177,6 +177,7 @@ impl SpanEq for RecordDecl {
             private,
             context,
             store,
+            persist,
             span: _,
         } = self;
         *name == other.name
@@ -184,6 +185,7 @@ impl SpanEq for RecordDecl {
             && *private == other.private
             && *context == other.context
             && *store == other.store
+            && *persist == other.persist
             && fields.span_eq(&other.fields)
     }
 }

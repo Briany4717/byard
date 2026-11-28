@@ -221,6 +221,9 @@ pub struct RecordDecl {
     /// Declared `store Name { … }` (a context with one instance for the whole
     /// program, which any view reads and writes): `context` is set as well.
     pub store: bool,
+    /// `store Name persist "key" { … }`: the key the store is kept under
+    /// between runs, in the app's `Store`.
+    pub persist: Option<String>,
     /// Source span.
     pub span: Span,
 }

@@ -236,15 +236,13 @@ An `Int` may be given where a `Float` is wanted, and is converted: `var w: Float
 `3.0`, so `w / 2` is `1.5`, and so does a `Float` `var` that is later written an `Int`. Nothing
 else converts.
 
-> **Not yet.** A number of things a typed language checks are not checked, and each is a
-> gap in the suite (`12_state.byd`, `08_functions.byd`, `05_records.byd`,
-> `07_operators.byd`). The types judged so far are the scalars and lists of them; a record,
-> an enum or an optional is let through until its own step:
+> **Not yet.** A few things a typed language checks are let through:
 >
-> - two `var`s of one name in a view.
+> - the items of a list field in a record literal: `{ items: ["a"] }` where the type says
+>   `items: List<Int>`;
+> - a cast to an enum, a `Map` or a `Set`: `"c" as Size` is not compared with the cases.
 >
-> Until they are, such a program runs, and what it draws is whatever the values happen to
-> give.
+> Such a program runs, and what it draws is whatever the values happen to give.
 
 ## Values as text
 
@@ -939,6 +937,11 @@ var := "var" NAME (":" type)? "=" expr
 State. Its first value is evaluated once, when the instance is made; if that value read
 another `var`, it does not follow it afterwards. A `var` is written in an
 [action](#actions) and nowhere else. Writing the value it already holds is not a change.
+
+A `var` is declared at the top of a view. One in the body of a `when`, a `for`, a `match` arm
+or a route, or in an element's braces, is `LetInElementBody`: it would be no variable. State
+that each item of a `for`, or each time a `when` comes back, starts again with goes in a view
+of its own, whose instances keep their own `var`s.
 
 Every use of a view is an *instance* with `var`s of its own, which live while it is on
 screen. An instance inside a `when` that turns false is gone, and starts again from its

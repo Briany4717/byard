@@ -1436,7 +1436,10 @@ impl Interpreter {
         self.enums.clear();
         self.contexts.clear();
         self.store_names.clear();
-        self.stores.clear();
+        // A store lives as long as the program does: a reload keeps the one
+        // whose fields are the ones it had, with what they hold, as it keeps
+        // a `var` (a store whose fields changed starts again).
+        let mut kept_stores = std::mem::take(&mut self.stores);
         if let Some(first) = views.first() {
             for decl in first.records.iter().filter(|r| r.context) {
                 self.contexts
@@ -1445,6 +1448,21 @@ impl Interpreter {
                     self.store_names.insert(decl.name.clone());
                 }
             }
+            for decl in first.records.iter().filter(|r| r.store) {
+                let same = kept_stores.get(&decl.name).is_some_and(|signals| {
+                    signals.len() == decl.fields.len()
+                        && signals
+                            .iter()
+                            .zip(&decl.fields)
+                            .all(|((name, _), field)| *name == field.name)
+                });
+                if same {
+                    if let Some(signals) = kept_stores.remove(&decl.name) {
+                        self.stores.insert(decl.name.clone(), signals);
+                    }
+                }
+            }
+            kept_stores.clear();
             for decl in first.enums.iter() {
                 let cases = decl.cases.iter().map(|(c, _)| c.clone()).collect();
                 self.enums.insert(decl.name.clone(), cases);

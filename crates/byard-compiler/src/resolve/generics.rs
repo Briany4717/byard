@@ -223,7 +223,7 @@ fn substitute(ty: &Type, given: &HashMap<&Symbol, &Type>) -> Type {
 }
 
 /// A type as it is written: `Page<List<Item>>`, `Item?`, `Fn(Int) -> Str`.
-fn spell(ty: &Type) -> String {
+pub(crate) fn spell(ty: &Type) -> String {
     match ty {
         Type::Named { name, args, .. } if args.is_empty() => name.as_str().to_string(),
         Type::Named { name, args, .. } => format!(

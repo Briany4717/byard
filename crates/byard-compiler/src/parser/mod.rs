@@ -640,6 +640,7 @@ impl<'a> Parser<'a> {
                 private: false,
                 context: false,
                 store: false,
+                persist: None,
                 span: self.span_from(start),
             };
         }
@@ -666,6 +667,7 @@ impl<'a> Parser<'a> {
             private: false,
             context: false,
             store: false,
+            persist: None,
             span: self.span_from(start),
         }
     }
@@ -679,15 +681,35 @@ impl<'a> Parser<'a> {
         let name = self
             .expect_decl_name("a context", "a context name")
             .unwrap_or_else(|| Symbol::intern(""));
-        // `store Name persist "key" { … }` is the day a store is kept between
-        // runs; until then it is said so, and not read as something else.
+        // `store Name persist "key" { … }`: kept between runs, under that key.
+        let mut persist = None;
         if matches!(self.cur(), Some(Token::Ident(w)) if w.as_str() == "persist") {
-            self.error(
-                "'{': a store lives as long as the program runs, `persist` is not available yet",
-            );
             self.advance();
             if matches!(self.cur(), Some(Token::StrLit)) {
+                let key_span = self.cur_span();
                 self.advance();
+                let mut key = String::new();
+                let parts = self.parse_string_literal(key_span);
+                let literal = parts.iter().all(|p| matches!(p, ast::StrPart::Text(_)));
+                for part in &parts {
+                    if let ast::StrPart::Text(t) = part {
+                        key.push_str(t.as_str());
+                    }
+                }
+                if !literal {
+                    self.error_at(
+                        key_span,
+                        "a literal key (a store is kept under one key, known before it runs)",
+                    );
+                } else if key.is_empty() {
+                    self.error_at(
+                        key_span,
+                        "a key that is not empty, as in `persist \"settings\"`",
+                    );
+                }
+                persist = Some(key);
+            } else {
+                self.error("the key the store is kept under, as in `persist \"settings\"`");
             }
         }
         self.expect(&Token::LBrace, "'{'");
@@ -720,6 +742,7 @@ impl<'a> Parser<'a> {
             private: false,
             context: true,
             store: false,
+            persist,
             span: self.span_from(start),
         }
     }

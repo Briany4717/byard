@@ -670,10 +670,32 @@ View Main() {
     Text("{p.scheme}")
 }
 
-//# case: store-persist-is-not-available-yet
+//# case: a-kept-store-starts-from-its-defaults-when-nothing-is-saved
+//# text: 0 none
+type User = { name: Str }
+store Session persist "session" { n: Int = 0, user: User? = none }
+View Main() {
+    inject Session as s
+    Text("{s.n} {s.user?.name ?? "none"}")
+}
+
+//# case: a-kept-store-needs-a-key
 //# error: UnexpectedToken
 //# diagnostics: 1
-store Session persist "session" { n: Int = 0 }
+store Session persist { n: Int = 0 }
+View Main() { Text("x") }
+
+//# case: a-kept-store-key-is-not-empty
+//# error: UnexpectedToken
+//# diagnostics: 1
+store Session persist "" { n: Int = 0 }
+View Main() { Text("x") }
+
+//# case: a-kept-store-key-is-literal
+//# error: UnexpectedToken
+//# diagnostics: 1
+let name = "session"
+store Session persist "{name}" { n: Int = 0 }
 View Main() { Text("x") }
 
 //# case: store-is-still-a-name

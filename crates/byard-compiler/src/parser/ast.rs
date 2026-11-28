@@ -1014,6 +1014,9 @@ pub struct NumFormat {
     /// Where the text sits in its width: `<` left, `>` right, `^` centred.
     /// Numbers are right and everything else left, when none is written.
     pub align: Option<char>,
+    /// What the width is filled with, written before the alignment
+    /// (`{x:*>8}`): a space when none is written.
+    pub fill: Option<char>,
     /// The number times a hundred, and a `%` after it (`%`).
     pub percent: bool,
 }

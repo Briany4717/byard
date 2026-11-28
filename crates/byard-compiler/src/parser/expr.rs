@@ -1681,9 +1681,20 @@ fn parse_spec(spec: &str) -> Option<NumFormat> {
     }
     let mut rest = spec;
     let mut out = NumFormat::default();
-    if let Some(a) = rest.chars().next().filter(|c| matches!(c, '<' | '>' | '^')) {
-        out.align = Some(a);
-        rest = &rest[1..];
+    // A character, then an alignment: the character fills the width.
+    let mut chars = rest.chars();
+    if let (Some(fill), Some(a)) = (chars.next(), chars.next()) {
+        if matches!(a, '<' | '>' | '^') {
+            out.fill = Some(fill);
+            out.align = Some(a);
+            rest = &rest[fill.len_utf8() + 1..];
+        }
+    }
+    if out.align.is_none() {
+        if let Some(a) = rest.chars().next().filter(|c| matches!(c, '<' | '>' | '^')) {
+            out.align = Some(a);
+            rest = &rest[1..];
+        }
     }
     // A leading zero with more digits after it fills with zeros.
     if rest.starts_with('0') && rest[1..].starts_with(|c: char| c.is_ascii_digit()) {

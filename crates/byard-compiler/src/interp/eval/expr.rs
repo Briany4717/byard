@@ -602,7 +602,8 @@ fn pad_to_width(text: String, spec: NumFormat, number: bool) -> String {
         '^' => (gap / 2, gap - gap / 2),
         _ => (gap, 0),
     };
-    format!("{}{text}{}", " ".repeat(left), " ".repeat(right))
+    let fill = spec.fill.unwrap_or(' ').to_string();
+    format!("{}{text}{}", fill.repeat(left), fill.repeat(right))
 }
 
 /// `text` (a number as `{x}` writes it) with a `,` between every three digits

@@ -146,9 +146,11 @@ A *format* after a `:` shapes a number:
 | `{x:12}` | At least that wide, with spaces on the left of a number and on the right of a text | `   1234567.891` |
 | `{x:<12}`, `{x:>12}`, `{x:^12}` | Padded on the right, on the left, or both | |
 | `{x:012}` | A number filled with zeros after its sign | `00001234567.891` |
+| `{x:*>14}`, `{x:-<14}`, `{x:.^14}` | Padded with that character instead of a space | `***1234567.891` |
 | `{x:.1%}` | The number times a hundred, and a `%` | `123456789.1%` |
 
-A format is `[<>^][0][width][,][.decimals][%]`, in that order. A width is up to 200, and a text
+A format is `[[fill]<>^][0][width][,][.decimals][%]`, in that order: any one character
+written before the alignment fills the width, and without one it is a space. A width is up to 200, and a text
 already wider is not cut. A colon that belongs to a `? :` is not a format: `{on ? 1 : 2}` is `1`,
 and `{on ? 1 : 2:3}` is `1` padded to three. An `Int` takes a format too: `{7:.2}` is `7.00`.
 The decimals and the grouping are for a number and are ignored on anything else; a width and an

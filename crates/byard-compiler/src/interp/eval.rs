@@ -928,6 +928,10 @@ pub struct Interpreter {
     /// The result type written for the entries of `fn_table` that have one,
     /// so an `Int` a `-> Float` function gives is a `Float`.
     fn_rets: std::collections::HashMap<u32, Type>,
+    /// The default written for each parameter of the entries of `fn_table`
+    /// that have one, in the order of the parameters: what a call that leaves
+    /// the parameter out gives it.
+    fn_defaults: std::collections::HashMap<u32, Vec<Option<Expr>>>,
     /// How many `fn` bodies are being lowered right now. Above zero, an
     /// enclosing action does not make the clock readable.
     pure_depth: u32,
@@ -1410,6 +1414,12 @@ impl Interpreter {
                 if let Some(ret) = &decl.ret {
                     self.fn_rets.insert(id.0, ret.clone());
                 }
+                if decl.params.iter().any(|p| p.default.is_some()) {
+                    self.fn_defaults.insert(
+                        id.0,
+                        decl.params.iter().map(|p| p.default.clone()).collect(),
+                    );
+                }
                 self.pure_fns.insert(id.0);
                 self.report_clock_in_fn(
                     &decl
@@ -1873,6 +1883,10 @@ impl Interpreter {
                 self.pure_fns.insert(id.0);
                 if let Some(ret) = ret {
                     self.fn_rets.insert(id.0, ret.clone());
+                }
+                if params.iter().any(|p| p.default.is_some()) {
+                    self.fn_defaults
+                        .insert(id.0, params.iter().map(|p| p.default.clone()).collect());
                 }
             }
         }

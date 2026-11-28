@@ -208,8 +208,9 @@ so do the twenty-two cases added with them. What stays open:
 
 - Type parameters on `type`, `type Box<T> = { value: T }`. A type the checker knows is a
   name with no arguments, so a generic one needs the checker to carry them.
-- Default values on a `fn`, `fn total(items: List<Item>, tax: Float = 0.0)`. The parameter
-  is parsed and not used.
+- ~~Default values on a `fn`, `fn total(items: List<Item>, tax: Float = 0.0)`.~~ Done after
+  1.0's plan: a parameter left out takes its default, which reads the parameters before it
+  (ten cases in `08_functions.byd`).
 - A function that reads a name it cannot reach is told twice, `UnknownName` and
   `ImpureFunction`, for one mistake. It was before this step.
 

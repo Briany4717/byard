@@ -276,7 +276,8 @@ format has a width, a fill, an alignment and a percentage. What stays open:
 
 - `///` is still a comment. The language server does not show it on hover and there is no
   `byard doc`: that is a command and a page format of its own, and no case asks for it.
-- A format cannot fill with a character other than a zero (`{x:*>8}`), and `%` is for numbers only.
+- ~~A format cannot fill with a character other than a zero (`{x:*>8}`).~~ Done after 1.0's
+  plan: any character before the alignment fills. `%` is for numbers only.
 - A text over lines is not checked for a closing line that is less indented than a line above it:
   that line keeps the whole of what it has.
 

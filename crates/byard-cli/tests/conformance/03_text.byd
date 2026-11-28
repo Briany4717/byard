@@ -317,3 +317,15 @@ Text("{s.len}")
 let s = """
     a
 Text("x")
+
+//# case: a-format-fills-with-the-character-before-its-alignment
+//# fragment
+//# text: [****42] [ab---] [..ab..] [00042]
+let n = 42
+let name = "ab"
+Text("[{n:*>6}] [{name:-<5}] [{name:.^6}] [{n:0>5}]")
+
+//# case: a-fill-of-a-width-already-taken-adds-nothing
+//# fragment
+//# text: [abcdef]
+Text("[{"abcdef":*>3}]")

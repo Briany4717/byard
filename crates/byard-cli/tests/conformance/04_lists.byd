@@ -543,3 +543,61 @@ Text("{Set([1, 2]) == Set([2, 3])}")
 //# text: 3
 let Set = 3
 Text("{Set}")
+
+//# case: take-and-skip-cut-a-list
+//# fragment
+//# text: 3,1|2,1|3,1,3,2,1|
+let xs = [3, 1, 3, 2, 1]
+Text("{xs.take(2).join(",")}|{xs.skip(3).join(",")}|{xs.take(9).join(",")}|{xs.skip(9).join(",")}")
+
+//# case: unique-keeps-each-item-once-where-it-was-first
+//# fragment
+//# text: 3,1,2
+let xs = [3, 1, 3, 2, 1]
+Text("{xs.unique().join(",")}")
+
+//# case: chunk-cuts-a-list-into-lists
+//# fragment
+//# text: 3+1,3+2,1|0
+let xs = [3, 1, 3, 2, 1]
+Text("{xs.chunk(2).map(c => c.join("+")).join(",")}|{xs.chunk(0).len}")
+
+//# case: enumerate-gives-each-item-its-place
+//# fragment
+//# text: 0a,1b
+Text("{["a", "b"].enumerate().map(e => "{e.index}{e.item}").join(",")}")
+
+//# case: zip-puts-two-lists-side-by-side
+//# fragment
+//# text: 1a,2b
+Text("{[1, 2, 3].zip(["a", "b"]).map(p => "{p.first}{p.second}").join(",")}")
+
+//# case: flat-map-joins-the-lists-it-gives
+//# fragment
+//# text: 1,2,3|5,7
+Text("{[[1, 2], [3]].flatMap(x => x).join(",")}|{["apple", "avocado"].flatMap(w => [w.len]).join(",")}")
+
+//# case: group-by-maps-each-key-to-its-items
+//# fragment
+//# text: a,b|2,1
+let words = ["apple", "banana", "avocado"]
+let groups = words.groupBy(w => w.slice(0, 1))
+Text("{groups.keys().join(",")}|{groups.values().map(g => g.len).join(",")}")
+
+//# case: a-map-gives-its-keys-and-values
+//# fragment
+//# text: b,a|2,1
+let m: Map<Str, Int> = ["b": 2, "a": 1]
+Text("{m.keys().join(",")}|{m.values().join(",")}")
+
+//# case: take-of-text-is-a-type-error
+//# fragment
+//# error: TypeMismatch
+//# diagnostics: 1
+Text("{[1, 2].take("a").len}")
+
+//# case: a-field-enumerate-does-not-give
+//# fragment
+//# error: UnknownField
+//# diagnostics: 1
+Text("{[1, 2].enumerate().map(e => e.idx).len}")

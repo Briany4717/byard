@@ -48,14 +48,43 @@ pub enum Shown {
 
 /// The closed set of list methods (RFC-0027 §4), used for the `UnknownMethod`
 /// suggestion.
-const LIST_METHODS: [&str; 24] = [
-    "push", "removeAt", "contains", "map", "filter", "slice", "sort", "sortBy", "reduce", "find",
-    "indexOf", "min", "max", "reverse", "join", "get", "first", "last", "any", "all", "count",
-    "sum", "insertAt", "updateAt",
+const LIST_METHODS: [&str; 32] = [
+    "push",
+    "removeAt",
+    "contains",
+    "map",
+    "filter",
+    "slice",
+    "sort",
+    "sortBy",
+    "reduce",
+    "find",
+    "indexOf",
+    "min",
+    "max",
+    "reverse",
+    "join",
+    "get",
+    "first",
+    "last",
+    "any",
+    "all",
+    "count",
+    "sum",
+    "insertAt",
+    "updateAt",
+    "take",
+    "skip",
+    "unique",
+    "enumerate",
+    "zip",
+    "chunk",
+    "flatMap",
+    "groupBy",
 ];
 
 /// The methods of a `Map`, and of a `Set`.
-const MAP_METHODS: [&str; 2] = ["set", "remove"];
+const MAP_METHODS: [&str; 4] = ["set", "remove", "keys", "values"];
 /// The methods of a `Color`.
 const COLOR_METHODS: [&str; 1] = ["alpha"];
 const SET_METHODS: [&str; 3] = ["add", "remove", "contains"];
@@ -3817,7 +3846,8 @@ impl Checker<'_> {
         // Lambda-bearing methods: purity + (for filter and find) a Bool
         // predicate. `reduce` takes its lambda second, after the initial value.
         let lambda_at = match name.as_str() {
-            "map" | "filter" | "sortBy" | "find" | "any" | "all" | "count" => Some(0),
+            "map" | "filter" | "sortBy" | "find" | "any" | "all" | "count" | "flatMap"
+            | "groupBy" => Some(0),
             "reduce" => Some(1),
             _ => None,
         };
@@ -3910,8 +3940,12 @@ impl Checker<'_> {
                 if let (Ty::List(item), "insertAt" | "updateAt", 1) = (recv, name.as_str(), i) {
                     self.must_fit(item, &found, arg.value.span());
                 }
-                // An item is found by a whole number.
-                if let (Ty::List(_), "get" | "insertAt" | "updateAt", 0) = (recv, name.as_str(), i)
+                // An item is found, and a list cut, by a whole number.
+                if let (
+                    Ty::List(_),
+                    "get" | "insertAt" | "updateAt" | "take" | "skip" | "chunk",
+                    0,
+                ) = (recv, name.as_str(), i)
                 {
                     if is_concrete(&found) && found != Ty::Int {
                         self.errors.push(CompileError::TypeMismatch {
@@ -3931,7 +3965,7 @@ impl Checker<'_> {
             | (
                 Ty::List(_),
                 "push" | "removeAt" | "filter" | "slice" | "sort" | "sortBy" | "reverse"
-                | "insertAt" | "updateAt",
+                | "insertAt" | "updateAt" | "take" | "skip" | "unique",
             )
             | (Ty::Int | Ty::Float, "abs") => recv.clone(),
             // `xs.get(i)` is the item, or nothing past the end: a `T?`, where
@@ -3981,6 +4015,37 @@ impl Checker<'_> {
             | (Ty::List(_) | Ty::Set(_) | Ty::Str, "contains")
             | (Ty::Str, "startsWith" | "endsWith") => Ty::Bool,
             (Ty::List(_), "map") => Ty::List(Box::new(lambda_body_ty.unwrap_or(Ty::Unknown))),
+            // The lists the lambda gives, one after another.
+            (Ty::List(_), "flatMap") => match lambda_body_ty {
+                Some(Ty::List(inner)) => Ty::List(inner),
+                Some(other) if is_concrete(&other) => Ty::List(Box::new(other)),
+                _ => Ty::List(Box::new(Ty::Unknown)),
+            },
+            // Each key the lambda gives, to the items it gave it for.
+            (Ty::List(_), "groupBy") => Ty::Map(
+                Box::new(lambda_body_ty.unwrap_or(Ty::Unknown)),
+                Box::new(recv.clone()),
+            ),
+            (Ty::List(_), "chunk") => Ty::List(Box::new(recv.clone())),
+            (Ty::List(item), "enumerate") => Ty::List(Box::new(Ty::Shape(vec![
+                (Symbol::intern("index"), Ty::Int),
+                (Symbol::intern("item"), (**item).clone()),
+            ]))),
+            (Ty::List(item), "zip") => {
+                let other = args
+                    .first()
+                    .map_or(Ty::Unknown, |a| self.infer_expr(&a.value));
+                let second = match other {
+                    Ty::List(inner) => *inner,
+                    _ => Ty::Unknown,
+                };
+                Ty::List(Box::new(Ty::Shape(vec![
+                    (Symbol::intern("first"), (**item).clone()),
+                    (Symbol::intern("second"), second),
+                ])))
+            }
+            (Ty::Map(key, _), "keys") => Ty::List(key.clone()),
+            (Ty::Map(_, value), "values") => Ty::List(value.clone()),
             _ => Ty::Unknown,
         }
     }

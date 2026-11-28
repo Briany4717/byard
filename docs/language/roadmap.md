@@ -236,8 +236,12 @@ so do the twenty-two cases added with them. What stays open:
 with `//# edition: 2027`, and so do the twenty-one cases added with them; the baseline edition
 is as it was (`colour-is-still-a-number-before-2027`). What stays open:
 
-- `Color.mix`, `Color.lighten` and `Color.rgb(r, g, b)` from the proposal, and a colour
-  written as `#3B82F6`. `alpha` is the one method a `Color` has.
+- ~~`Color.mix`, `Color.lighten` and a colour written as `#3B82F6`.~~ Done after 1.0's plan:
+  `#RGB`, `#RRGGBB`, `#RRGGBBAA`, and `mix`, `lighten` and `darken` in OKLab. `Color.rgb(r, g,
+  b)` is not done: a colour of three channels is written `#RRGGBB`.
+- *Decided:* a `Color` keeps going where an `Int` does in 2027. It has no arithmetic, which is
+  the error that mattered, and refusing the rest would make `byard fix` write a conversion into
+  every program of 2026 that passes one, for no case that asks for it.
 - A colour is still told apart from an `Int` only by the type written for it: `0xFF0000` is
   a number until it is given to a `Color`. A text shows it as a colour only where the checker
   knows the type, so a colour that went through a function or a list of `Unknown` shows as a

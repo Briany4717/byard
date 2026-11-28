@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
-"""Compare two runs of the `byard-core` benchmarks (RFC-0046 section 4).
+"""Compare two runs of the benchmarks, the engine's (`byard-core`) and the
+language's (`byard-compiler --bench language`) (RFC-0046 section 4).
 
 The benchmarks print one line per measurement:
 

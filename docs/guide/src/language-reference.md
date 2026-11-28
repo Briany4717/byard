@@ -654,8 +654,6 @@ stored, passed and compared with `==`, and that is all: `a + b` of two of them i
 `TypeMismatch`. There are no bounds. A `T` is a type only inside its own function
 (`UnknownType` anywhere else).
 
-> **Not yet.** A `type` cannot have type parameters. (`05_records.byd`)
-
 ### Record types
 
 ```byld
@@ -670,11 +668,32 @@ View Main() {
 ```
 
 ```text
-record := "type" NAME "=" "{" (NAME ":" type "?"? ","?)* "}"
+record := "type" NAME ("<" NAME ("," NAME)* ">")? "=" "{" (NAME ":" type "?"? ","?)* "}"
 ```
 
 A `?` after a field's type says it may be left out. A `var`, a parameter, a loop variable or
 an item with a declared type has its fields checked.
+
+A type may take types, named between `<` and `>`, and use them in its fields:
+
+```byld
+type Item = { name: Str, qty: Int }
+type Page<T> = { items: List<T>, total: Int }
+
+View Main() {
+    var page: Page<Item> = { items: [{ name: "bolts", qty: 40 }], total: 1 }
+    for item in page.items {
+        Text("{item.name}: {item.qty} of {page.total}")
+    }
+}
+```
+
+`Page<Item>` is the record `Page` with `Item` wherever its fields say `T`: its `items` is a
+`List<Item>`, a literal written for it is checked against those fields, and a reply cast
+`as Page<Item>` is compared with them when it arrives. A type may use itself in its fields
+(`type Tree<T> = { value: T, kids: List<Tree<T>> }`). Every use gives a type for each of
+its parameters: `Page` alone, `Page<Item, Int>`, and `Item<Int>` for a type that takes none
+are each `TypeArgumentCount`. A `context` and a `store` take none.
 
 ### Enums
 

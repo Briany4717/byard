@@ -60,3 +60,7 @@ workspace = true
 [[bench]]
 name = "spring_frame"
 harness = false
+
+[[bench]]
+name = "language"
+harness = false

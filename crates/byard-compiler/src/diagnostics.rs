@@ -936,6 +936,19 @@ pub enum CompileError {
         /// The first difference, in words.
         problem: String,
     },
+    /// A type given a number of type arguments it does not take: `Page`, or
+    /// `Page<Int, Str>`, for `type Page<T> = { … }`; `Place<Int>` for a type
+    /// that takes none.
+    TypeArgumentCount {
+        /// The written type.
+        span: Span,
+        /// The type's name.
+        name: String,
+        /// The names of its type parameters, in order.
+        params: Vec<String>,
+        /// How many arguments were written.
+        found: usize,
+    },
     /// Two record types of one name in a program (`type Place = …` twice).
     DuplicateRecordType {
         /// The second declaration.
@@ -1817,6 +1830,7 @@ impl CompileError {
             | Self::UnknownMethod { span, .. }
             | Self::UnknownName { span, .. }
             | Self::DuplicateRecordType { span, .. }
+            | Self::TypeArgumentCount { span, .. }
             | Self::PrivateName { span, .. }
             | Self::DuplicateConstant { span, .. }
             | Self::DuplicateEnum { span, .. }
@@ -1982,6 +1996,7 @@ impl CompileError {
             | Self::UnknownMethod { span, .. }
             | Self::UnknownName { span, .. }
             | Self::DuplicateRecordType { span, .. }
+            | Self::TypeArgumentCount { span, .. }
             | Self::PrivateName { span, .. }
             | Self::DuplicateConstant { span, .. }
             | Self::DuplicateEnum { span, .. }
@@ -2150,6 +2165,7 @@ impl CompileError {
             Self::UnknownMethod { .. } => "UnknownMethod",
             Self::UnknownName { .. } => "UnknownName",
             Self::DuplicateRecordType { .. } => "DuplicateRecordType",
+            Self::TypeArgumentCount { .. } => "TypeArgumentCount",
             Self::PrivateName { .. } => "PrivateName",
             Self::DuplicateConstant { .. } => "DuplicateConstant",
             Self::DuplicateEnum { .. } => "DuplicateEnum",
@@ -3128,6 +3144,28 @@ impl CompileError {
             } => format!("the value written into `{var}` is not a `{expected}`: {problem}"),
             Self::DuplicateRecordType { name, .. } => {
                 format!("the type `{name}` is declared twice in this program")
+            }
+            Self::TypeArgumentCount {
+                name,
+                params,
+                found,
+                ..
+            } => {
+                if params.is_empty() {
+                    format!("`{name}` takes no type arguments: write `{name}`")
+                } else {
+                    let list = params
+                        .iter()
+                        .map(|p| format!("`{p}`"))
+                        .collect::<Vec<_>>()
+                        .join(", ");
+                    let wanted = params.len();
+                    let s = if wanted == 1 { "" } else { "s" };
+                    let holes = vec!["…"; wanted].join(", ");
+                    format!(
+                        "`{name}` takes {wanted} type argument{s} ({list}), and this gives {found}: write `{name}<{holes}>`, a type for each"
+                    )
+                }
             }
             Self::PrivateName { name, package, .. } => {
                 format!("`{name}` is private to {package}: only the package's own files can use it")

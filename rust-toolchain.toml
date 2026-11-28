@@ -1,2 +1,9 @@
+# The one Rust every build of the repository uses: a person's, an editor's,
+# and CI's (each workflow installs what this file names). Pinned, not
+# `stable`, so that two of them on one machine never build with different
+# compilers into one `target/`, where each invalidates the other's
+# dependencies and a test run becomes a rebuild of all of them. Raise it on
+# purpose, in a pull request of its own.
 [toolchain]
-channel = "stable"
+channel = "1.99.0"
+components = ["rustfmt", "clippy"]

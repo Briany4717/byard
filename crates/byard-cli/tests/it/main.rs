@@ -29,6 +29,7 @@ mod example_roots;
 mod fmt;
 mod font_families_example;
 mod frosted_glass_example;
+mod fuzz_targets;
 mod gradient_kinds_example;
 mod grid_example;
 mod guide;

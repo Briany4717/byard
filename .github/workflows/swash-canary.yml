@@ -19,7 +19,8 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - uses: dtolnay/rust-toolchain@stable
+      - name: Install the toolchain
+        run: rustup toolchain install --no-self-update
 
       - name: The newest swash
         run: |

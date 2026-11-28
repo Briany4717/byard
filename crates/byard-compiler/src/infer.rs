@@ -386,9 +386,17 @@ fn check_all(views: &[ViewDecl]) -> Inference {
             stores: HashSet::new(),
         };
         for decl in record_decls.iter() {
+            // A type made from a use (`Page<Item>`) was checked twice already:
+            // its declaration's fields here, with the parameters as types, and
+            // its arguments where the use is written.
+            if decl.name.as_str().contains('<') {
+                continue;
+            }
+            checker.type_vars = decl.type_params.iter().cloned().collect();
             for field in &decl.fields {
                 checker.check_type_names(&field.ty);
             }
+            checker.type_vars.clear();
             if decl.context {
                 checker.check_context_decl(decl);
             }

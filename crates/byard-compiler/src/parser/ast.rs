@@ -207,6 +207,10 @@ pub struct ViewDecl {
 pub struct RecordDecl {
     /// The type's name.
     pub name: Symbol,
+    /// The type's parameters, `T` in `type Page<T> = { items: List<T> }`:
+    /// names its fields use for the types a use of it gives
+    /// (`Page<Item>`). Empty for a type that takes none, and for a context.
+    pub type_params: Vec<Symbol>,
     /// Its fields, in the order written.
     pub fields: Vec<RecordField>,
     /// Written `private type …` (RFC-0055).

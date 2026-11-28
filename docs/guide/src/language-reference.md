@@ -966,8 +966,9 @@ That draws `22`.
 Two declarations of one name in one body, or one over a parameter, are `NameCollision`: the
 second would hide the first. A body inside a `when`, a `for` or a `route` is a scope of its
 own, and may reuse a name of the view's. `let`s of a view that read each other in a circle are
-`ConstantCycle`, once one of them is read. A `var` or `let` that nothing in its view mentions is
-the warning `UnusedVariable`, a parameter its view never mentions `UnusedParam`, and a
+`ConstantCycle`, once one of them is read. A `var` or `let` that nothing in its view reads is
+the warning `UnusedVariable`, a `var` that is only ever written (`n++` and nothing else)
+included, a parameter its view never mentions `UnusedParam`, and a
 `private View` no view draws `UnusedView`, and a field read of what a controller replied, with
 nothing saying its shape, is `UntypedReply` (see [a reply with a type](data-and-io.md#a-reply-with-a-type)). A name that starts with `_` says it is meant to be
 unused, and `[lints]` in `byard.toml` switches a lint off, by its name:
@@ -980,8 +981,8 @@ unused-view      = "allow"
 untyped-reply    = "allow"
 ```
 
-> **Not yet.** A `var` that is only ever written, `n++` and nothing else, counts as used, and
-> so does a name another view of a package never reads. (`12_state.byd`)
+> **Not yet.** A name another view of a package never reads counts as used, and so does a
+> `var` read only to work out its own next value (`n = n + 1`). (`12_state.byd`)
 
 ### Functions in a view
 

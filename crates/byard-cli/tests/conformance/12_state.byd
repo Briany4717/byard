@@ -171,6 +171,26 @@ Text("x")
 View Card(label: Str) { Text("x") }
 View Main() { Card("a") }
 
+//# case: var-only-ever-written-is-unused
+//# fragment
+//# warning: UnusedVariable
+//# diagnostics: 1
+var taps = 0
+Button("go") => { taps++ }
+
+//# case: var-written-and-read-is-used
+//# fragment
+//# text: go | 0
+var taps = 0
+Button("go") => { taps += 1 }
+Text("{taps}")
+
+//# case: var-bound-to-a-control-is-used
+//# fragment
+//# diagnostics: 0
+var name = ""
+TextField #[bind: name]
+
 //# case: param-unused-with-an-underscore-is-meant
 //# text: x
 View Card(_label: Str) { Text("x") }
@@ -369,31 +389,31 @@ Text("{n}")
 //# case: on-unmount-is-accepted
 //# fragment
 //# text: a
-var n = 0
-on unmount => { n++ }
+var _n = 0
+on unmount => { _n++ }
 Text("a")
 
 //# case: timers-are-accepted
 //# fragment
 //# text: a
-var n = 0
-every 1s => { n++ }
-after 300ms => { n++ }
+var _n = 0
+every 1s => { _n++ }
+after 300ms => { _n++ }
 Text("a")
 
 //# case: timer-with-an-expression
 //# fragment
 //# text: a
 var wait = 5
-var n = 0
-after wait * 1ms => { n++ }
+var _n = 0
+after wait * 1ms => { _n++ }
 Text("a")
 
 //# case: timer-of-zero
 //# fragment
 //# error: InvalidAnimation
-var n = 0
-every 0ms => { n++ }
+var _n = 0
+every 0ms => { _n++ }
 Text("a")
 
 //# case: after-zero-is-refused-too

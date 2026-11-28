@@ -473,13 +473,27 @@ fn lint_view(view: &ViewDecl, drawn: &HashSet<Symbol>, out: &mut Vec<CompileErro
         });
     }
 
-    // A name is used where it is written as an identifier, to read it or to
-    // write it. (A `var` that is only ever written is not said to be unused:
-    // "never read" is a stricter test, and a later one.)
+    // A name is used where it is read. The name an assignment or a `++`
+    // writes to is not a read: a `var` that is only ever written, `n++` and
+    // nothing else, holds a value nothing shows or passes on.
+    let mut written: HashSet<(u32, u32)> = HashSet::new();
+    let mut targets = |e: &mut Expr| {
+        if let Expr::Assign { target, .. } | Expr::Postfix { target, .. } = e {
+            if let Expr::Ident(_, span) = &**target {
+                written.insert((span.start, span.end));
+            }
+        }
+    };
+    for member in &view.body {
+        let mut copy = member.clone();
+        walk::member_exprs(&mut copy, &mut targets);
+    }
     let mut seen: HashSet<Symbol> = HashSet::new();
     let mut count = |e: &mut Expr| {
-        if let Expr::Ident(name, _) = e {
-            seen.insert(name.clone());
+        if let Expr::Ident(name, span) = e {
+            if !written.contains(&(span.start, span.end)) {
+                seen.insert(name.clone());
+            }
         }
     };
     for param in &view.params {

@@ -88,8 +88,8 @@ Box #[tap => { n++ n++ }] {}
 //# case: event-value-fields
 //# fragment
 //# text: ok
-var x = 0.0
-Box #[pointer_down(e) => x = e.x + e.y + e.width + e.height] { Text("ok") }
+var _x = 0.0
+Box #[pointer_down(e) => _x = e.x + e.y + e.width + e.height] { Text("ok") }
 
 //# case: event-value-unknown-field
 //# fragment
@@ -106,8 +106,8 @@ Box #[tap(e) => n++] {}
 //# case: key-event-on-an-unreachable-box
 //# fragment
 //# error: KeyNeedsFocus
-var n = 0
-Box #[key_down => n++] {}
+var _n = 0
+Box #[key_down => _n++] {}
 
 //# case: children-on-an-element-that-takes-none
 //# fragment
@@ -117,21 +117,21 @@ Text("a") { Text("b") }
 //# case: trailing-action-on-an-element-that-takes-none
 //# fragment
 //# error: ViewCallAction
-var n = 0
-Text("a") => n++
+var _n = 0
+Text("a") => _n++
 
 //# case: trailing-action-on-an-image
 //# fragment
 //# error: ViewCallAction
 //# diagnostics: 1
-var n = 0
-Image("a.png") => n++
+var _n = 0
+Image("a.png") => _n++
 
 //# case: trailing-action-on-a-button-runs
 //# fragment
 //# text: go
-var n = 0
-Button("go") => n++
+var _n = 0
+Button("go") => _n++
 
 //# case: style-value-and-spread
 //# fragment

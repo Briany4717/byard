@@ -1,0 +1,49 @@
+# The fuzz targets of byld, run by `cargo fuzz` on nightly (the `fuzz` workflow
+# runs them every night). A workspace of its own, so the main one never needs
+# nightly or libFuzzer; its tests run the same targets on stable over the seeds
+# (crates/byard-cli/tests/it/fuzz_targets.rs).
+[package]
+name = "byld-fuzz"
+version = "0.0.0"
+edition = "2024"
+publish = false
+
+[package.metadata]
+cargo-fuzz = true
+
+[dependencies]
+libfuzzer-sys = "0.4"
+byard-compiler = { path = "../crates/byard-compiler" }
+byard-core = { path = "../crates/byard-core" }
+byard-project = { path = "../crates/byard-project" }
+
+[workspace]
+members = ["."]
+
+[[bin]]
+name = "parse"
+path = "fuzz_targets/parse.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "check"
+path = "fuzz_targets/check.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "format"
+path = "fuzz_targets/format.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "run"
+path = "fuzz_targets/run.rs"
+test = false
+doc = false
+bench = false

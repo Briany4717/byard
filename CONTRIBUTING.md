@@ -128,8 +128,12 @@ budgets`).
 
 ### Toolchain
 
-Byard tracks **stable Rust**. The current MSRV is declared in the workspace
-`Cargo.toml`.
+Byard builds with the Rust that `rust-toolchain.toml` names, **1.99.0**, pinned
+so that you, your editor and CI all build with one compiler: two compilers on
+one machine share `target/` and rebuild each other's dependencies on every
+run. `rustup` installs it the first time a command runs in the repository.
+The pin is raised on purpose, in a pull request of its own. The MSRV a
+library user needs is declared in the workspace `Cargo.toml`.
 
 ## Code style
 

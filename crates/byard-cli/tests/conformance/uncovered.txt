@@ -2,5 +2,3 @@
 # about yet (by anchor). A section comes off this list when a file says
 # `//# covers: <anchor>`; nothing is added to it, and the test fails when a
 # listed section has cases or an unlisted one has none.
-built-in-names
-use

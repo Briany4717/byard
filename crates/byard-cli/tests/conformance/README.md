@@ -18,6 +18,10 @@ The headers, and how a case is run, are described at the top of
 Text("{7 / 2}")
 ```
 
+A case about packages writes each one after its program, under a `//# package: NAME` line: what
+follows is that package's one file, and the program may `use` it as if it were in its
+`[dependencies]`. A package a case does not write is not there (`UnknownPackage`).
+
 A case marked `//# gap: why` says what *should* happen where the language does not do it
 yet, and is expected to fail. When it starts to pass, the suite fails and says to delete
 the marker, so the list of gaps is always the list of what is left. The reasons and the

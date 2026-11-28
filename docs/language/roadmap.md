@@ -288,9 +288,9 @@ format has a width, a fill, an alignment and a percentage. What stays open:
     *Prepared, and needing the author to finish it.* The reference says it is the
     specification. Every file of cases says which sections it is the cases of
     (`//# covers:`), and `every_section_of_the_reference_has_cases` fails for a section with
-    none that is not in `uncovered.txt`, a list that can only shrink: 49 of 51 sections have
-    cases, and `use` and `built-in-names` have none (`use` needs a package the harness does not
-    have). What the test cannot say is whether each *rule* in a section has a case, or which
+    none that is not in `uncovered.txt`, a list that can only shrink, and is now empty: all 51
+    sections have cases. (`use` and `built-in-names` were the last two; a case writes the
+    packages it uses under `//# package:`.) What the test cannot say is whether each *rule* in a section has a case, or which
     rule a case is the case of: that is a reading of the whole reference, and the suite does
     not tie a case to a sentence. The last gap, `only-a-comment`, closed here: a program with
     no `View` is a `Project` error that says so.

@@ -298,3 +298,101 @@ for p in ps {
 //# text: a,b
 let ps = [{ name: "a" }, { name: "b" }]
 Text("{ps.map(p => p.name).join(",")}")
+
+//# case: a-type-with-a-parameter-gives-its-fields-the-type-of-each-use
+//# text: 2 a | a=2 | b=3
+type Item = { name: Str, qty: Int }
+type Page<T> = { items: List<T>, total: Int }
+View Main() {
+    var page: Page<Item> = { items: [{ name: "a", qty: 2 }, { name: "b", qty: 3 }], total: 2 }
+    Text("{page.items.len} {page.items[0].name}")
+    for item in page.items { Text("{item.name}={item.qty}") }
+}
+
+//# case: a-type-with-two-parameters
+//# text: x 1
+type Pair<A, B> = { first: A, second: B }
+View Main() {
+    let pair: Pair<Str, Int> = { first: "x", second: 1 }
+    Text("{pair.first} {pair.second}")
+}
+
+//# case: a-field-of-the-type-given-is-checked
+//# error: TypeMismatch
+//# diagnostics: 1
+type Box<T> = { value: T }
+View Main() {
+    let b: Box<Int> = { value: "a" }
+    Text("{b.value}")
+}
+
+//# case: a-field-a-type-with-a-parameter-does-not-have
+//# error: UnknownField
+//# diagnostics: 1
+type Page<T> = { items: List<T> }
+View Main() {
+    let p: Page<Int> = { items: [1] }
+    Text("{p.itms.len}")
+}
+
+//# case: a-type-that-uses-itself-in-its-fields
+//# text: 2
+type Tree<T> = { value: T, kids: List<Tree<T>> }
+View Main() {
+    let t: Tree<Int> = { value: 1, kids: [{ value: 2, kids: [] }] }
+    Text("{t.kids[0].value}")
+}
+
+//# case: a-function-takes-a-type-with-a-parameter
+//# text: 2
+type Page<T> = { items: List<T> }
+fn size(p: Page<Int>) -> Int => p.items.len
+View Main() {
+    let p: Page<Int> = { items: [4, 5] }
+    Text("{size(p)}")
+}
+
+//# case: a-type-with-a-parameter-used-without-one
+//# error: TypeArgumentCount
+//# diagnostics: 1
+type Page<T> = { items: List<T> }
+View Main() {
+    let p: Page = { items: [1] }
+    Text("{p.items.len}")
+}
+
+//# case: a-type-with-a-parameter-given-two
+//# error: TypeArgumentCount
+//# diagnostics: 1
+type Page<T> = { items: List<T> }
+View Main() {
+    let p: Page<Int, Str> = { items: [1] }
+    Text("{p.items.len}")
+}
+
+//# case: a-type-without-parameters-given-one
+//# error: TypeArgumentCount
+//# diagnostics: 1
+type Place = { n: Int }
+View Main() {
+    let p: Place<Int> = { n: 1 }
+    Text("{p.n}")
+}
+
+//# case: a-field-of-a-type-with-a-parameter-names-no-type
+//# error: UnknownType
+//# diagnostics: 1
+type Page<T> = { items: Lst<T> }
+View Main() { Text("x") }
+
+//# case: a-reply-may-be-cast-to-a-type-with-a-parameter
+type Box<T> = { value: T }
+View Main() {
+    inject Json as json
+    var n = 0
+    on mount => {
+        json.parse("\{\"value\": 3\}")
+            ok v => { n = (v as Box<Int>).value }
+    }
+    Text("{n}")
+}

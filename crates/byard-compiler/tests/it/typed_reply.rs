@@ -8,7 +8,7 @@
 use std::sync::Arc;
 
 use byard_compiler::interp::eval::Interpreter;
-use byard_compiler::parser::parse;
+use byard_compiler::resolve::{PackageProvider, SourceFile};
 use byard_core::bridge::{ControllerRegistry, Dispatcher};
 use byard_core::cap::Store;
 use byard_core::frame::RenderFrame;
@@ -40,6 +40,14 @@ impl Drop for TempDir {
     }
 }
 
+struct NoPackages;
+
+impl PackageProvider for NoPackages {
+    fn package_files(&mut self, _: &str, _: &str) -> Result<Vec<SourceFile>, String> {
+        Err("no packages".to_string())
+    }
+}
+
 struct Harness {
     interp: Interpreter,
     tree: Vec<byard_compiler::interp::eval::RenderNode>,
@@ -49,7 +57,15 @@ struct Harness {
 
 impl Harness {
     fn new(source: &str, path: &std::path::Path) -> Self {
-        let parsed = parse(source);
+        // Resolved, as an app's program is: a type with parameters is made
+        // into the types its uses name there.
+        let parsed = byard_compiler::resolve::resolve_program(
+            vec![SourceFile {
+                name: "main.byd".to_string(),
+                source: source.to_string(),
+            }],
+            &mut NoPackages,
+        );
         assert!(parsed.errors.is_empty(), "{:?}", parsed.errors);
         let relay = Relay::new().expect("relay");
         let mut registry = ControllerRegistry::new();
@@ -249,5 +265,30 @@ View Main() {
             .any(|e| matches!(e, byard_compiler::CompileError::ControllerCallFailed { .. })),
         "a reply of the wrong shape with nobody to tell is not silent: {:?}",
         harness.interp.errors()
+    );
+}
+
+#[test]
+fn a_reply_cast_to_a_type_with_a_parameter_is_compared_with_the_fields_it_gives() {
+    const VIEW: &str = r#"
+type Pair<T> = { id: T, text: Str }
+View Main() {
+    inject Store as store
+    var what = "waiting"
+    on mount => {
+        store.get("todos", [])
+            ok saved => { let todos = saved as List<Pair<Int>>  what = "ok {todos.len}" }
+            err e => { what = "{e.kind} {e.path}" }
+    }
+    Text("{what}")
+}
+"#;
+    let dir = seeded("generic");
+    let mut harness = Harness::new(VIEW, &dir.file());
+    harness.pump();
+    assert_eq!(
+        harness.text(),
+        "shape [1].id",
+        "`Pair<Int>` has an `id` that is an `Int`, and the second todo's is not"
     );
 }

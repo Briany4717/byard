@@ -3354,8 +3354,7 @@ impl Checker<'_> {
                 continue;
             };
             let expected = plain_ty(ty);
-            let given = self.infer_expr(value);
-            self.must_fit(&expected, &given, value.span());
+            self.fit_quietly(&expected, value);
         }
         if spread.is_some() {
             return;
@@ -3385,6 +3384,43 @@ impl Checker<'_> {
                         .join(", ")
                 ),
             });
+        }
+    }
+
+    /// That `value`, already checked where it is written, fits `expected`: a
+    /// list literal item by item and a map literal pair by pair, so the item
+    /// that does not fit is the one told, and a record literal field by
+    /// field. What is inside was told when it was checked, so nothing here is
+    /// checked again; only whether it fits.
+    fn fit_quietly(&mut self, expected: &Ty, value: &Expr) {
+        // A literal the type written for it says the type of: that it could
+        // not be inferred alone is no mistake, and what does not fit is told.
+        if matches!(value, Expr::Array(..) | Expr::MapLit(..)) && is_concrete(expected) {
+            let at = value.span();
+            self.errors
+                .retain(|e| !matches!(e, CompileError::CannotInfer { span } if *span == at));
+        }
+        match (value, expected) {
+            (Expr::Array(items, _), Ty::List(item)) => {
+                for elem in items {
+                    self.fit_quietly(item, elem);
+                }
+            }
+            (Expr::MapLit(pairs, _), Ty::Map(key, val)) => {
+                for (k, v) in pairs {
+                    let found = self.infer_expr(k);
+                    self.must_fit(key, &found, k.span());
+                    self.fit_quietly(val, v);
+                }
+            }
+            (Expr::Record { .. }, Ty::Named(record)) if self.records.contains_key(record) => {
+                let found = self.infer_expr(value);
+                self.check_record_literal(record, value, &found);
+            }
+            _ => {
+                let found = self.infer_expr(value);
+                self.must_fit(expected, &found, value.span());
+            }
         }
     }
 

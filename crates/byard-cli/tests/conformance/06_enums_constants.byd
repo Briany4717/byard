@@ -217,3 +217,20 @@ View Main() { Hint() }
 //# error: TextUsedAsType
 View Card(label: Text) { Text("x") }
 View Main() { Card("a") }
+
+//# case: text-cast-to-an-enum-is-the-case-it-names
+//# text: large true
+enum Size { small, large }
+View Main() {
+    let s = "large" as Size
+    Text("{s} {s == Size.large}")
+}
+
+//# case: text-cast-to-an-enum-that-names-no-case
+//# error: ShapeMismatch
+//# diagnostics: 1
+enum Size { small, large }
+View Main() {
+    let s = "huge" as Size
+    Text("{s}")
+}

@@ -104,7 +104,10 @@ A reply of another shape stops the `ok` arm where the `as` is, and goes to the c
 arm as an error of kind `shape`, with the `path` of the first field that does not fit
 (`daily[3].max`) and a `message` that says what is wrong with it. A call with no `err` arm
 reports it instead, since nothing else would. After the `as`, `forecast.curent` is a check
-error. Reading a field of a reply that was not given a type, `res.json.current.temperature_2m`,
+error. JSON has records and lists and no maps or sets: `res.json as Map<Str, Int>` takes an
+object, checks each value, and from there it is a `Map` of its keys, and `as Set<Str>` takes a
+list and is a `Set` of its items, each once. A field of a `type` written `Map` or `Set` is read
+the same way. Reading a field of a reply that was not given a type, `res.json.current.temperature_2m`,
 is the warning `untyped-reply`, which says to write the type; `[lints]` in `byard.toml`
 switches it off.
 

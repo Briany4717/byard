@@ -70,6 +70,7 @@ impl Harness {
         let relay = Relay::new().expect("relay");
         let mut registry = ControllerRegistry::new();
         registry.insert(Arc::new(Store::at(path)));
+        registry.insert(Arc::new(byard_core::cap::Json));
         let dispatcher = Dispatcher::new(registry, relay.io_handle(), relay.io_result_sender());
         let mut interp = Interpreter::new();
         interp.set_dispatcher(dispatcher);
@@ -291,4 +292,46 @@ View Main() {
         "shape [1].id",
         "`Pair<Int>` has an `id` that is an `Int`, and the second todo's is not"
     );
+}
+
+/// One run of `view`, its reply applied: what it shows.
+fn shown_by(view: &str, name: &str) -> String {
+    let dir = TempDir::new(name);
+    let mut harness = Harness::new(view, &dir.file());
+    harness.pump();
+    harness.text()
+}
+
+#[test]
+fn a_reply_cast_to_a_map_or_a_set_is_compared_and_becomes_one() {
+    // JSON has records and lists; a `Map` and a `Set` are what the type says.
+    let view = |json: &str, cast: &str, shown: &str| {
+        format!(
+            r#"
+View Main() {{
+    inject Json as json
+    var what = "waiting"
+    on mount => {{
+        json.parse("{json}")
+            ok v => {{
+                let x = v as {cast}
+                what = "{shown}"
+            }}
+            err e => {{ what = "{{e.kind}} {{e.path}}" }}
+    }}
+    Text("{{what}}")
+}}
+"#
+        )
+    };
+    let map = view(
+        r#"\{\"a\": 1, \"b\": 2\}"#,
+        "Map<Str, Int>",
+        r#"{x.len} {x["b"] ?? 0}"#,
+    );
+    assert_eq!(shown_by(&map, "map"), "2 2");
+    let bad = view(r#"\{\"a\": 1, \"b\": \"two\"\}"#, "Map<Str, Int>", "ok");
+    assert_eq!(shown_by(&bad, "bad-map"), "shape b");
+    let set = view("[1, 2, 2, 3]", "Set<Int>", "{x.len} {x.contains(2)}");
+    assert_eq!(shown_by(&set, "set"), "3 true");
 }

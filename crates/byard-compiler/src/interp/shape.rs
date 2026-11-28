@@ -153,6 +153,48 @@ fn differ(value: &Value, ty: &Type, records: &Records, depth: usize) -> Option<D
             })
         }
         ("List", _) => expected("a list"),
+        // A map, or a record as JSON gives one (its keys are text): each
+        // key and each value as the map's types say.
+        ("Map", Value::Map(map)) => {
+            let (key_ty, value_ty) = (args.first()?, args.get(1)?);
+            map.pairs().iter().find_map(|(k, v)| {
+                differ(k, key_ty, records, depth + 1)
+                    .or_else(|| differ(v, value_ty, records, depth + 1))
+                    .map(|mut d| {
+                        d.steps.insert(0, Step::Field(Symbol::intern(&k.to_text())));
+                        d
+                    })
+            })
+        }
+        ("Map", Value::Record(fields)) => {
+            let (key_ty, value_ty) = (args.first()?, args.get(1)?);
+            if !matches!(key_ty, Type::Named { name, .. } if name.as_str() == "Str") {
+                return expected("a map");
+            }
+            fields.iter().find_map(|(k, v)| {
+                differ(v, value_ty, records, depth + 1).map(|mut d| {
+                    d.steps.insert(0, Step::Field(k.clone()));
+                    d
+                })
+            })
+        }
+        ("Map", _) => expected("a map"),
+        // A set, or a list as JSON gives one.
+        ("Set", Value::Set(_) | Value::List(_)) => {
+            let element = args.first()?;
+            let items: Vec<Value> = match value {
+                Value::Set(set) => set.items().to_vec(),
+                Value::List(items) => items.clone(),
+                _ => Vec::new(),
+            };
+            items.iter().enumerate().find_map(|(i, item)| {
+                differ(item, element, records, depth + 1).map(|mut d| {
+                    d.steps.insert(0, Step::Item(i));
+                    d
+                })
+            })
+        }
+        ("Set", _) => expected("a set"),
         (record, _) => {
             let decl = records.get(name)?;
             let Value::Record(fields) = value else {
@@ -192,5 +234,76 @@ pub fn written(ty: &Type) -> String {
         ),
         Type::Optional { inner, .. } => format!("{}?", written(inner)),
         Type::Function { .. } => "Fn".to_string(),
+    }
+}
+
+/// `value`, which fits `ty`, as a value of it: a record JSON gave where a
+/// `Map` is written is that map, and a list where a `Set` is, that set, at any
+/// depth. Anything else is as it was.
+#[must_use]
+pub fn converted(value: Value, ty: &Type, records: &Records) -> Value {
+    convert(value, ty, records, 0)
+}
+
+fn convert(value: Value, ty: &Type, records: &Records, depth: usize) -> Value {
+    use crate::interp::collections::{MapData, SetData};
+    if depth > MAX_DEPTH {
+        return value;
+    }
+    let Type::Named { name, args, .. } = ty else {
+        return value;
+    };
+    match (name.as_str(), value) {
+        ("List", Value::List(items)) => match args.first() {
+            Some(element) => Value::List(
+                items
+                    .into_iter()
+                    .map(|item| convert(item, element, records, depth + 1))
+                    .collect(),
+            ),
+            None => Value::List(items),
+        },
+        ("Map", Value::Record(fields)) => {
+            let value_ty = args.get(1);
+            Value::Map(MapData::from_pairs(
+                fields
+                    .into_iter()
+                    .map(|(k, v)| {
+                        let v = match value_ty {
+                            Some(t) => convert(v, t, records, depth + 1),
+                            None => v,
+                        };
+                        (Value::Str(k.as_str().to_string()), v)
+                    })
+                    .collect(),
+            ))
+        }
+        ("Map", Value::Map(map)) => match args.get(1) {
+            Some(value_ty) => Value::Map(MapData::from_pairs(
+                map.pairs()
+                    .iter()
+                    .cloned()
+                    .map(|(k, v)| (k, convert(v, value_ty, records, depth + 1)))
+                    .collect(),
+            )),
+            None => Value::Map(map),
+        },
+        ("Set", Value::List(items)) => Value::Set(SetData::from_items(items)),
+        (_, Value::Record(fields)) => match records.get(name) {
+            Some(decl) => Value::Record(
+                fields
+                    .into_iter()
+                    .map(|(k, v)| {
+                        let v = match decl.fields.iter().find(|f| f.name == k) {
+                            Some(field) => convert(v, &field.ty, records, depth + 1),
+                            None => v,
+                        };
+                        (k, v)
+                    })
+                    .collect(),
+            ),
+            None => Value::Record(fields),
+        },
+        (_, value) => value,
     }
 }

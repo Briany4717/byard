@@ -46,6 +46,24 @@ pub enum LexError {
 /// (`> 0xFFFFFF` ⇒ alpha present).
 pub const COLOR_HAS_ALPHA_TAG: i64 = 1 << 32;
 
+/// The value of a colour written `#RGB`, `#RRGGBB` or `#RRGGBBAA` (the
+/// digits after the `#`): what `0xRRGGBB` is, or for eight digits the
+/// alpha-first `0xAARRGGBB` with [`COLOR_HAS_ALPHA_TAG`], as an eight-digit
+/// `0x…` is.
+fn hex_color(digits: &str) -> Option<i64> {
+    let digits: String = if digits.len() == 3 {
+        digits.chars().flat_map(|c| [c, c]).collect()
+    } else {
+        digits.to_string()
+    };
+    let v = i64::from_str_radix(&digits, 16).ok()?;
+    Some(if digits.len() == 8 {
+        ((v & 0xFF) << 24) | (v >> 8) | COLOR_HAS_ALPHA_TAG
+    } else {
+        v
+    })
+}
+
 /// The terminal set of the `byld` Lume surface (RFC-0002 §"Data structures",
 /// RFC-0003 §"Attribute syntax").
 ///
@@ -216,6 +234,15 @@ pub enum Token {
             .ok()
             .map(|v| if digits.len() > 6 { v | COLOR_HAS_ALPHA_TAG } else { v })
     })]
+    // `#RRGGBB`, `#RRGGBBAA` and `#RGB`: a colour as CSS writes it, the same
+    // value as `0xRRGGBB`, and for eight digits the alpha written last, as
+    // CSS has it, put first as the colour contract does (`0xAARRGGBB`).
+    #[regex(r"#[0-9a-fA-F]{3}", |lex| hex_color(&lex.slice()[1..]), priority = 3)]
+    #[regex(r"#[0-9a-fA-F]{6}", |lex| hex_color(&lex.slice()[1..]), priority = 3)]
+    #[regex(r"#[0-9a-fA-F]{8}", |lex| hex_color(&lex.slice()[1..]), priority = 3)]
+    // A `#` run of any other length or with a letter past `F` (`#12345`,
+    // `#3B82F6A`) is one lexing error, and not a colour and something else.
+    #[regex(r"#[0-9a-zA-Z_]+", |_| None::<i64>, priority = 1)]
     #[regex(r"0b[01]+", |lex| i64::from_str_radix(&lex.slice()[2..], 2).ok())]
     // Digits may be grouped with `_` between them: `1_000`.
     #[regex(r"[0-9]+(_[0-9]+)*", |lex| lex.slice().replace('_', "").parse::<i64>().ok())]
@@ -981,5 +1008,31 @@ mod tests {
         let lexed = lex("a = 10%3");
         let spans: Vec<(u32, u32)> = lexed.tokens.iter().map(|(_, s)| (s.start, s.end)).collect();
         assert_eq!(spans, [(0, 1), (2, 3), (4, 6), (6, 7), (7, 8)]);
+    }
+
+    #[test]
+    fn a_colour_is_written_as_css_writes_it() {
+        let ints = |src: &str| -> Vec<i64> {
+            lex(src)
+                .tokens
+                .into_iter()
+                .filter_map(|(t, _)| match t {
+                    Token::IntLit(n) => Some(n),
+                    _ => None,
+                })
+                .collect()
+        };
+        assert_eq!(ints("#3B82F6"), [0x3B_82F6]);
+        assert_eq!(ints("#F0a"), [0xFF_00AA]);
+        assert_eq!(ints("#3B82F680"), [0x803B_82F6 | COLOR_HAS_ALPHA_TAG]);
+        assert_eq!(ints("#3B82F680"), ints("0x803B82F6"));
+        // `#[` is still the attribute block.
+        assert!(
+            lex("#[gap: 4]")
+                .tokens
+                .first()
+                .is_some_and(|(t, _)| *t == Token::HashBracket)
+        );
+        assert_ne!(lex("#12345").errors.len(), 0);
     }
 }

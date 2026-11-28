@@ -72,6 +72,7 @@ Text("{on} {key} {type}")
 |------|---------|-------|
 | Whole number | `42`, `007`, `1_000`, `0xFF`, `0b101` | An `Int`. Decimal, hexadecimal or binary; `_` may separate digits. |
 | Fraction | `0.5`, `12.25`, `1e3`, `1.5e-3` | A `Float`. Digits on both sides of the point: `.5` and `5.` are errors. With an exponent it is a `Float` even when it is whole. |
+| Colour | `#3B82F6`, `#F00`, `#3B82F680` | The same `Int` as `0x3B82F6`: `#RGB` is `#RRGGBB` with each digit twice, and `#RRGGBBAA` has its alpha last, as CSS writes it. Any other run after a `#` is an error. From edition 2027 a `Color` where one is wanted. |
 | Truth | `true`, `false` | A `Bool`. |
 | Text | `"hello"` | A `Str`. |
 | Angle | `90deg`, `1.5rad` | A `Float`, in radians. From edition 2027 an `Angle`. |
@@ -520,13 +521,17 @@ That draws `#3B82F6 #3B82F680 600ms 1300ms 180deg`. A `Duration` adds to and sub
 `Duration` and is multiplied and divided by a number (`200ms * n`, `n * 200ms`, `200ms / 2`),
 and a `Duration` divided by a `Duration` is a `Float`; it compares with a `Duration`. An
 `Angle` does the same. A `Color` has no arithmetic and is compared with `==` and `!=`, to a
-`Color` or to its number. `300ms + 1` and `0xFF0000 + 200ms` are errors, and a `Duration`
+`Color` or to its number. It has `alpha(a)`, the colour at that opacity, `mix(other, t)`, the
+colour `t` of the way to `other` (`0` is itself, `1` is `other`), and `lighten(t)` and
+`darken(t)`, `t` of the way to white or to black. The mix is in OKLab, the space a colour
+animation runs through, so a mix is the colour the animation passes and half of the way to
+white looks half as light; an opaque result is written as an opaque colour is. `300ms + 1` and `0xFF0000 + 200ms` are errors, and a `Duration`
 does not go where an `Int` is wanted (`ArgumentTypeMismatch`). A `Color` does go where an
 `Int` does, as a number written for one does. A duration still means milliseconds everywhere
 that reads one (`every 1s`, `after 300ms`, `anim.easeInOut(300ms)`).
 
-Before edition 2027, `Color` is another name for `Int` and `Duration` and `Angle` are not
-types (`UnknownType`).
+Before edition 2027, `Color` is another name for `Int`, whose methods these are too, and
+`Duration` and `Angle` are not types (`UnknownType`).
 
 ### A value or a default: `??`
 

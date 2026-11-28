@@ -57,7 +57,7 @@ const LIST_METHODS: [&str; 24] = [
 /// The methods of a `Map`, and of a `Set`.
 const MAP_METHODS: [&str; 2] = ["set", "remove"];
 /// The methods of a `Color`.
-const COLOR_METHODS: [&str; 1] = ["alpha"];
+const COLOR_METHODS: [&str; 4] = ["alpha", "mix", "lighten", "darken"];
 const SET_METHODS: [&str; 3] = ["add", "remove", "contains"];
 
 /// The methods a `Str` has at runtime (`len` is a field). Any other call on a
@@ -82,8 +82,9 @@ const STR_METHODS: [&str; 14] = [
 
 /// The methods an `Int` has (RFC-0048); `alpha` is a colour's, which is an
 /// `Int` too.
-const INT_METHODS: [&str; 9] = [
-    "toFloat", "abs", "min", "max", "alpha", "sin", "cos", "sqrt", "atan2",
+const INT_METHODS: [&str; 12] = [
+    "toFloat", "abs", "min", "max", "alpha", "sin", "cos", "sqrt", "atan2", "mix", "lighten",
+    "darken",
 ];
 
 /// The methods a `Float` has (RFC-0048).
@@ -3927,7 +3928,7 @@ impl Checker<'_> {
         match (recv, name.as_str()) {
             (Ty::Map(..), "set" | "remove")
             | (Ty::Set(_), "add" | "remove")
-            | (Ty::Color, "alpha")
+            | (Ty::Color, "alpha" | "mix" | "lighten" | "darken")
             | (
                 Ty::List(_),
                 "push" | "removeAt" | "filter" | "slice" | "sort" | "sortBy" | "reverse"
@@ -3953,7 +3954,7 @@ impl Checker<'_> {
             }
             (Ty::List(_), "count")
             | (Ty::List(_) | Ty::Str, "indexOf")
-            | (Ty::Int, "alpha")
+            | (Ty::Int, "alpha" | "mix" | "lighten" | "darken")
             | (Ty::Str, "toInt")
             | (Ty::Float, "round" | "floor" | "ceil") => Ty::Int,
             // Text read as a number may be nothing, which `??` defaults; the

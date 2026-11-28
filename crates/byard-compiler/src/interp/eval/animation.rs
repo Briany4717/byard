@@ -314,7 +314,7 @@ pub(super) fn hex_from_oklab(lab: [f32; 3]) -> i64 {
 /// Alpha is auto-detected exactly as every other colour consumer does it (the
 /// lexer's 8-digit tag, else the magnitude heuristic), which is what lets
 /// `0x00FFFFFF → 0x80FFFFFF` ramp instead of popping.
-fn color_channels(hex: i64) -> [f32; 4] {
+pub(super) fn color_channels(hex: i64) -> [f32; 4] {
     let lab = oklab_from_hex(hex);
     #[allow(clippy::cast_precision_loss)]
     let alpha = if super::intrinsics::color_has_alpha(hex) {
@@ -328,7 +328,7 @@ fn color_channels(hex: i64) -> [f32; 4] {
 /// Packs the four animated channels back into `0xAARRGGBB`, tagged like an
 /// 8-digit literal so a downstream consumer honours a mid-ramp alpha of exactly
 /// zero instead of reading it as opaque.
-fn color_from_channels(ch: [f32; 4]) -> i64 {
+pub(super) fn color_from_channels(ch: [f32; 4]) -> i64 {
     #[allow(clippy::cast_sign_loss, clippy::cast_possible_truncation)]
     let alpha_byte = (ch[3].clamp(0.0, 1.0) * 255.0).round() as u8;
     // Nothing is visible below half a step of alpha, and the colour of
@@ -1377,5 +1377,25 @@ impl Interpreter {
         }
         clock.last_seen_ms = now;
         (now.saturating_sub(clock.start_ms), clock.honor_delay)
+    }
+}
+
+/// `a` mixed with `b`, `t` of the way from one to the other (`0` is `a`,
+/// `1` is `b`), in the same premultiplied OKLab space a colour animation runs
+/// through, so a mix is the colour the animation would pass.
+pub(super) fn mix_colors(from: i64, to: i64, amount: f64) -> i64 {
+    #[allow(clippy::cast_possible_truncation)]
+    let amount = amount.clamp(0.0, 1.0) as f32;
+    let (start, end) = (color_channels(from), color_channels(to));
+    let mut channels = [0.0; 4];
+    for (i, channel) in channels.iter_mut().enumerate() {
+        *channel = start[i] + (end[i] - start[i]) * amount;
+    }
+    let mixed = color_from_channels(channels);
+    // An opaque result is written as an opaque colour is, `0xRRGGBB`.
+    if (mixed >> 24) & 0xFF == 0xFF {
+        mixed & 0x00FF_FFFF
+    } else {
+        mixed
     }
 }

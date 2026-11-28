@@ -2363,6 +2363,38 @@ impl Interpreter {
                     }
                 }))
             }
+            // `color.mix(other, 0.3)`, `color.lighten(0.2)`, `color.darken(0.2)`:
+            // a colour that far towards another, towards white or towards black.
+            "mix" | "lighten" | "darken" => {
+                let kind = name.as_str().to_string();
+                let mut other = if kind == "mix" {
+                    Some(self.lower_expr(&args.first()?.value, payload_name))
+                } else {
+                    None
+                };
+                let at = usize::from(kind == "mix");
+                let mut amount = self.lower_expr(&args.get(at)?.value, payload_name);
+                Some(Box::new(move |ctx| {
+                    let towards = match (kind.as_str(), other.as_mut().map(|o| o(ctx))) {
+                        ("lighten", _) => 0xFF_FFFF,
+                        ("darken", _) => 0,
+                        (_, Some(Value::Int(c))) => c,
+                        _ => return Value::Unit,
+                    };
+                    let amount = match amount(ctx) {
+                        Value::Float(f) => f,
+                        #[allow(clippy::cast_precision_loss)]
+                        Value::Int(n) => n as f64,
+                        _ => return Value::Unit,
+                    };
+                    match base_c(ctx) {
+                        Value::Int(color) => {
+                            Value::Int(super::animation::mix_colors(color, towards, amount))
+                        }
+                        _ => Value::Unit,
+                    }
+                }))
+            }
             "urlEncoded" => Some(Box::new(move |ctx| match base_c(ctx) {
                 Value::Str(s) => Value::Str(url_encoded(&s)),
                 other => other,

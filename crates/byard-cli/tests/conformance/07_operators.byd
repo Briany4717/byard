@@ -490,3 +490,32 @@ Text("a")
 //# text: 600ms
 View Pause(len: Duration) { Text("{len * 2}") }
 View Main() { Pause(len: 300ms) }
+
+//# case: a-colour-written-as-css-is-the-same-number
+//# fragment
+//# text: true true true
+Text("{#3B82F6 == 0x3B82F6} {#F00 == 0xFF0000} {#fff == 0xFFFFFF}")
+
+//# case: a-colour-with-its-alpha-last
+//# edition: 2027
+//# fragment
+//# text: #3B82F680 #3B82F680
+let a: Color = #3B82F680
+let b: Color = 0x803B82F6
+Text("{a} {b}")
+
+//# case: a-colour-mixed-lightened-and-darkened
+//# edition: 2027
+//# fragment
+//# text: #FFFFFF #000000 #3B82F6 #FF0000 #636363
+let brand: Color = #3B82F6
+let red: Color = #F00
+let white: Color = #FFFFFF
+Text("{brand.lighten(1)} {brand.darken(1)} {brand.mix(red, 0)} {brand.mix(red, 1)} {white.darken(0.5)}")
+
+//# case: a-hash-that-is-no-colour
+//# fragment
+//# error: UnexpectedChar
+//# diagnostics: 1
+let c = #3B82F6A
+Text("{c}")

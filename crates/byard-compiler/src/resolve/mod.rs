@@ -792,9 +792,14 @@ impl Resolver<'_> {
             .map(|(k, v)| (k.clone(), *v))
             .collect();
 
+        // The names this file `use`s a package by that did not load: what the
+        // file reaches through them was told with the `use` itself.
+        let mut unloaded: std::collections::HashSet<String> = std::collections::HashSet::new();
         for import in &imports {
             let target = import.package.as_str().to_string();
             if !self.packages.contains_key(&target) {
+                let alias = import.alias.as_ref().unwrap_or(&import.package);
+                unloaded.insert(alias.as_str().to_string());
                 continue; // already reported as UnknownPackage / cycle
             }
             if let Some(symbols) = &import.symbols {
@@ -976,6 +981,12 @@ impl Resolver<'_> {
         module.consts = consts;
         module.enums = enums;
         module.records = records;
+        // One mistake, one error: a name reached through a `use` of a package
+        // that is not there was told at the `use`.
+        errors.retain(|e| {
+            !matches!(e, CompileError::UnknownPackage { name, detail, .. }
+                if unloaded.contains(name) && detail.starts_with("no `use "))
+        });
         self.errors.extend(errors);
     }
 

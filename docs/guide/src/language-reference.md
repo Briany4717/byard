@@ -785,7 +785,11 @@ use := "use" NAME ( "as" NAME | "." "{" NAME ("," NAME)* "}" )?
 
 `use kit` makes a package's views, functions, types and constants reachable as `kit.Name`,
 `use kit as k` as `k.Name`, and `use kit.{Card, Badge}` by their own names. The package has
-to be in `[dependencies]` (`UnknownPackage`). See [packages](packages.md).
+to be in `[dependencies]` (`UnknownPackage`, told once, at the `use`: what the file reaches
+through it is not told again). A name the package does not have is `UnknownImportSymbol`, one
+it keeps `private` is `PrivateName`, a `use` after the first `View` is `ImportAfterView`, and a
+name in braces that is a built-in element's, `use kit.{Button}`, is `ImportShadowsBuiltin`:
+the package's is reached as `kit.Button`. See [packages](packages.md).
 
 ## Views
 

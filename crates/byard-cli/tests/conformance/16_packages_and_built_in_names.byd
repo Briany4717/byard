@@ -1,0 +1,112 @@
+// Packages and the names the language provides: `use`, its three forms, what a package
+// keeps to itself, and the built-in names a program reads without declaring them.
+
+//# covers: use, built-in-names
+
+//# case: use-reaches-a-packages-views-by-its-name
+//# text: hi
+use kit
+View Main() { kit.Card("hi") }
+//# package: kit
+View Card(label: Str) { Text(label) }
+
+//# case: use-as-gives-a-package-another-name
+//# text: hi
+use kit as k
+View Main() { k.Card("hi") }
+//# package: kit
+View Card(label: Str) { Text(label) }
+
+//# case: use-with-braces-brings-names-in-by-their-own
+//# text: a | b
+use kit.{Card, Badge}
+View Main() {
+    Card("a")
+    Badge("b")
+}
+//# package: kit
+View Card(label: Str) { Text(label) }
+View Badge(label: Str) { Text(label) }
+
+//# case: use-reaches-a-packages-functions-and-constants
+//# text: 8 4
+use kit
+View Main() { Text("{kit.double(kit.gap)} {kit.gap}") }
+//# package: kit
+let gap = 4
+fn double(n: Int) -> Int => n * 2
+
+//# case: use-reaches-a-packages-types-and-enums
+//# text: Oslo large
+use kit
+View Main() {
+    let p: kit.Place = { name: "Oslo" }
+    let s = kit.Size.large
+    Text("{p.name} {s}")
+}
+//# package: kit
+type Place = { name: Str }
+enum Size { small, large }
+
+//# case: a-package-that-is-not-a-dependency
+//# error: UnknownPackage
+//# diagnostics: 1
+use kit
+View Main() { kit.Card("hi") }
+
+//# case: a-name-a-package-does-not-have
+//# error: UnknownImportSymbol
+//# diagnostics: 1
+use kit.{Crad}
+View Main() { Text("x") }
+//# package: kit
+View Card(label: Str) { Text(label) }
+
+//# case: a-name-a-package-keeps-private
+//# error: PrivateName
+//# diagnostics: 1
+use kit
+View Main() { kit.Inner() }
+//# package: kit
+View Card(label: Str) { Inner() }
+private View Inner() { Text("in") }
+
+//# case: a-use-after-a-view
+//# error: ImportAfterView
+//# diagnostics: 1
+View Main() { Text("x") }
+use kit
+//# package: kit
+View Card(label: Str) { Text(label) }
+
+//# case: a-use-that-would-hide-a-built-in-element
+//# error: ImportShadowsBuiltin
+//# diagnostics: 1
+use kit.{Button}
+View Main() { Text("x") }
+//# package: kit
+View Button(label: Str) { Text(label) }
+
+//# case: the-window-size-is-a-built-in-name
+//# text: 400 400
+View Main() { Text("{window.width} {window.height}") }
+
+//# case: the-clock-is-read-in-an-action
+//# text: set
+View Main() {
+    var t = ""
+    on mount => { t = now() }
+    Text(t.len > 0 ? "set" : "empty")
+}
+
+//# case: the-clock-outside-an-action
+//# error: ClockOutsideAction
+//# diagnostics: 1
+View Main() { Text(now()) }
+
+//# case: a-name-declared-over-a-built-in-name-is-the-programs
+//# text: 3
+View Main() {
+    let screens = 3
+    Text("{screens}")
+}

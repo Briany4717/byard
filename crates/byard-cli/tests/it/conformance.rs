@@ -21,6 +21,7 @@
 //! | `//# edition: 2027` | The edition the case is written in. Without it, the baseline. |
 //! | `//# diagnostics: 1` | How many diagnostics there are in all, for a case about one mistake being one error. |
 //! | `//# gap: why` | The lines above say what *should* happen; today it does not. |
+//! | `//# package: kit` | After the program: the code below it, to the next such line or the case's end, is the one file of a package `kit` the program may `use`. |
 //!
 //! A case with no `error:` and no `warning:` must check with no diagnostic at
 //! all. The kinds a case lists are the whole set: one more, or one fewer, is a
@@ -65,6 +66,10 @@ pub(crate) struct Case {
     errors: BTreeSet<String>,
     warnings: BTreeSet<String>,
     gap: Option<String>,
+    /// The packages the program may `use`, each its name and its one file:
+    /// the code after a `//# package: NAME` line, to the next one or the
+    /// case's end. A case with none has no `[dependencies]`.
+    packages: Vec<(String, String)>,
 }
 
 impl Case {
@@ -89,8 +94,12 @@ fn cases_of(file: &str, text: &str) -> Result<Vec<Case>, String> {
         let number = index + 1;
         let Some(directive) = line.strip_prefix("//#") else {
             if let Some(case) = cases.last_mut() {
-                case.source.push_str(line);
-                case.source.push('\n');
+                let into = match case.packages.last_mut() {
+                    Some((_, package)) => package,
+                    None => &mut case.source,
+                };
+                into.push_str(line);
+                into.push('\n');
             } else if !line.trim().is_empty() && !line.trim_start().starts_with("//") {
                 return Err(format!(
                     "{file}:{number}: code before the first `//# case:`"
@@ -125,7 +134,15 @@ fn cases_of(file: &str, text: &str) -> Result<Vec<Case>, String> {
                 "{file}:{number}: `//# {key}` before any `//# case:`"
             ));
         };
-        if !case.source.trim().is_empty() {
+        // A package's file starts after the program's code.
+        if key == "package" {
+            if value.is_empty() {
+                return Err(format!("{file}:{number}: a package needs a name"));
+            }
+            case.packages.push((value.to_string(), String::new()));
+            continue;
+        }
+        if !case.source.trim().is_empty() || !case.packages.is_empty() {
             return Err(format!(
                 "{file}:{number}: `//# {key}` after the code of `{}`; headers go above it",
                 case.name
@@ -188,11 +205,22 @@ fn file_name(path: &Path) -> String {
         .unwrap_or_default()
 }
 
-struct NoPackages;
+/// The packages a case declares, by name; any other is not in its
+/// `[dependencies]`.
+struct CasePackages<'a>(&'a [(String, String)]);
 
-impl PackageProvider for NoPackages {
-    fn package_files(&mut self, _: &str, _: &str) -> Result<Vec<SourceFile>, String> {
-        Err("a conformance case has no `[dependencies]`".to_string())
+impl PackageProvider for CasePackages<'_> {
+    fn package_files(&mut self, _: &str, package: &str) -> Result<Vec<SourceFile>, String> {
+        self.0
+            .iter()
+            .find(|(name, _)| name == package)
+            .map(|(name, source)| {
+                vec![SourceFile {
+                    name: format!("{name}/main.byd"),
+                    source: source.clone(),
+                }]
+            })
+            .ok_or_else(|| "not in this case's `[dependencies]`".to_string())
     }
 }
 
@@ -207,13 +235,17 @@ struct Outcome {
     text: Option<String>,
 }
 
-fn resolve(source: &str, edition: byard_compiler::edition::Edition) -> ResolvedProgram {
+fn resolve(
+    source: &str,
+    packages: &[(String, String)],
+    edition: byard_compiler::edition::Edition,
+) -> ResolvedProgram {
     resolve_program_in(
         vec![SourceFile {
             name: "main.byd".to_string(),
             source: source.to_string(),
         }],
-        &mut NoPackages,
+        &mut CasePackages(packages),
         edition,
     )
 }
@@ -249,8 +281,13 @@ fn drawn(program: &ResolvedProgram, wait: u32) -> Option<String> {
     Some(texts.join(" | "))
 }
 
-fn run(source: &str, wait: u32, edition: byard_compiler::edition::Edition) -> Outcome {
-    let program = resolve(source, edition);
+fn run(
+    source: &str,
+    packages: &[(String, String)],
+    wait: u32,
+    edition: byard_compiler::edition::Edition,
+) -> Outcome {
+    let program = resolve(source, packages, edition);
     let found = byard_project::check::check_program(&program, Theme::byard_base());
     let mut outcome = Outcome::default();
     for diagnostic in &found {
@@ -275,7 +312,7 @@ fn verdict(case: &Case) -> Option<String> {
     let source = case.program();
     let wait = case.wait;
     let edition = case.edition;
-    let ran = std::panic::catch_unwind(|| run(&source, wait, edition));
+    let ran = std::panic::catch_unwind(|| run(&source, &case.packages, wait, edition));
     let Ok(outcome) = ran else {
         return Some("the checker or the interpreter panicked".to_string());
     };
@@ -599,7 +636,7 @@ impl Rng {
 fn survives(source: &str, edition: byard_compiler::edition::Edition) -> Result<bool, String> {
     let source = source.to_string();
     std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-        run(&source, 0, edition).text.is_some()
+        run(&source, &[], 0, edition).text.is_some()
     }))
     .map_err(|payload| {
         payload
@@ -936,6 +973,12 @@ fn fnv1a(text: &str) -> u64 {
 /// expects and the program. A header written in another order is the same case.
 fn fingerprint(case: &Case) -> String {
     let join = |set: &BTreeSet<String>| set.iter().cloned().collect::<Vec<_>>().join(",");
+    // A case's packages are part of what it means; a case with none keeps the
+    // fingerprint it had before packages could be written.
+    let mut source = case.source.clone();
+    for (name, package) in &case.packages {
+        let _ = write!(source, "\n//# package: {name}\n{package}");
+    }
     format!(
         "{:016x}",
         fnv1a(&format!(
@@ -948,7 +991,7 @@ fn fingerprint(case: &Case) -> String {
             case.diagnostics,
             join(&case.errors),
             join(&case.warnings),
-            case.source
+            source
         ))
     )
 }

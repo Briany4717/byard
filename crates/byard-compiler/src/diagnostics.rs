@@ -1402,8 +1402,10 @@ pub enum CompileError {
         /// What it was compared to, as written.
         name: String,
     },
-    /// A `let` written inside an element's braces. A `let` goes at the top of the
-    /// view, or inside a `when` or `for` body.
+    /// A `let` written inside an element's braces, or a `var` written there or
+    /// in the body of a `when`, a `for`, a `match` arm or a route. A `let`
+    /// goes at the top of the view, or inside one of those bodies; a `var` at
+    /// the top of the view.
     LetInElementBody {
         /// Source range of the `let` or `var`.
         span: Span,

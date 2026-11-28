@@ -120,6 +120,58 @@ when x == 1 {
     Text("{x}")
 }
 
+//# case: a-var-in-a-when-body-is-no-variable
+//# fragment
+//# error: LetInElementBody
+//# diagnostics: 1
+when true {
+    var n = 2
+    Text("{n}")
+}
+
+//# case: a-var-in-a-for-body-is-no-variable-even-over-a-var-of-the-view
+//# fragment
+//# error: LetInElementBody
+//# diagnostics: 1
+var n = 1
+for i in [1, 2] {
+    var n = i
+    Text("{n}")
+}
+
+//# case: a-var-in-an-else-or-a-match-arm-is-no-variable
+//# error: LetInElementBody
+//# diagnostics: 2
+enum S { a, b }
+View Main() {
+    var s = S.a
+    when s == S.b {
+        Text("b")
+    } else {
+        var late = 0
+        Text("{late}")
+    }
+    match s {
+        .a => {
+            var count = 0
+            Text("{count}")
+        }
+        .b => Text("b")
+    }
+}
+
+//# case: state-each-item-keeps-is-a-view-of-its-own
+//# text: a 0 | b 0
+View Counter(label: Str) {
+    var n = 0
+    Text("{label} {n}")
+}
+View Main() {
+    for item in ["a", "b"] {
+        Counter(item)
+    }
+}
+
 //# case: the-same-name-in-two-bodies-is-fine
 //# fragment
 //# text: a | b

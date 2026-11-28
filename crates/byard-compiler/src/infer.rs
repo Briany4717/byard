@@ -1706,6 +1706,25 @@ impl Checker<'_> {
     /// (a `for` variable, a `let` in a `when` branch) end with the block, so
     /// they can neither leak out nor leave a stale type behind for a name the
     /// enclosing view also uses.
+    /// A `var` written in the body of a `when`, a `for`, a `match` arm or a
+    /// route is no variable: a body's `let`s are worked out with it, and its
+    /// `var`s never were, so a read of one found the view's `var` of that name
+    /// or nothing. State is a view's: at the top of it, or in a view of its
+    /// own for state each item or branch keeps. (A `var` in an element's
+    /// braces is told where the element is lowered.)
+    fn no_state_in(&mut self, body: &[Member], what: &str) {
+        for member in body {
+            if let Member::Var { name, span, .. } = member {
+                self.errors.push(CompileError::LetInElementBody {
+                    span: *span,
+                    keyword: "var".to_string(),
+                    name: name.as_str().to_string(),
+                    element: what.to_string(),
+                });
+            }
+        }
+    }
+
     fn check_scoped(&mut self, members: &[Member], shadow: &[(&Symbol, Ty)]) {
         let mark = self.undo.len();
         for (name, ty) in shadow {
@@ -2268,6 +2287,7 @@ impl Checker<'_> {
             // same View scope, like a `for` body or a `when` branch.
             Member::Route { params, body, .. } => {
                 let shadow: Vec<(&Symbol, Ty)> = params.iter().map(|p| (p, Ty::Unknown)).collect();
+                self.no_state_in(body, "route");
                 self.check_scoped(body, &shadow);
             }
             Member::For {
@@ -2310,6 +2330,7 @@ impl Checker<'_> {
                 }
                 let mut shadow = vec![(var, element)];
                 shadow.extend(index.as_ref().map(|i| (i, key_ty)));
+                self.no_state_in(body, "for");
                 self.check_scoped(body, &shadow);
             }
             Member::When {
@@ -2321,6 +2342,10 @@ impl Checker<'_> {
                 let found = self.value(cond);
                 self.must_be_bool(&found, cond.span());
                 let (when_true, when_false) = self.narrowing(cond);
+                self.no_state_in(then, "when");
+                if let Some(els) = els {
+                    self.no_state_in(els, "when");
+                }
                 self.narrowed_in(when_true, |s| s.check_scoped(then, &[]));
                 if let Some(els) = els {
                     self.narrowed_in(when_false, |s| s.check_scoped(els, &[]));
@@ -2338,6 +2363,7 @@ impl Checker<'_> {
                     let binds = self.pattern_binds(&held, &arm.pattern);
                     let shadow: Vec<(&Symbol, Ty)> =
                         binds.iter().map(|(n, t)| (n, t.clone())).collect();
+                    self.no_state_in(&arm.body, "match");
                     self.check_scoped(&arm.body, &shadow);
                 }
             }

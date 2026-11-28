@@ -434,3 +434,68 @@ View Main() { Text("{f(1)}") }
 //# diagnostics: 1
 fn f<T, T>(a: T) -> Int => 1
 View Main() { Text("x") }
+
+//# case: a-parameter-left-out-takes-its-default
+//# text: 102 302 100
+fn total(price: Int, qty: Int = 1, tax: Int = 2) -> Int => price * qty + tax
+View Main() {
+    Text("{total(100)} {total(100, 3)} {total(100, tax: 0)}")
+}
+
+//# case: a-default-reads-the-parameters-before-it
+//# text: 9 4
+fn total(n: Int, tax: Int = n * 2) -> Int => n + tax
+View Main() {
+    Text("{total(3)} {total(3, tax: 1)}")
+}
+
+//# case: a-default-calls-another-function
+//# text: 9
+fn square(x: Int) -> Int => x * x
+fn f(a: Int = square(3)) -> Int => a
+View Main() { Text("{f()}") }
+
+//# case: a-default-is-worked-out-at-each-call-in-a-lambda
+//# text: 10,20,30
+fn scale(x: Int, by: Int = 10) -> Int => x * by
+View Main() {
+    let xs = [1, 2, 3]
+    Text("{xs.map(x => scale(x)).join(",")}")
+}
+
+//# case: a-parameter-with-a-default-before-one-without-is-given-by-name
+//# text: 3
+fn f(a: Int = 1, b: Int) -> Int => a + b
+View Main() { Text("{f(b: 2)}") }
+
+//# case: a-fn-in-a-view-has-defaults-that-read-its-state
+//# text: 6 3
+View Main() {
+    var base = 5
+    fn add(x: Int, extra: Int = base) -> Int => x + extra
+    Text("{add(1)} {add(1, extra: 2)}")
+}
+
+//# case: a-default-of-another-type
+//# error: TypeMismatch
+//# diagnostics: 1
+fn total(n: Int, tax: Int = "x") -> Int => n + tax
+View Main() { Text("{total(1)}") }
+
+//# case: a-default-that-reads-a-later-parameter
+//# error: UnknownName
+//# diagnostics: 1
+fn f(a: Int = b, b: Int = 1) -> Int => a + b
+View Main() { Text("{f()}") }
+
+//# case: a-default-that-reads-the-clock-is-impure
+//# error: ImpureFunction
+//# diagnostics: 1
+fn f(a: Str = now()) -> Str => a
+View Main() { Text("{f()}") }
+
+//# case: a-parameter-without-a-default-is-still-needed
+//# error: ArityMismatch
+//# diagnostics: 1
+fn f(a: Int, b: Int = 1) -> Int => a + b
+View Main() { Text("{f()}") }

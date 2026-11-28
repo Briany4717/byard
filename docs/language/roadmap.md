@@ -209,8 +209,9 @@ so do the twenty-two cases added with them. What stays open:
 - ~~Type parameters on `type`, `type Box<T> = { value: T }`.~~ Done after 1.0's plan: each
   use, `Box<Int>`, is made a record type of its own by the resolver, so the checker and the
   interpreter see ordinary records (eleven cases in `05_records.byd`).
-- Default values on a `fn`, `fn total(items: List<Item>, tax: Float = 0.0)`. The parameter
-  is parsed and not used.
+- ~~Default values on a `fn`, `fn total(items: List<Item>, tax: Float = 0.0)`.~~ Done after
+  1.0's plan: a parameter left out takes its default, which reads the parameters before it
+  (ten cases in `08_functions.byd`).
 - A function that reads a name it cannot reach is told twice, `UnknownName` and
   `ImpureFunction`, for one mistake. It was before this step.
 
@@ -326,11 +327,11 @@ format has a width, a fill, an alignment and a percentage. What stays open:
 As of the last step:
 
 - `cargo test -p byard-cli --test it conformance` prints `0 gaps open`. **Done.**
-- No `Not yet` is left in the language reference. **Not done:** there are eight, each a thing
+- No `Not yet` is left in the language reference. **Not done:** there are seven, each a thing
   a step left out on purpose, listed in "What stays open" under that step: `///` doc comments
-  (twice), that `T?` and enums are let through in a few places, a hash for `Map` and `Set`,
-  default values on a `fn` and parameters on a `type`, a store kept between runs, a `var` only
-  ever written counting as used, and attribute errors reported only after the others.
+  (twice), that `T?` and enums are let through in a few places, a hash for `Map` and `Set`, a
+  store kept between runs, a `var` only ever written counting as used, and attribute errors
+  reported only after the others.
 - Every example in the repository and every sample in the guide checks under the newest
   edition with no warning. **Mostly:** every project moves to `2027` and checks clean
   (`migration.rs`), and every guide sample checks; the one warning left is `inventory`'s

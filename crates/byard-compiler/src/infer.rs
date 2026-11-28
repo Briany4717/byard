@@ -526,6 +526,7 @@ fn check_top_fns(
         let mark = checker.undo.len();
         checker.type_vars = decl.type_params.iter().cloned().collect();
         for param in &decl.params {
+            checker.check_fn_default(param);
             checker.check_param(param, "function parameter");
         }
         if decl.ret.is_none() {
@@ -577,6 +578,34 @@ fn check_top_fns(
             if !keyword && !bound.contains(&name) && !names.contains(&name) {
                 checker.errors.push(impure(span));
                 break;
+            }
+        }
+        // A default reads the parameters before it, and what a body may.
+        for (i, param) in decl.params.iter().enumerate() {
+            let Some(default) = &param.default else {
+                continue;
+            };
+            let earlier: std::collections::HashSet<&Symbol> =
+                decl.params[..i].iter().map(|p| &p.name).collect();
+            let mut default = default.clone();
+            let mut lambda: std::collections::HashSet<Symbol> = std::collections::HashSet::new();
+            let mut used: Vec<(Symbol, Span)> = Vec::new();
+            crate::resolve::walk::expr(&mut default, &mut |e| match e {
+                Expr::Lambda { params, .. } => lambda.extend(params.iter().cloned()),
+                Expr::Ident(name, span) => used.push((name.clone(), *span)),
+                _ => {}
+            });
+            if let Some((_, span)) = used.into_iter().find(|(name, _)| {
+                !matches!(name.as_str(), "true" | "false" | "none")
+                    && !earlier.contains(name)
+                    && !lambda.contains(name)
+                    && !names.contains(name)
+            }) {
+                // Told once: a name the check of the default already said
+                // nothing declares is not told again as impurity.
+                if !checker.errors.iter().any(|e| e.span() == span) {
+                    checker.errors.push(impure(span));
+                }
             }
         }
         checker.type_vars.clear();
@@ -807,8 +836,8 @@ fn sig_of(params: &[Param]) -> Vec<(Symbol, Ty, bool)> {
             } else {
                 ty
             };
-            // A `fn` has no defaults yet (step 16): every parameter is given.
-            (p.name.clone(), ty, false)
+            // One with a default may be left out of a call.
+            (p.name.clone(), ty, p.default.is_some())
         })
         .collect()
 }
@@ -1158,6 +1187,20 @@ impl Checker<'_> {
                     wants_slot: false,
                 });
             }
+        }
+    }
+
+    /// A function parameter's default: a value of the parameter's type, read
+    /// among the parameters before it (they are in scope here, the parameter
+    /// itself and the ones after it not yet).
+    fn check_fn_default(&mut self, param: &Param) {
+        let Some(default) = param.default.as_ref().filter(|d| !is_none(d)) else {
+            return;
+        };
+        let found = self.value(default);
+        if let Some(ty) = &param.ty {
+            let expected = plain_ty(ty);
+            self.must_fit(&expected, &found, default.span());
         }
     }
 
@@ -2173,6 +2216,7 @@ impl Checker<'_> {
                 let outer =
                     std::mem::replace(&mut self.type_vars, type_params.iter().cloned().collect());
                 for param in params {
+                    self.check_fn_default(param);
                     self.check_param(param, "function parameter");
                 }
                 if ret.is_none() {

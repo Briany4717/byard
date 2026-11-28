@@ -599,7 +599,8 @@ View Main() {
 ```
 
 ```text
-function := "fn" NAME ("<" NAME ("," NAME)* ">")? "(" (NAME ":" type ("," NAME ":" type)*)? ")" "->" type "=>" body
+function := "fn" NAME ("<" NAME ("," NAME)* ">")? "(" (param ("," param)*)? ")" "->" type "=>" body
+param    := NAME ":" type ("=" expr)?
 body     := expr | "{" ("let" NAME "=" expr)* expr "}"
 ```
 
@@ -629,14 +630,29 @@ fill the first parameters, and a named one is the parameter of that name. A name
 does not have is `UnknownParam`, one given twice is `DuplicateParam`, and one left out is
 `MissingParam`.
 
+A parameter may have a default, a value of its type that a call which leaves it out gives it:
+
+```byld
+fn total(price: Int, qty: Int = 1, tax: Int = price / 10) -> Int => price * qty + tax
+
+View Main() {
+    Text("{total(100)} {total(100, 3)} {total(100, tax: 0)}")
+}
+```
+
+A default is the function's own, not the caller's: it reads the parameters written before it,
+constants, and other shared functions, and is worked out after the arguments the call gives.
+One that reads a later parameter is `UnknownName`, one that reads anything else (the clock, a
+view's state) is `ImpureFunction`, and one of another type is `TypeMismatch`. A `fn` in a view has defaults the same way, and
+its default may read the view's state as its body may. A parameter with a default may come
+before one without; the one without is then given by name.
+
 A function may have type parameters, `<T>`, which stand for whatever type the call passes: the
 first argument written for a `T` gives it its type, and any other argument for a `T` has to
 agree (`ArgumentTypeMismatch`). The result has that type. Inside the function a `T` can be
 stored, passed and compared with `==`, and that is all: `a + b` of two of them is
 `TypeMismatch`. There are no bounds. A `T` is a type only inside its own function
 (`UnknownType` anywhere else).
-
-> **Not yet.** A function cannot have default values. (`08_functions.byd`)
 
 ### Record types
 

@@ -1941,7 +1941,14 @@ impl Interpreter {
             // sees (`on_x(items[0])` then `items = ...`). The argument
             // is lowered here, in the caller's names, whatever the
             // body is lowered among.
-            if !is_callback && params.len() != args.len() {
+            let defaults = self.fn_defaults.get(&id.0).cloned().unwrap_or_default();
+            let default_of = |i: usize| defaults.get(i).cloned().flatten();
+            let ordered = in_parameter_order(&params, args);
+            let missing = ordered
+                .iter()
+                .enumerate()
+                .any(|(i, a)| a.is_none() && default_of(i).is_none());
+            if !is_callback && (args.len() > params.len() || missing) {
                 self.errors.push(CompileError::ArityMismatch {
                     span: callee_span,
                     name: name.as_str().to_string(),
@@ -1953,9 +1960,12 @@ impl Interpreter {
             // The arguments in the order of the parameters: the positional
             // ones first, and each one written by name in the place of the
             // parameter it names.
-            let ordered = in_parameter_order(&params, args);
+            let mut unfilled: Vec<usize> = Vec::new();
             for (i, (param, arg)) in params.iter().zip(ordered).enumerate() {
-                let Some(arg) = arg else { continue };
+                let Some(arg) = arg else {
+                    unfilled.push(i);
+                    continue;
+                };
                 let lowered = self.lower_expr(&arg.value, payload_name);
                 let lowered = super::coerced_arg(self.fn_types.get(&id.0), i, lowered);
                 arg_cs.push((param.clone(), lowered));
@@ -1968,11 +1978,22 @@ impl Interpreter {
             // A `fn`'s body is pure whatever calls it (RFC-0049 §3).
             let pure = self.pure_fns.contains(&id.0);
             self.pure_depth += u32::from(pure);
+            // A parameter the call leaves out takes its default, lowered where
+            // the body is, among the parameters, and worked out after the
+            // arguments the call gives.
+            let mut filled: Vec<(Symbol, Lowered)> = Vec::new();
             let body_lowered = if let Some(captured) = captured {
                 let frame = self.env.enter_closure(captured);
                 let outer_params = std::mem::take(&mut self.lambda_params);
                 let outer_inlined = std::mem::take(&mut self.inlined_params);
                 self.lambda_params.extend(params.iter().cloned());
+                for &i in &unfilled {
+                    if let Some(default) = default_of(i) {
+                        let lowered = self.lower_expr(&default, None);
+                        let lowered = super::coerced_arg(self.fn_types.get(&id.0), i, lowered);
+                        filled.push((params[i].clone(), lowered));
+                    }
+                }
                 let lowered = self.lower_expr(&body, None);
                 self.inlined_params = outer_inlined;
                 self.lambda_params = outer_params;
@@ -1982,6 +2003,13 @@ impl Interpreter {
                 let mark = self.lambda_params.len();
                 self.lambda_params.extend(params.iter().cloned());
                 let own = payload_name.filter(|n| !params.contains(n));
+                for &i in &unfilled {
+                    if let Some(default) = default_of(i) {
+                        let lowered = self.lower_expr(&default, own);
+                        let lowered = super::coerced_arg(self.fn_types.get(&id.0), i, lowered);
+                        filled.push((params[i].clone(), lowered));
+                    }
+                }
                 let lowered = self.lower_expr(&body, own);
                 self.lambda_params.truncate(mark);
                 lowered
@@ -1995,6 +2023,10 @@ impl Interpreter {
                     .collect();
                 let base = LAMBDA_ARGS.with(|args| args.borrow().len());
                 LAMBDA_ARGS.with(|args| args.borrow_mut().extend(values));
+                for (name, c) in &mut filled {
+                    let v = c(ctx);
+                    LAMBDA_ARGS.with(|args| args.borrow_mut().push((name.clone(), v)));
+                }
                 let result = body_lowered(ctx);
                 LAMBDA_ARGS.with(|args| args.borrow_mut().truncate(base));
                 result
@@ -2037,7 +2069,12 @@ impl Interpreter {
     /// [`LAMBDA_ARGS`] stack, each argument evaluated at every call. The
     /// arguments go on the stack unnamed first, so none of them can read a
     /// parameter that shares a name with a variable of the caller.
-    fn call_with_args(mut arg_cs: Vec<Lowered>, names: Vec<Symbol>, mut body: Lowered) -> Lowered {
+    fn call_with_args(
+        mut arg_cs: Vec<Lowered>,
+        names: Vec<Symbol>,
+        mut defaults: Vec<(Symbol, Lowered)>,
+        mut body: Lowered,
+    ) -> Lowered {
         let blank = Symbol::intern("");
         Box::new(move |ctx| {
             let base = LAMBDA_ARGS.with(|a| a.borrow().len());
@@ -2050,6 +2087,12 @@ impl Interpreter {
                     slot.0 = n.clone();
                 }
             });
+            // The defaults, once the arguments are bound: each reads the
+            // parameters before it.
+            for (name, c) in &mut defaults {
+                let v = c(ctx);
+                LAMBDA_ARGS.with(|a| a.borrow_mut().push((name.clone(), v)));
+            }
             let out = body(ctx);
             LAMBDA_ARGS.with(|a| a.borrow_mut().truncate(base));
             out
@@ -2123,10 +2166,18 @@ impl Interpreter {
             return Box::new(|_| Value::Unit);
         }
         let (params, body, _, _) = self.fn_table[id.0 as usize].clone();
-        // A call with the wrong number of arguments is refused by the checker;
-        // were one to get here, a parameter it did not give must not be read as
-        // its own name.
-        if params.len() != args.len() {
+        let defaults = self.fn_defaults.get(&id.0).cloned().unwrap_or_default();
+        let default_of = |i: usize| defaults.get(i).cloned().flatten();
+        // The arguments in the order of the parameters, whatever order they
+        // were written in. A parameter none is given for takes its default;
+        // one with no default was refused by the checker, and were it to get
+        // here, it must not be read as its own name.
+        let ordered = in_parameter_order(&params, args);
+        let missing = ordered
+            .iter()
+            .enumerate()
+            .any(|(i, a)| a.is_none() && default_of(i).is_none());
+        if args.len() > params.len() || missing {
             self.errors.push(CompileError::ArityMismatch {
                 span,
                 name: name.as_str().to_string(),
@@ -2135,51 +2186,67 @@ impl Interpreter {
             });
             return Box::new(|_| Value::Unit);
         }
-        // The arguments in the order of the parameters, whatever order they
-        // were written in; one a parameter did not get was refused by the
-        // checker.
-        let Some(args): Option<Vec<&crate::parser::ast::Arg>> =
-            in_parameter_order(&params, args).into_iter().collect()
-        else {
-            return Box::new(|_| Value::Unit);
-        };
         if !params.is_empty() && self.per_call(payload_name) {
             // Called inside a lambda or an event handler: the arguments depend
             // on the item, so they are evaluated at each call, not memoised.
-            let n = params.len().min(args.len());
-            let arg_cs: Vec<Lowered> = args[..n]
-                .iter()
-                .enumerate()
-                .map(|(i, a)| {
-                    let lowered = self.lower_expr(&a.value, payload_name);
-                    super::coerced_arg(self.fn_types.get(&id.0), i, lowered)
-                })
-                .collect();
-            let names: Vec<Symbol> = params[..n].to_vec();
+            let mut given: Vec<Lowered> = Vec::new();
+            let mut names: Vec<Symbol> = Vec::new();
+            for (i, (param, arg)) in params.iter().zip(&ordered).enumerate() {
+                if let Some(arg) = arg {
+                    let lowered = self.lower_expr(&arg.value, payload_name);
+                    given.push(super::coerced_arg(self.fn_types.get(&id.0), i, lowered));
+                    names.push(param.clone());
+                }
+            }
             let caller = std::mem::replace(&mut self.env, Env::new());
-            let outer = std::mem::replace(&mut self.lambda_params, names.clone());
+            let outer = std::mem::replace(&mut self.lambda_params, params.clone());
             self.inlining.push(name.clone());
             self.pure_depth += 1;
+            // A default is the function's: it reads the parameters before it,
+            // and is worked out after every argument the call gives.
+            let mut filled: Vec<(Symbol, Lowered)> = Vec::new();
+            for (i, (param, arg)) in params.iter().zip(&ordered).enumerate() {
+                if arg.is_none() {
+                    if let Some(default) = default_of(i) {
+                        let lowered = self.lower_expr(&default, None);
+                        filled.push((
+                            param.clone(),
+                            super::coerced_arg(self.fn_types.get(&id.0), i, lowered),
+                        ));
+                    }
+                }
+            }
             let body_lowered = self.lower_expr(&body, None);
             self.pure_depth -= 1;
             self.inlining.pop();
             self.lambda_params = outer;
             self.env = caller;
             let body_lowered = super::coerced_value(body_lowered, self.fn_rets.get(&id.0));
-            return Self::call_with_args(arg_cs, names, body_lowered);
+            return Self::call_with_args(given, names, filled, body_lowered);
         }
-        let mut bound = Vec::with_capacity(params.len());
-        for (i, (param, arg)) in params.iter().zip(args.iter()).enumerate() {
-            let arg_lowered = self.lower_expr(&arg.value, payload_name);
-            let arg_lowered = super::coerced_arg(self.fn_types.get(&id.0), i, arg_lowered);
-            bound.push((param.clone(), self.ctx.open_memo(arg_lowered)));
+        let mut given: Vec<Option<crate::interp::reactive::ScopeId>> =
+            Vec::with_capacity(params.len());
+        for (i, arg) in ordered.iter().enumerate() {
+            given.push(arg.map(|arg| {
+                let arg_lowered = self.lower_expr(&arg.value, payload_name);
+                let arg_lowered = super::coerced_arg(self.fn_types.get(&id.0), i, arg_lowered);
+                self.ctx.open_memo(arg_lowered)
+            }));
         }
         let caller = std::mem::replace(&mut self.env, Env::new());
-        for (param, scope) in bound {
-            self.env.push(param, Value::Memo(scope));
-        }
         self.inlining.push(name.clone());
         self.pure_depth += 1;
+        for (i, (param, scope)) in params.iter().zip(given).enumerate() {
+            // One the call leaves out is its default, lowered among the
+            // parameters bound so far.
+            let scope = scope.unwrap_or_else(|| {
+                let default = default_of(i).unwrap_or(Expr::Error(span));
+                let lowered = self.lower_expr(&default, None);
+                let lowered = super::coerced_arg(self.fn_types.get(&id.0), i, lowered);
+                self.ctx.open_memo(lowered)
+            });
+            self.env.push(param.clone(), Value::Memo(scope));
+        }
         let body_lowered = self.lower_expr(&body, None);
         self.pure_depth -= 1;
         self.inlining.pop();

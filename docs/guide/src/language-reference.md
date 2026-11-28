@@ -422,6 +422,13 @@ Every method returns a new value and leaves the list as it was.
 | `sum()` | The items added up, `0` for none. A list of anything but numbers is `TypeMismatch`. |
 | `insertAt(i, x)` | With `x` put before the item at `i`; `i` may be the length, to put it last. Unchanged for a position the list does not have. |
 | `updateAt(i, x)` | With `x` in the place of the item at `i`. Unchanged when there is none. |
+| `take(n)`, `skip(n)` | The first `n` items, or all but them. All, or none, when `n` is past the end; none, or all, for an `n` under one. |
+| `unique()` | Each item once, where it was first: items are the same as `==` says |
+| `chunk(n)` | The items in lists of `n`, the last one shorter when they do not divide: a `List<List<T>>`. None for an `n` under one. |
+| `enumerate()` | Each item with its place, `{ index, item }`, from `0` |
+| `zip(ys)` | The items of both side by side, `{ first, second }`, as many as the shorter list has |
+| `flatMap(f)` | The lists `f(item)` gives, one after another (an item `f` gives that is no list is put in as it is) |
+| `groupBy(f)` | A `Map` of each key `f(item)` gives to the list of the items it gave it for, the keys in the order they were first given |
 
 A function given to one of these must be *pure*: it computes and returns, and assigns
 nothing (`EffectInPureLambda`).
@@ -491,7 +498,8 @@ and so are the values; a pair that does not fit the type written is `TypeMismatc
 pair. A key written twice keeps its place and the last value. `m[k]` is the value, or nothing
 when the key is not there: a `V?`, which `??` defaults. `m.len` is how many there are,
 `m.set(k, v)` is the map with `k` set (its place kept if it was there, last if not), and
-`m.remove(k)` is the map without it. A `Set<T>` is made by `Set(["a", "b"])`, with each item
+`m.remove(k)` is the map without it, and `m.keys()` and `m.values()` are its keys and its
+values as lists, in its order. A `Set<T>` is made by `Set(["a", "b"])`, with each item
 once (`Set()` has none), and has `s.len`, `s.add(x)`, `s.remove(x)` and `s.contains(x)`.
 
 Both keep the order things were added in, so `for sku, qty in stock { … }` and

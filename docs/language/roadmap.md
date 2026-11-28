@@ -220,12 +220,11 @@ so do the twenty-two cases added with them. What stays open:
 *Done.* `map-type`, `list-helpers` and `list-insert-and-update` hold, and so does
 `index-assignment`, left from step 9, with the forty-one cases added with them. What stays open:
 
-- The other list methods the proposal names: `take`, `skip`, `flatMap`, `groupBy`, `unique`,
-  `zip`, `chunk` and `enumerate`.
+- ~~The other list methods the proposal names: `take`, `skip`, `flatMap`, `groupBy`, `unique`,
+  `zip`, `chunk` and `enumerate`.~~ Done after 1.0's plan, with `m.keys()` and `m.values()`.
 - ~~A lookup in a `Map` or a `Set` searches what was added, as `find` does.~~ Done after 1.0's
   plan: the keys are hashed, the order is kept, and a copy is shared.
-- `m.keys()`, `m.values()` and a `Set` operation such as `union` do not exist. A `for` goes over
-  a map for its keys.
+- A `Set` operation such as `union` does not exist. (`m.keys()` and `m.values()` do.)
 - `var-map-type-does-not-exist` said `Map` was not a type; it is one now, so it asks the same of
   `Dict`.
 

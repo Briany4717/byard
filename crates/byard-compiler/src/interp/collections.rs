@@ -161,6 +161,29 @@ impl MapData {
         Self(Arc::new((out, index)))
     }
 
+    /// The map of each key to the list of the items given with it, in the
+    /// order the keys were first met and, in each list, the items were:
+    /// what `xs.groupBy(x => key)` gives.
+    #[must_use]
+    pub fn grouped(keyed: Vec<(Value, Value)>) -> Self {
+        let mut groups: Vec<(Value, Vec<Value>)> = Vec::new();
+        let mut index: Index = HashMap::new();
+        for (k, item) in keyed {
+            let slot = index.entry(bucket(&k)).or_default();
+            if let Some(&i) = slot.iter().find(|&&i| structural_eq(&groups[i].0, &k)) {
+                groups[i].1.push(item);
+            } else {
+                slot.push(groups.len());
+                groups.push((k, vec![item]));
+            }
+        }
+        let pairs = groups
+            .into_iter()
+            .map(|(k, items)| (k, Value::List(items)))
+            .collect();
+        Self(Arc::new((pairs, index)))
+    }
+
     /// The entries, in order.
     #[must_use]
     pub fn pairs(&self) -> &[(Value, Value)] {

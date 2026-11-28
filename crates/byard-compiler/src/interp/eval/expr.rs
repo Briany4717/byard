@@ -2381,6 +2381,140 @@ impl Interpreter {
                     }
                 }))
             }
+            // The first `n` items, or all but them.
+            "take" | "skip" => {
+                let take = name.as_str() == "take";
+                let mut n = self.lower_expr(&args.first()?.value, payload_name);
+                Some(Box::new(move |ctx| {
+                    let n = match n(ctx) {
+                        Value::Int(n) => usize::try_from(n.max(0)).unwrap_or(usize::MAX),
+                        _ => 0,
+                    };
+                    match base_c(ctx) {
+                        Value::List(xs) => Value::List(if take {
+                            xs.into_iter().take(n).collect()
+                        } else {
+                            xs.into_iter().skip(n).collect()
+                        }),
+                        other => other,
+                    }
+                }))
+            }
+            // Each item once, where it was first.
+            "unique" if args.is_empty() => Some(Box::new(move |ctx| match base_c(ctx) {
+                Value::List(xs) => Value::List(
+                    crate::interp::collections::SetData::from_items(xs)
+                        .items()
+                        .to_vec(),
+                ),
+                other => other,
+            })),
+            // Each item with its place: `{ index, item }`.
+            "enumerate" if args.is_empty() => Some(Box::new(move |ctx| match base_c(ctx) {
+                Value::List(xs) => Value::List(
+                    xs.into_iter()
+                        .enumerate()
+                        .map(|(i, item)| {
+                            Value::Record(vec![
+                                (
+                                    Symbol::intern("index"),
+                                    Value::Int(i64::try_from(i).unwrap_or(i64::MAX)),
+                                ),
+                                (Symbol::intern("item"), item),
+                            ])
+                        })
+                        .collect(),
+                ),
+                other => other,
+            })),
+            // The items of two lists side by side, `{ first, second }`, as
+            // many as the shorter has.
+            "zip" => {
+                let mut other = self.lower_expr(&args.first()?.value, payload_name);
+                Some(Box::new(move |ctx| {
+                    let ys = match other(ctx) {
+                        Value::List(ys) => ys,
+                        _ => Vec::new(),
+                    };
+                    match base_c(ctx) {
+                        Value::List(xs) => Value::List(
+                            xs.into_iter()
+                                .zip(ys)
+                                .map(|(a, b)| {
+                                    Value::Record(vec![
+                                        (Symbol::intern("first"), a),
+                                        (Symbol::intern("second"), b),
+                                    ])
+                                })
+                                .collect(),
+                        ),
+                        other => other,
+                    }
+                }))
+            }
+            // The items in lists of `n`, the last one shorter when they do not
+            // divide; none for an `n` under one.
+            "chunk" => {
+                let mut n = self.lower_expr(&args.first()?.value, payload_name);
+                Some(Box::new(move |ctx| {
+                    let n = match n(ctx) {
+                        Value::Int(n) if n > 0 => usize::try_from(n).unwrap_or(usize::MAX),
+                        _ => return Value::List(Vec::new()),
+                    };
+                    match base_c(ctx) {
+                        Value::List(xs) => {
+                            Value::List(xs.chunks(n).map(|c| Value::List(c.to_vec())).collect())
+                        }
+                        other => other,
+                    }
+                }))
+            }
+            // Each item to a list, and the lists one after another.
+            "flatMap" | "groupBy" => {
+                let (param, body) = match &args.first()?.value {
+                    Expr::Lambda { params, body, .. } => (params.first().cloned(), body.clone()),
+                    _ => return None,
+                };
+                let (mut body_c, named) = self.lower_item_body(param, &body, payload_name);
+                let group = name.as_str() == "groupBy";
+                Some(Box::new(move |ctx| {
+                    let Value::List(xs) = base_c(ctx) else {
+                        return if group {
+                            Value::Map(crate::interp::collections::MapData::default())
+                        } else {
+                            Value::List(Vec::new())
+                        };
+                    };
+                    if group {
+                        let keyed: Vec<(Value, Value)> = xs
+                            .into_iter()
+                            .map(|x| (with_item(named.as_ref(), x.clone(), || body_c(ctx)), x))
+                            .collect();
+                        return Value::Map(crate::interp::collections::MapData::grouped(keyed));
+                    }
+                    let mut out = Vec::new();
+                    for x in xs {
+                        match with_item(named.as_ref(), x, || body_c(ctx)) {
+                            Value::List(ys) => out.extend(ys),
+                            other => out.push(other),
+                        }
+                    }
+                    Value::List(out)
+                }))
+            }
+            // A map's keys, or its values, in its order.
+            "keys" | "values" if args.is_empty() => {
+                let keys = name.as_str() == "keys";
+                Some(Box::new(move |ctx| match base_c(ctx) {
+                    Value::Map(map) => Value::List(
+                        map.pairs()
+                            .iter()
+                            .map(|(k, v)| if keys { k.clone() } else { v.clone() })
+                            .collect(),
+                    ),
+                    _ => Value::List(Vec::new()),
+                }))
+            }
             "reverse" => Some(Box::new(move |ctx| match base_c(ctx) {
                 Value::List(mut xs) => {
                     xs.reverse();

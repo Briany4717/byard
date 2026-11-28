@@ -236,15 +236,9 @@ An `Int` may be given where a `Float` is wanted, and is converted: `var w: Float
 `3.0`, so `w / 2` is `1.5`, and so does a `Float` `var` that is later written an `Int`. Nothing
 else converts.
 
-> **Not yet.** A number of things a typed language checks are not checked, and each is a
-> gap in the suite (`12_state.byd`, `08_functions.byd`, `05_records.byd`,
-> `07_operators.byd`). The types judged so far are the scalars and lists of them; a record,
-> an enum or an optional is let through until its own step:
->
-> - two `var`s of one name in a view.
->
-> Until they are, such a program runs, and what it draws is whatever the values happen to
-> give.
+> **Not yet.** A cast to a `Map` or a `Set` is not compared with it: `reply as Map<Str, Int>`
+> lets the reply through as it is. Such a program runs, and what it draws is whatever the values
+> happen to give.
 
 ## Values as text
 

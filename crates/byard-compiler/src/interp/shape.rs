@@ -17,6 +17,9 @@ use crate::symbol::Symbol;
 /// The program's record types, by name.
 pub type Records = HashMap<Symbol, RecordDecl>;
 
+/// The program's enums, each by name with its cases.
+pub type Enums = HashMap<Symbol, Vec<Symbol>>;
+
 /// Whether `ty` mentions a record type, which is when a `var` of it is worth
 /// checking: a `List<Int>` is the checker's business, a `List<Place>` is the
 /// server's.
@@ -55,7 +58,7 @@ struct Diff {
 /// The first way `value` differs from `ty`, or `None` when it has the shape.
 #[must_use]
 pub fn difference(value: &Value, ty: &Type, records: &Records) -> Option<String> {
-    let diff = differ(value, ty, records, 0)?;
+    let diff = differ(value, ty, records, &Enums::new(), 0)?;
     let mut said = String::new();
     for step in &diff.steps {
         match step {
@@ -79,8 +82,13 @@ pub fn difference(value: &Value, ty: &Type, records: &Records) -> Option<String>
 /// The first difference as where it is and what it is: `daily[3].max` and
 /// `is text, not a number`. The path is empty for the value itself.
 #[must_use]
-pub fn difference_at(value: &Value, ty: &Type, records: &Records) -> Option<(String, String)> {
-    let diff = differ(value, ty, records, 0)?;
+pub fn difference_at(
+    value: &Value,
+    ty: &Type,
+    records: &Records,
+    enums: &Enums,
+) -> Option<(String, String)> {
+    let diff = differ(value, ty, records, enums, 0)?;
     let mut path = String::new();
     for step in &diff.steps {
         match step {
@@ -113,7 +121,13 @@ pub fn difference_at(value: &Value, ty: &Type, records: &Records) -> Option<(Str
 /// a recursive type meeting a cyclic value.
 const MAX_DEPTH: usize = 32;
 
-fn differ(value: &Value, ty: &Type, records: &Records, depth: usize) -> Option<Diff> {
+fn differ(
+    value: &Value,
+    ty: &Type,
+    records: &Records,
+    enums: &Enums,
+    depth: usize,
+) -> Option<Diff> {
     if depth > MAX_DEPTH {
         return None;
     }
@@ -146,13 +160,44 @@ fn differ(value: &Value, ty: &Type, records: &Records, depth: usize) -> Option<D
         ("List", Value::List(items)) => {
             let element = args.first()?;
             items.iter().enumerate().find_map(|(i, item)| {
-                differ(item, element, records, depth + 1).map(|mut d| {
+                differ(item, element, records, enums, depth + 1).map(|mut d| {
                     d.steps.insert(0, Step::Item(i));
                     d
                 })
             })
         }
         ("List", _) => expected("a list"),
+        // A case is its name, as JSON and a controller have it; one that
+        // carries values is a record that names it in `case`.
+        (enumeration, _) if enums.contains_key(name) => {
+            let cases = &enums[name];
+            let written = match value {
+                Value::Str(s) => Some(s.as_str()),
+                Value::Record(fields) => fields.iter().find_map(|(k, v)| match v {
+                    Value::Str(s) if k.as_str() == "case" => Some(s.as_str()),
+                    _ => None,
+                }),
+                _ => None,
+            };
+            if written.is_some_and(|w| cases.iter().any(|c| c.as_str() == w)) {
+                None
+            } else {
+                let list = cases
+                    .iter()
+                    .map(|c| format!("`{}`", c.as_str()))
+                    .collect::<Vec<_>>()
+                    .join(", ");
+                Some(Diff {
+                    steps: Vec::new(),
+                    leaf: Leaf::Is(match written {
+                        Some(w) => format!(
+                            "is `{w}`, which is no case of `{enumeration}` (its cases are {list})"
+                        ),
+                        None => format!("is {}, not a case of `{enumeration}`", kind(value)),
+                    }),
+                })
+            }
+        }
         (record, _) => {
             let decl = records.get(name)?;
             let Value::Record(fields) = value else {
@@ -170,7 +215,7 @@ fn differ(value: &Value, ty: &Type, records: &Records, depth: usize) -> Option<D
                         steps: Vec::new(),
                         leaf: Leaf::Missing(field.name.clone()),
                     }),
-                    Some(v) => differ(v, &field.ty, records, depth + 1).map(|mut d| {
+                    Some(v) => differ(v, &field.ty, records, enums, depth + 1).map(|mut d| {
                         d.steps.insert(0, Step::Field(field.name.clone()));
                         d
                     }),

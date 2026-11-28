@@ -396,3 +396,40 @@ View Main() {
     }
     Text("{n}")
 }
+
+//# case: a-list-field-of-a-record-literal-is-judged-item-by-item
+//# error: TypeMismatch
+//# diagnostics: 1
+type P = { items: List<Int> }
+View Main() {
+    let p: P = { items: [1, "a"] }
+    Text("{p.items.len}")
+}
+
+//# case: a-list-of-records-in-a-record-literal-is-judged-field-by-field
+//# error: TypeMismatch
+//# diagnostics: 1
+type Q = { n: Int }
+type P = { qs: List<Q> }
+View Main() {
+    let p: P = { qs: [{ n: 1 }, { n: "x" }] }
+    Text("{p.qs.len}")
+}
+
+//# case: a-map-field-of-a-record-literal-is-judged-pair-by-pair
+//# error: TypeMismatch
+//# diagnostics: 1
+type P = { tags: Map<Str, Int> }
+View Main() {
+    let p: P = { tags: ["a": 1, "b": "two"] }
+    Text("{p.tags.len}")
+}
+
+//# case: an-unknown-name-in-a-list-field-is-told-once
+//# error: UnknownName
+//# diagnostics: 1
+type P = { items: List<Int> }
+View Main() {
+    let p: P = { items: [nope] }
+    Text("{p.items.len}")
+}

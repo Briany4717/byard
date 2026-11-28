@@ -709,12 +709,13 @@ impl Interpreter {
             Expr::Cast { value, ty, span } => {
                 let mut compute = self.lower_expr(value, payload_name);
                 let records = std::rc::Rc::clone(&self.records);
+                let enums = self.enums.clone();
                 let diagnostics = std::rc::Rc::clone(&self.bridge.diagnostics);
                 let (ty, span) = (ty.clone(), *span);
                 Box::new(move |ctx| {
                     let found = compute(ctx);
                     let Some((path, why)) =
-                        super::super::shape::difference_at(&found, &ty, &records)
+                        super::super::shape::difference_at(&found, &ty, &records, &enums)
                     else {
                         return found;
                     };

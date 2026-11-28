@@ -346,3 +346,24 @@ Box #[p: 8, m: (4, 8), radius: (4, 4, 0, 0)] { Text("a") }
 //# fragment
 //# error: ConflictingSpacingField
 Box #[p: (top: 4, vertical: 8)] { Text("a") }
+
+//# case: an-attribute-error-is-told-with-a-type-error-of-another-view
+//# error: TypeMismatch
+//# error: UnknownAttribute
+//# diagnostics: 2
+View Card() {
+    Text("a") #[colr: 1]
+}
+View Main() {
+    let n: Int = "x"
+    Text("{n}")
+    Card()
+}
+
+//# case: an-attribute-error-in-a-view-with-another-error-waits-for-it
+//# error: TypeMismatch
+//# diagnostics: 1
+View Main() {
+    let n: Int = "x"
+    Text("{n}") #[colr: 1]
+}

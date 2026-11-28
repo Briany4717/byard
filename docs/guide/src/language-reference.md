@@ -1335,10 +1335,14 @@ What the parser does after a mistake is chosen so that nothing it reads next is 
 - Constants that read each other in a circle are one `ConstantCycle`; the names in it are
   not also unknown.
 
-> **Not yet.** Attribute errors are only reported once every other error is fixed: an
-> unknown attribute, a value of the wrong kind, `:` where `=>` is wanted. They are found
-> by lowering the program to elements, and a program that already has type errors piles
-> follow-on errors onto them when lowered. (`13_elements_styles.byd`)
+Attribute errors, an unknown attribute, a value of the wrong kind, `:` where `=>` is wanted,
+are found by lowering a view to its elements, and are told with the other errors of the
+program. A view that has an error of its own is not lowered, since what it would draw is not
+known.
+
+> **Not yet.** An attribute error in a view that has another error, or in a program with an
+> error outside every view (in a `type`, a function or a constant), is told once that error is
+> fixed. (`13_elements_styles.byd`)
 
 No text, however malformed, makes the checker or a running program stop with a panic. The
 suite's last file is made of such texts.

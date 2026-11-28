@@ -38,6 +38,8 @@ jobs:
     steps:
       - uses: actions/checkout@v5
 
+      # libFuzzer needs nightly. The repository pins its own Rust in
+      # rust-toolchain.toml, so every cargo command here says `+nightly`.
       - name: Install nightly toolchain
         uses: dtolnay/rust-toolchain@nightly
 
@@ -70,7 +72,7 @@ jobs:
         working-directory: fuzz
         run: |
           mkdir -p corpus/${{ matrix.target }}
-          cargo fuzz run ${{ matrix.target }} corpus/${{ matrix.target }} corpus/seeds -- \
+          cargo +nightly fuzz run ${{ matrix.target }} corpus/${{ matrix.target }} corpus/seeds -- \
             -max_total_time=900 -timeout=10 -max_len=8192 -rss_limit_mb=2048 -print_final_stats=1
 
       - name: Save the corpus

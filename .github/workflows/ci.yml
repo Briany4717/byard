@@ -159,8 +159,9 @@ jobs:
             echo "binary=false" >> "$GITHUB_OUTPUT"
             echo "Nothing that goes into the binary changed: its size is not measured."
           fi
-          # What the benchmarks run: byard-core and what it is built from.
-          if grep -Eq '^(Cargo\.toml|Cargo\.lock|rust-toolchain\.toml|crates/byard-core/|crates/byard-test-gpu/|third_party/|ci/|\.github/workflows/ci\.yml)' <<< "$changed"; then
+          # What the benchmarks run: byard-core, the language (byard-compiler)
+          # and what they are built from.
+          if grep -Eq '^(Cargo\.toml|Cargo\.lock|rust-toolchain\.toml|crates/byard-core/|crates/byard-compiler/|crates/byard-test-gpu/|third_party/|ci/|\.github/workflows/ci\.yml)' <<< "$changed"; then
             echo "bench=true" >> "$GITHUB_OUTPUT"
           else
             echo "bench=false" >> "$GITHUB_OUTPUT"
@@ -204,8 +205,10 @@ jobs:
             exit 1
           fi
 
-      # The benchmarks are the repository's own (crates/byard-core/benches,
-      # plain timed loops that print ns/op), so there is no baseline file to
+      # The benchmarks are the repository's own (crates/byard-core/benches for
+      # the engine, crates/byard-compiler/benches/language.rs for the language:
+      # lexing, parsing, checking, formatting and running a program; plain
+      # timed loops that print ns/op), so there is no baseline file to
       # keep, and none would be comparable: two runs of the very same code on
       # one shared machine differ by 30% or more, and a number saved from
       # some other runner on some other day is worse. So on a pull request the
@@ -221,7 +224,14 @@ jobs:
           EVENT: ${{ github.event_name }}
           BASE_SHA: ${{ github.event.pull_request.base.sha }}
         run: |
-          bench() { cargo bench --locked -p byard-core --bench '*'; }
+          # A base from before the language benchmark has none to run: its
+          # numbers then show as new, with nothing to compare them with.
+          bench() {
+            cargo bench --locked -p byard-core --bench '*'
+            if [ -f crates/byard-compiler/benches/language.rs ]; then
+              cargo bench --locked -p byard-compiler --bench language
+            fi
+          }
           percent="$(python3 -c "import tomllib; print(tomllib.load(open('ci/budgets.toml', 'rb'))['bench']['regression_percent'])")"
           workspace="$PWD"
           if [ "$EVENT" != "pull_request" ]; then

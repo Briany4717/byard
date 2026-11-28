@@ -35,7 +35,15 @@ pub fn handle_hover(doc: &Document, pos: Position) -> Option<Hover> {
 
     let docs = match target {
         HoverTarget::Intrinsic { name } if name.contains('.') => qualified_hover_docs(doc, &name)?,
-        HoverTarget::Intrinsic { name } => intrinsic_hover_docs(&name)?,
+        // An element of the engine, or a view of this file, with what its
+        // `///` comment says.
+        HoverTarget::Intrinsic { name } => intrinsic_hover_docs(&name).or_else(|| {
+            doc.parsed
+                .views
+                .iter()
+                .find(|v| v.name.as_str() == name)
+                .map(|v| byard_compiler::doc::view(&doc.content, v))
+        })?,
         HoverTarget::Attribute {
             element_name,
             attr_name,
@@ -90,13 +98,25 @@ A case of the enum `{}`.",
     }
     if let Some(decl) = doc.parsed.enums.iter().find(|e| e.name.as_str() == word) {
         let cases: Vec<&str> = decl.cases.iter().map(|(c, _)| c.as_str()).collect();
-        return Some(format!(
-            "```byld
+        return Some(with_comment(
+            format!(
+                "```byld
 {}enum {word} {{ {} }}
 ```",
-            if decl.private { "private " } else { "" },
-            cases.join(", ")
+                if decl.private { "private " } else { "" },
+                cases.join(", ")
+            ),
+            &doc.content,
+            decl.span.start,
         ));
+    }
+    // A function, a `type`, a `context` or a `store` of this file, by its
+    // name: its signature and its `///` comment.
+    if let Some(decl) = doc.parsed.fns.iter().find(|f| f.name.as_str() == word) {
+        return Some(byard_compiler::doc::function(&doc.content, decl));
+    }
+    if let Some(decl) = doc.parsed.records.iter().find(|r| r.name.as_str() == word) {
+        return Some(byard_compiler::doc::record(&doc.content, decl));
     }
     let symbol = Symbol::intern(word);
     let decl = doc.parsed.consts.iter().find(|c| c.name == symbol)?;
@@ -106,14 +126,26 @@ A case of the enum `{}`.",
         .iter()
         .find(|(n, _)| *n == symbol)
         .map_or_else(String::new, |(_, ty)| format!(": {}", format_ty(ty)));
-    Some(format!(
-        "```byld
+    Some(with_comment(
+        format!(
+            "```byld
 {}let {word}{ty}
 ```
 
 A constant, evaluated once when the program loads.",
-        if decl.private { "private " } else { "" }
+            if decl.private { "private " } else { "" }
+        ),
+        &doc.content,
+        decl.span.start,
     ))
+}
+
+/// `hover` with the `///` comment of the declaration at `at` under it.
+fn with_comment(hover: String, source: &str, at: u32) -> String {
+    match byard_compiler::doc::comment_above(source, at as usize) {
+        Some(comment) => format!("{hover}\n\n{comment}"),
+        None => hover,
+    }
 }
 
 /// A view reached by its package's name (`m.Button`, or `material.Button`

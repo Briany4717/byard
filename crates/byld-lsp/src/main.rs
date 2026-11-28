@@ -544,6 +544,40 @@ mod tests {
     }
 
     #[test]
+    fn a_hover_shows_the_doc_comment_of_a_view_a_function_and_a_type() {
+        let uri: Uri = "file:///test.byd".parse().unwrap();
+        let content = "/// A card with a title.\nView Card(label: Str) { Text(label) }\n\
+                       /// Doubles it.\nfn double(n: Int) -> Int => n * 2\n\
+                       /// Where it is.\ntype Place = { name: Str }\n\
+                       View Main() {\n  let p: Place = { name: \"a\" }\n  Card(\"{double(2)} {p.name}\")\n}\n"
+            .to_string();
+        let doc = Document::new(uri, Some(1), content);
+        let hover_at = |line: u32, character: u32| {
+            let hover = capabilities::hover::handle_hover(&doc, Position::new(line, character))
+                .expect("a hover");
+            match hover.contents {
+                lsp_types::HoverContents::Markup(markup) => markup.value,
+                _ => panic!("Expected Markup hover content"),
+            }
+        };
+        let card = hover_at(8, 3);
+        assert!(
+            card.contains("View Card(label: Str)") && card.contains("A card with a title."),
+            "{card}"
+        );
+        let double = hover_at(8, 12);
+        assert!(
+            double.contains("fn double(n: Int) -> Int") && double.contains("Doubles it."),
+            "{double}"
+        );
+        let place = hover_at(7, 10);
+        assert!(
+            place.contains("type Place = { name: Str }") && place.contains("Where it is."),
+            "{place}"
+        );
+    }
+
+    #[test]
     fn test_definition_capabilities() {
         let uri: Uri = "file:///test.byd".parse().unwrap();
         let content = "View Main {\n  var my_var = 10\n  Text(my_var)\n}".to_string();

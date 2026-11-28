@@ -262,6 +262,17 @@ enum Command {
         /// Path to a `.byd` file or project dir. Defaults to `byard.toml`.
         file: Option<PathBuf>,
     },
+    /// Write the Markdown page of the project or package: every view,
+    /// function, type, enum, store and constant it makes public, with its
+    /// signature and what its `///` comment says.
+    Doc {
+        /// The project directory or `byard.toml`. Defaults to the current
+        /// project.
+        path: Option<PathBuf>,
+        /// Where to write the page. Defaults to printing it.
+        #[arg(short, long)]
+        out: Option<PathBuf>,
+    },
     /// Say what an error means: the name in its brackets, as in
     /// `error[UnknownAttribute]`, gives its section of the error index.
     Explain {
@@ -437,6 +448,7 @@ pub fn main() {
             archive,
         ),
         Command::Clean { file } => commands::clean::run(file.as_deref()),
+        Command::Doc { path, out } => commands::doc::run(path.as_deref(), out.as_deref()),
         Command::Explain { name } => commands::explain::run(&name),
         Command::Add {
             name,

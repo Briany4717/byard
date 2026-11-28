@@ -20,6 +20,7 @@ byard <COMMAND>
 | [`publish`](#byard-publish) | Publish a package to a registry |
 | [`clean`](#byard-clean) | Remove generated files and caches |
 | [`explain`](#byard-explain) | Say what an error means |
+| [`doc`](#byard-doc) | Write the page of a package from its `///` comments |
 | `help` | Print help for the program or a command |
 
 `byard --help` and `byard <command> --help` print the same descriptions as this page. `byard
@@ -304,6 +305,22 @@ Removes `.byard/cache` and `.byard/generated` from the project. Package checkout
 | Argument | |
 |----------|-|
 | `[FILE]` | The project or `.byd` file. Defaults to `byard.toml`. |
+
+## `byard doc`
+
+```text
+byard doc [PATH] [-o FILE]
+```
+
+Writes the Markdown page of the project or package: every view, function, type, enum, context,
+store and constant it makes public, by kind and by name, each with its signature as written and
+what its `///` comment says (see [comments](language-reference.md#source-text)). A `private`
+declaration is the package's own and is left out.
+
+| Argument or flag | |
+|------------------|-|
+| `[PATH]` | The project directory or `byard.toml`. Defaults to the current project. |
+| `-o`, `--out FILE` | Where to write the page. Without it, the page is printed. |
 
 ## `byard explain`
 

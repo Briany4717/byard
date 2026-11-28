@@ -39,7 +39,26 @@ A comment starts at `//` and runs to the end of the line.
 comments it holds. One that is never closed is `UnterminatedComment`. A byte order mark at the
 start of a file is skipped.
 
-> **Not yet.** `///` is an ordinary comment that no tool reads.
+A *doc comment* is the run of `///` lines right above a declaration, a view, a function, a
+`type`, an `enum`, a `context`, a `store` or a constant, with no blank line between it and the
+declaration. Each line loses its `///` and one space, and what is left is Markdown. The
+language server shows it when the declaration's name is hovered, under its signature, and
+[`byard doc`](cli-reference.md#byard-doc) writes it into the page of the package. A `///`
+anywhere else is an ordinary comment, and so is a line of `////…`. To the program, a doc
+comment is a comment: it changes nothing about what the program does.
+
+```byld
+/// A card with a title.
+///
+/// `label` is drawn in the card's own colour.
+View Card(label: Str) {
+    Text(label)
+}
+
+View Main() {
+    Card("Oslo")
+}
+```
 
 ## Words
 
@@ -158,9 +177,6 @@ always `.`.
 
 What follows the expression inside the braces is `UnexpectedToken`: `"{1 2 3}"` is an error, a
 `{ }` holds one expression. So is more than nine decimals.
-
-> **Not yet.** A `///` comment is a comment: the language server does not show it on hover and
-> there is no `byard doc` that writes it into a page. (`14_syntax_and_recovery.byd`)
 
 ## Types
 

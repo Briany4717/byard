@@ -166,7 +166,7 @@ for either. A `Map` has no text form yet, since there is no `Map` (step 17).
 `untrack`, `slot-passed-on`, `ternary-after-or-means-or-of-a-ternary`), and so do the fifteen
 added with them. `? :` is looser than `||` from edition `2027` and tighter in `2026`, so
 `MixedTernaryPrecedence` is still told in `2026` and never in `2027`; it goes when `2026` does.
-`///` is still an ordinary comment.
+`///` is a doc comment the language server and `byard doc` read (see step 21).
 
 ## Part 3: what a 1.0 language has
 
@@ -274,8 +274,8 @@ an `inject` is a write of that field. What stays open:
 cases added with them. A text between `"""` drops the indentation of its closing quotes, and a
 format has a width, a fill, an alignment and a percentage. What stays open:
 
-- `///` is still a comment. The language server does not show it on hover and there is no
-  `byard doc`: that is a command and a page format of its own, and no case asks for it.
+- ~~`///` is still a comment.~~ Done after 1.0's plan: the language server shows a doc
+  comment on hover under the signature, and `byard doc` writes a package's page.
 - A format cannot fill with a character other than a zero (`{x:*>8}`), and `%` is for numbers only.
 - A text over lines is not checked for a closing line that is less indented than a line above it:
   that line keeps the whole of what it has.

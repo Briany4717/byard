@@ -468,10 +468,10 @@ mod tests {
     fn a_trailing_action_on_an_intrinsic_and_a_callback_argument_are_fine() {
         let errs = check_source(
             "View Comp(label: Str, on_tap: Fn() = {}) { Button(label) => on_tap() }
-             View Main() { var a = 0
-                Column { Button(\"x\") => a++
-                    Comp(\"one\", on_tap: { a++ })
-                    Box #[tap => a++] { Text(\"y\") } } }",
+             View Main() { var _a = 0
+                Column { Button(\"x\") => _a++
+                    Comp(\"one\", on_tap: { _a++ })
+                    Box #[tap => _a++] { Text(\"y\") } } }",
         );
         assert!(errs.is_empty(), "{errs:?}");
     }

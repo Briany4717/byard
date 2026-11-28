@@ -223,14 +223,14 @@ Text("{(1 + 2}")
 //# case: assignment-is-not-an-expression-in-a-text
 //# fragment
 //# error: EffectInPureContext
-var n = 0
-Text("{n = 1}")
+var _n = 0
+Text("{_n = 1}")
 
 //# case: increment-in-a-let-is-an-error
 //# fragment
 //# error: EffectInPureContext
-var n = 0
-let m = n++
+var _n = 0
+let m = _n++
 Text("{m}")
 
 //# case: assign-to-a-let
@@ -314,8 +314,8 @@ Text("x")
 //# fragment
 //# error: EffectInPureContext
 //# diagnostics: 1
-var n = 0
-Text("{n += 1}")
+var _n = 0
+Text("{_n += 1}")
 
 //# case: a-binding-parameter-is-written-like-a-var
 //# text: 1
@@ -462,19 +462,19 @@ Text("{a + 1}")
 //# edition: 2027
 //# fragment
 //# text: a
-var n = 0
-every 1s => { n++ }
-after 300ms => { n++ }
+var _n = 0
+every 1s => { _n++ }
+after 300ms => { _n++ }
 var wait = 5
-after wait * 1ms => { n++ }
+after wait * 1ms => { _n++ }
 Text("a")
 
 //# case: a-timer-of-zero-in-2027
 //# edition: 2027
 //# fragment
 //# error: InvalidAnimation
-var n = 0
-every 0ms => { n++ }
+var _n = 0
+every 0ms => { _n++ }
 Text("a")
 
 //# case: a-curve-with-a-duration-in-2027

@@ -173,8 +173,8 @@ View Main() { Dot() #[bg: 0xFF0000] }
 //# error: ViewCallAction
 View Card(label: Str, on_tap: Fn() = {}) { Box #[tap => on_tap()] { Text(label) } }
 View Main() {
-    var count = 0
-    Column { Card("Add") => count++ }
+    var _count = 0
+    Column { Card("Add") => _count++ }
 }
 
 //# case: content-slot

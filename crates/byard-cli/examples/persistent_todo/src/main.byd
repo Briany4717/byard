@@ -21,7 +21,6 @@ View Main() {
     var todos: List = []
     var draft: Str = ""
     var nextId = 0
-    var loaded: Bool = false
     var note: Str = ""
 
     let remaining = todos.filter(t => !t.done).len
@@ -34,11 +33,9 @@ View Main() {
             ok saved => {
                 todos = saved
                 nextId = saved.len
-                loaded = true
             }
             err e => {
                 note = "could not read the store: {e.message}"
-                loaded = true
             }
     }
 

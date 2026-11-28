@@ -222,9 +222,8 @@ so do the twenty-two cases added with them. What stays open:
 
 - The other list methods the proposal names: `take`, `skip`, `flatMap`, `groupBy`, `unique`,
   `zip`, `chunk` and `enumerate`.
-- A lookup in a `Map` or a `Set` searches what was added, as `find` does. The order they keep
-  is what the reference promises; a hash for the keys that can be hashed would make the lookup
-  fast without changing it.
+- ~~A lookup in a `Map` or a `Set` searches what was added, as `find` does.~~ Done after 1.0's
+  plan: the keys are hashed, the order is kept, and a copy is shared.
 - `m.keys()`, `m.values()` and a `Set` operation such as `union` do not exist. A `for` goes over
   a map for its keys.
 - `var-map-type-does-not-exist` said `Map` was not a type; it is one now, so it asks the same of

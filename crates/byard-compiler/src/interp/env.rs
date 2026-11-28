@@ -46,9 +46,9 @@ pub enum Value {
     /// `List<T>`.
     List(Vec<Value>),
     /// `Map<K, V>`: each key with its value, in the order they were added.
-    Map(Vec<(Value, Value)>),
+    Map(super::collections::MapData),
     /// `Set<T>`: each item once, in the order they were added.
-    Set(Vec<Value>),
+    Set(super::collections::SetData),
     /// A tuple of (optionally named) values, e.g. `(left: 5, bottom: 3)`.
     Tuple(Vec<(Option<Symbol>, Value)>),
     /// A name-keyed, ordered, immutable data record (RFC-0027 §6): the element

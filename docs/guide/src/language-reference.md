@@ -500,8 +500,11 @@ Methods return a new value and leave the old one, as a list's do. Two maps are e
 have the same keys with equal values, and two sets when they have the same items, in any order.
 To a controller a set is the list of its items and a map the list of its `{ key, value }`.
 
-> **Not yet.** A lookup in a map or a set is a search through what was added, not a hash, so
-> it is as slow as `find`. (`04_lists.byd`)
+A lookup in a map or a set, `m[key]`, `has` and `contains`, takes the same time however many
+keys it holds: the keys are hashed. (Keys are equal as `==` says, so `1` and `1.0` are one key;
+a `Float` with a fraction is compared with the other such keys rather than hashed.) A map or a
+set is shared when it is copied, so passing one on or reading it from a `var` costs nothing;
+`set`, `add` and `remove` make a new one, at the cost of its size.
 
 ### Colours, durations and angles
 

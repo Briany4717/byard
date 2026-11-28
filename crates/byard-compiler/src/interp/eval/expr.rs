@@ -63,10 +63,12 @@ fn shown_angle(radians: f64) -> String {
 /// entries, each a `{ key, value }`. `None` for anything else.
 pub(super) fn rows_of(value: Value) -> Option<Vec<Value>> {
     match value {
-        Value::List(items) | Value::Set(items) => Some(items),
-        Value::Map(pairs) => Some(
-            pairs
-                .into_iter()
+        Value::List(items) => Some(items),
+        Value::Set(set) => Some(set.items().to_vec()),
+        Value::Map(map) => Some(
+            map.pairs()
+                .iter()
+                .cloned()
                 .map(|(key, value)| {
                     Value::Record(vec![
                         (Symbol::intern("key"), key),
@@ -265,45 +267,7 @@ pub(super) fn eval_compare(op: BinOp, a: &Value, b: &Value) -> Value {
     })
 }
 
-/// Structural (element/field-wise) equality for lists and records (RFC-0027
-/// §1), with numeric Int↔Float promotion at the leaves.
-pub(super) fn structural_eq(a: &Value, b: &Value) -> bool {
-    match (a, b) {
-        (Value::Int(x), Value::Int(y)) => x == y,
-        (Value::Float(x), Value::Float(y)) => (x - y).abs() < f64::EPSILON,
-        (Value::Int(x), Value::Float(y)) | (Value::Float(y), Value::Int(x)) => {
-            (*x as f64 - *y).abs() < f64::EPSILON
-        }
-        (Value::Bool(x), Value::Bool(y)) => x == y,
-        (Value::Str(x), Value::Str(y)) => x == y,
-        (Value::Unit, Value::Unit) => true,
-        // A set is the same set in any order, and a map the same map.
-        (Value::Set(xs), Value::Set(ys)) => {
-            xs.len() == ys.len() && xs.iter().all(|x| ys.iter().any(|y| structural_eq(x, y)))
-        }
-        (Value::Map(xs), Value::Map(ys)) => {
-            xs.len() == ys.len()
-                && xs.iter().all(|(kx, vx)| {
-                    ys.iter()
-                        .find(|(ky, _)| structural_eq(kx, ky))
-                        .is_some_and(|(_, vy)| structural_eq(vx, vy))
-                })
-        }
-        (Value::List(xs), Value::List(ys)) => {
-            xs.len() == ys.len() && xs.iter().zip(ys).all(|(x, y)| structural_eq(x, y))
-        }
-        // Fields are compared by name, in whatever order they were written.
-        (Value::Record(xs), Value::Record(ys)) => {
-            xs.len() == ys.len()
-                && xs.iter().all(|(kx, vx)| {
-                    ys.iter()
-                        .find(|(ky, _)| ky == kx)
-                        .is_some_and(|(_, vy)| structural_eq(vx, vy))
-                })
-        }
-        _ => false,
-    }
-}
+pub(super) use crate::interp::collections::structural_eq;
 
 /// `color` with its alpha set to `amount` (0 to 1, clamped), as an
 /// alpha-first `0xAARRGGBB` carrying the has-alpha tag, so even a fully
@@ -344,12 +308,9 @@ fn target_name(target: &Expr) -> String {
 fn data_member(base: &Value, field: &Symbol, graphemes: bool) -> Value {
     let f = field.as_str();
     match base {
-        Value::List(xs) | Value::Set(xs) if f == "len" => {
-            Value::Int(i64::try_from(xs.len()).unwrap_or(i64::MAX))
-        }
-        Value::Map(pairs) if f == "len" => {
-            Value::Int(i64::try_from(pairs.len()).unwrap_or(i64::MAX))
-        }
+        Value::List(xs) if f == "len" => Value::Int(i64::try_from(xs.len()).unwrap_or(i64::MAX)),
+        Value::Set(set) if f == "len" => Value::Int(i64::try_from(set.len()).unwrap_or(i64::MAX)),
+        Value::Map(map) if f == "len" => Value::Int(i64::try_from(map.len()).unwrap_or(i64::MAX)),
         Value::Str(s) if f == "len" => {
             Value::Int(i64::try_from(text_len(s, graphemes)).unwrap_or(i64::MAX))
         }
@@ -436,10 +397,7 @@ pub(super) fn index_value(base: &Value, index: &Value, graphemes: bool) -> Value
             .cloned()
             .unwrap_or(Value::Unit),
         // The value of a key, or nothing.
-        (Value::Map(pairs), key) => pairs
-            .iter()
-            .find(|(k, _)| structural_eq(k, key))
-            .map_or(Value::Unit, |(_, v)| v.clone()),
+        (Value::Map(map), key) => map.get(key).cloned().unwrap_or(Value::Unit),
         _ => Value::Unit,
     }
 }
@@ -1164,15 +1122,9 @@ impl Interpreter {
                     })
                     .collect();
                 Box::new(move |ctx| {
-                    let mut out: Vec<(Value, Value)> = Vec::with_capacity(lowered.len());
-                    for (k, v) in &mut lowered {
-                        let (k, v) = (k(ctx), v(ctx));
-                        match out.iter_mut().find(|(have, _)| structural_eq(have, &k)) {
-                            Some(pair) => pair.1 = v,
-                            None => out.push((k, v)),
-                        }
-                    }
-                    Value::Map(out)
+                    let pairs: Vec<(Value, Value)> =
+                        lowered.iter_mut().map(|(k, v)| (k(ctx), v(ctx))).collect();
+                    Value::Map(crate::interp::collections::MapData::from_pairs(pairs))
                 })
             }
             Expr::ForEach {
@@ -1823,13 +1775,7 @@ impl Interpreter {
                         Some(Value::List(xs)) => xs,
                         _ => Vec::new(),
                     };
-                    let mut out: Vec<Value> = Vec::with_capacity(items.len());
-                    for item in items {
-                        if !out.iter().any(|x| structural_eq(x, &item)) {
-                            out.push(item);
-                        }
-                    }
-                    Value::Set(out)
+                    Value::Set(crate::interp::collections::SetData::from_items(items))
                 });
             }
         }
@@ -2463,9 +2409,10 @@ impl Interpreter {
                 Some(Box::new(move |ctx| {
                     let needle = arg(ctx);
                     match base_c(ctx) {
-                        Value::List(xs) | Value::Set(xs) => {
+                        Value::List(xs) => {
                             Value::Bool(xs.iter().any(|x| structural_eq(x, &needle)))
                         }
+                        Value::Set(set) => Value::Bool(set.contains(&needle)),
                         Value::Str(s) => match needle {
                             Value::Str(part) => Value::Bool(s.contains(&part)),
                             _ => Value::Bool(false),
@@ -2579,13 +2526,7 @@ impl Interpreter {
                 Some(Box::new(move |ctx| {
                     let (key, value) = (key(ctx), value(ctx));
                     match base_c(ctx) {
-                        Value::Map(mut pairs) => {
-                            match pairs.iter_mut().find(|(k, _)| structural_eq(k, &key)) {
-                                Some(pair) => pair.1 = value,
-                                None => pairs.push((key, value)),
-                            }
-                            Value::Map(pairs)
-                        }
+                        Value::Map(map) => Value::Map(map.set(key, value)),
                         other => other,
                     }
                 }))
@@ -2595,14 +2536,8 @@ impl Interpreter {
                 Some(Box::new(move |ctx| {
                     let item = item(ctx);
                     match base_c(ctx) {
-                        Value::Map(mut pairs) => {
-                            pairs.retain(|(k, _)| !structural_eq(k, &item));
-                            Value::Map(pairs)
-                        }
-                        Value::Set(mut xs) => {
-                            xs.retain(|x| !structural_eq(x, &item));
-                            Value::Set(xs)
-                        }
+                        Value::Map(map) => Value::Map(map.remove(&item)),
+                        Value::Set(set) => Value::Set(set.remove(&item)),
                         other => other,
                     }
                 }))
@@ -2612,12 +2547,7 @@ impl Interpreter {
                 Some(Box::new(move |ctx| {
                     let item = item(ctx);
                     match base_c(ctx) {
-                        Value::Set(mut xs) => {
-                            if !xs.iter().any(|x| structural_eq(x, &item)) {
-                                xs.push(item);
-                            }
-                            Value::Set(xs)
-                        }
+                        Value::Set(set) => Value::Set(set.add(item)),
                         other => other,
                     }
                 }))

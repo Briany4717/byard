@@ -457,14 +457,14 @@ impl<'a> Parser<'a> {
                     view.private = private;
                     items.views.push(view);
                 }
-                // `type Name = { … }`. Contextual: `type` is an ordinary name
-                // anywhere else.
+                // `type Name = { … }`, or `type Name<T> = { … }`. Contextual:
+                // `type` is an ordinary name anywhere else.
                 Some(Token::Ident(word))
                     if word.as_str() == "type"
                         && self.peek2().is_some_and(|t| {
                             matches!(t, Token::Ident(_)) || is_name_keyword(&t)
                         })
-                        && matches!(self.peek3(), Some(Token::Eq)) =>
+                        && matches!(self.peek3(), Some(Token::Eq | Token::Lt)) =>
                 {
                     let mut record = self.parse_record_decl();
                     record.private = private;
@@ -625,6 +625,7 @@ impl<'a> Parser<'a> {
         let name = self
             .expect_decl_name("a type", "a type name")
             .unwrap_or_else(|| Symbol::intern(""));
+        let type_params = self.parse_type_params();
         self.expect(&Token::Eq, "'='");
         let mut fields = Vec::new();
         // `type P = Int` is one mistake: the braces are missing, and what
@@ -634,6 +635,7 @@ impl<'a> Parser<'a> {
             self.skip_to_item_start();
             return RecordDecl {
                 name,
+                type_params,
                 fields,
                 private: false,
                 context: false,
@@ -659,6 +661,7 @@ impl<'a> Parser<'a> {
         self.expect(&Token::RBrace, "'}'");
         RecordDecl {
             name,
+            type_params,
             fields,
             private: false,
             context: false,
@@ -712,6 +715,7 @@ impl<'a> Parser<'a> {
         self.expect(&Token::RBrace, "'}'");
         RecordDecl {
             name,
+            type_params: Vec::new(),
             fields,
             private: false,
             context: true,

@@ -28,10 +28,8 @@ jobs:
     steps:
       - uses: actions/checkout@v5
 
-      - name: Install stable toolchain
-        uses: dtolnay/rust-toolchain@stable
-        with:
-          components: clippy
+      - name: Install the toolchain
+        run: rustup toolchain install --no-self-update
 
       - name: Install Linux GPU dependencies
         run: |

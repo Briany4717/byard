@@ -52,7 +52,7 @@ fn cases_dir() -> PathBuf {
 
 /// One program and what it is expected to do.
 #[derive(Debug, Clone, Default)]
-struct Case {
+pub(crate) struct Case {
     file: String,
     line: usize,
     name: String,
@@ -68,11 +68,11 @@ struct Case {
 }
 
 impl Case {
-    fn at(&self) -> String {
+    pub(crate) fn at(&self) -> String {
         format!("{}:{} `{}`", self.file, self.line, self.name)
     }
 
-    fn program(&self) -> String {
+    pub(crate) fn program(&self) -> String {
         if self.fragment {
             format!("View Main() {{\n{}\n}}\n", self.source)
         } else {
@@ -163,7 +163,7 @@ fn cases_of(file: &str, text: &str) -> Result<Vec<Case>, String> {
     Ok(cases)
 }
 
-fn all_cases() -> Vec<Case> {
+pub(crate) fn all_cases() -> Vec<Case> {
     let mut files: Vec<PathBuf> = std::fs::read_dir(cases_dir())
         .expect("tests/conformance exists")
         .filter_map(|entry| entry.ok().map(|entry| entry.path()))

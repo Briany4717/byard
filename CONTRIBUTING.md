@@ -103,6 +103,16 @@ cargo bench
 Run them before merging changes to performance-sensitive code (signal
 read/write paths, arena allocation, drop registry).
 
+The language has its own, `crates/byard-compiler/benches/language.rs`: lexing,
+parsing, checking and formatting a program of 20 and of 200 views, its first
+frame, a frame with nothing changed, and a frame after a write that recomputes
+a list pipeline. Two sizes of one program say whether a phase grows with the
+program as it should. CI runs it beside the engine's, the same way.
+
+```sh
+cargo bench -p byard-compiler --bench language
+```
+
 ### Resource budgets
 
 Byard's promise is to spend least, so CI holds four numbers to a ceiling, the
@@ -118,8 +128,12 @@ budgets`).
 
 ### Toolchain
 
-Byard tracks **stable Rust**. The current MSRV is declared in the workspace
-`Cargo.toml`.
+Byard builds with the Rust that `rust-toolchain.toml` names, **1.99.0**, pinned
+so that you, your editor and CI all build with one compiler: two compilers on
+one machine share `target/` and rebuild each other's dependencies on every
+run. `rustup` installs it the first time a command runs in the repository.
+The pin is raised on purpose, in a pull request of its own. The MSRV a
+library user needs is declared in the workspace `Cargo.toml`.
 
 ## Code style
 

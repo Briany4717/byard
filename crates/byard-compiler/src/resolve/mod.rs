@@ -29,6 +29,7 @@
 //! file's byte offset in the program-wide [`SourceMap`], so any diagnostic,
 //! parse-time or lower-time, can be located back to `file:line:col`.
 
+mod generics;
 mod rebase;
 mod shorthand;
 pub(crate) mod walk;
@@ -535,6 +536,15 @@ fn resolve_root(
             }
         }
     }
+    // Each use of a type with parameters, `Page<Item>`, made a type of its own.
+    generics::instantiate(
+        &mut views,
+        &mut fns,
+        &mut consts,
+        &mut enums,
+        &mut records,
+        &mut r.errors,
+    );
     // One table of every function, canonically named, and one of every
     // record type, shared by every view.
     let helpers = std::sync::Arc::new(fns);

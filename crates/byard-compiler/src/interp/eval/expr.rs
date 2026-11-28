@@ -674,7 +674,9 @@ impl Interpreter {
                     let Some((path, why)) =
                         super::super::shape::difference_at(&found, &ty, &records)
                     else {
-                        return found;
+                        // What JSON gave as a record or a list is, from here,
+                        // the `Map` or the `Set` the type says.
+                        return super::super::shape::converted(found, &ty, &records);
                     };
                     if IN_ARM.with(std::cell::Cell::get) > 0 {
                         SHAPE_FAILURE.with(|f| *f.borrow_mut() = Some((path, why)));

@@ -1599,6 +1599,26 @@ View Main() {
 error[TooManyKeyframes]: `anim.keyframes` takes at most 8 steps, found 9
 ```
 
+## TypeArgumentCount
+
+A type given a number of type arguments it does not take. A `type` declared with
+parameters, `type Page<T> = { … }`, is used with a type for each, `Page<Item>`: `Page`
+alone and `Page<Item, Int>` are each this error, and so is `Place<Int>` for a type that takes
+none. The message says how many the type takes and how to write the use.
+
+```byld,fails
+type Page<T> = { items: List<T>, total: Int }
+
+View Main() {
+    let page: Page = { items: [1, 2], total: 2 }
+    Text("{page.total}")
+}
+```
+
+```diagnostic
+error[TypeArgumentCount]: `Page` takes 1 type argument (`T`), and this gives 0: write `Page<…>`, a type for each
+```
+
 ## TypeMismatch
 
 A binary operator was applied to incompatible operand types: e.g. `1 < "a"`, ordering (`<`) on a `List`/`Record`, or a `+` between a `Str` and a `List`.

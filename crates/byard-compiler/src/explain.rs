@@ -17,8 +17,15 @@ pub fn explain(name: &str) -> Option<&'static str> {
 }
 
 /// Every section of the index, in order: the error's name and its text.
+///
+/// Read whatever ends its lines: a checkout on Windows ends them with `\r\n`.
 pub fn sections() -> impl Iterator<Item = (&'static str, &'static str)> {
-    INDEX.split("\n## ").skip(1).map(|section| {
+    sections_of(INDEX)
+}
+
+/// [`sections`] of any text written as the index is.
+fn sections_of(index: &str) -> impl Iterator<Item = (&str, &str)> {
+    index.split("\n## ").skip(1).map(|section| {
         let (name, text) = section.split_once('\n').unwrap_or((section, ""));
         (name.trim(), text.trim())
     })
@@ -43,11 +50,15 @@ mod tests {
     /// Every name `CompileError::kind` can give, read from the match that
     /// gives them, so an error added to it without a section is caught here.
     fn kinds() -> BTreeSet<String> {
-        let src = include_str!("diagnostics.rs");
-        let start = src.find("pub fn kind(&self)").expect("CompileError::kind");
-        let end = start + src[start..].find("\n    }\n").expect("the end of kind");
-        src[start..end]
-            .lines()
+        kinds_of(include_str!("diagnostics.rs"))
+    }
+
+    /// [`kinds`] of any text: line by line, so a checkout with `\r\n` line
+    /// ends reads the same.
+    fn kinds_of(src: &str) -> BTreeSet<String> {
+        src.lines()
+            .skip_while(|l| !l.contains("pub fn kind(&self)"))
+            .take_while(|l| l.trim_end() != "    }")
             .filter_map(|l| l.split("=> \"").nth(1))
             .filter_map(|rest| rest.split('"').next())
             .map(str::to_string)
@@ -98,9 +109,9 @@ mod tests {
                 continue;
             }
             let quoted = text
-                .split("```diagnostic\n")
+                .lines()
+                .skip_while(|l| l.trim_end() != "```diagnostic")
                 .nth(1)
-                .and_then(|rest| rest.lines().next())
                 .unwrap_or_else(|| panic!("{name}: an example with no `diagnostic` line after it"));
             assert!(
                 quoted.contains(&format!("[{name}]:")),
@@ -136,5 +147,22 @@ mod tests {
         assert!(explain("unknownattribute").is_none());
         assert_eq!(closest("unknownattribute"), Some("UnknownAttribute"));
         assert_eq!(closest("UnknownAtribute"), Some("UnknownAttribute"));
+    }
+
+    /// What a checkout on Windows reads: the same index and the same errors,
+    /// with `\r\n` line ends.
+    #[test]
+    fn the_index_reads_the_same_with_windows_line_ends() {
+        let crlf = |text: &str| text.replace("\r\n", "\n").replace('\n', "\r\n");
+        let index = crlf(INDEX);
+        let names = |text: &str| {
+            sections_of(text)
+                .map(|(n, _)| n.to_string())
+                .collect::<Vec<_>>()
+        };
+        assert_eq!(names(INDEX), names(&index));
+        let errors = kinds_of(&crlf(include_str!("diagnostics.rs")));
+        assert_eq!(kinds(), errors);
+        assert!(errors.len() > 100);
     }
 }

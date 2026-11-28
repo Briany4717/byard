@@ -43,3 +43,4 @@
 
 - [Language reference](language-reference.md)
 - [CLI reference](cli-reference.md)
+- [Error index](errors.md)

@@ -178,6 +178,8 @@ let go = () => {
                    timeout_ms: 5000 })
         err e => { sent = "{e.kind}: {e.message}" }
 }
+Button("load") => go()
+Text("{status} {sent}")
 ```
 
 - `http.get(url)` fetches.
@@ -220,16 +222,22 @@ A name that is not declared is an `unknown_host` error.
 
 `Http` parses what it receives. `Json` is for JSON that came some other way:
 
-```byld,fragment
-inject Json as json
-var parsed = 0
-var text = ""
-let go = () => {
-    json.parse("\{\"a\": 1\}")
-        ok v => { parsed = v.a }
-        err e => { text = e.message }
-    json.stringify({ a: 1 })
-        ok s => { text = s }
+```byld
+type Pair = { a: Int }
+
+View Main() {
+    inject Json as json
+    var parsed = 0
+    var text = ""
+    let go = () => {
+        json.parse("\{\"a\": 1\}")
+            ok v => { parsed = (v as Pair).a }
+            err e => { text = e.message }
+        json.stringify({ a: 1 })
+            ok s => { text = s }
+    }
+    Button("parse") => go()
+    Text("{parsed} {text}")
 }
 ```
 

@@ -1,0 +1,24 @@
+# The errors of errors.md whose section has no checked example yet: the ones
+# a single file cannot show (a package, a controller of the Rust half, an asset
+# file or a reply at runtime is needed). A name comes off this list when its
+# section gains a `byld,fails` example; nothing is added to it, and the test
+# fails for a listed error that has an example or an unlisted one that has none.
+ControllerCallFailed
+DiscardedControllerReply
+GradientShapeMismatch
+IconNameNotStatic
+ImportAfterView
+ImportShadowsBuiltin
+MorphSubpathMismatch
+NonDataControllerArg
+NonDataViewProp
+PackageCycle
+PrivateName
+ReservedControllerName
+ShapeMismatch
+SvgTooComplexForMssdf
+SvgUnsupportedFeatures
+UnknownControllerMethod
+UnknownImportSymbol
+UnresolvedInject
+VectorAssetNotStatic

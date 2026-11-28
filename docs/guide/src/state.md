@@ -31,6 +31,7 @@ that state.
 var count = 0
 var price: Float = 4.5
 var names: List<Str> = []
+Text("{count} {price} {names.len}")
 ```
 
 A `var` is a value that can change. Write to it with `=`, `+=`, `-=`, `++` or
@@ -73,6 +74,7 @@ works out what to update. It also means a `var` is cheap to read in many places.
 var todos: List = []
 let remaining = todos.filter(t => !t.done).len
 let summary = remaining == 0 ? "all done" : "{remaining} to go"
+Text(summary)
 ```
 
 A `let` is *derived*. Its value is computed from other state, kept, and computed
